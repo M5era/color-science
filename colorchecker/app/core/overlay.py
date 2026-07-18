@@ -20,12 +20,14 @@ class Preset:
     patch_size: float  # % of a grid cell covered by the sample area
 
 
+# Patch size 65% samples ~42% of each patch's area — enough pixels for a
+# clean mean while leaving leeway for placement inconsistencies.
 PRESETS: list[Preset] = [
     Preset("ColorChecker Digital SG (8 × 12)", rows=8, cols=12,
-           margin_x=1.88, margin_y=2.82, patch_size=77.4),
+           margin_x=1.88, margin_y=2.82, patch_size=65.0),
     Preset("ColorChecker Classic (4 × 6)", rows=4, cols=6,
            margin_x=2.0, margin_y=3.0, patch_size=60.0),
-    Preset("Custom", rows=8, cols=12, margin_x=2.0, margin_y=2.0, patch_size=75.0),
+    Preset("Custom", rows=8, cols=12, margin_x=2.0, margin_y=2.0, patch_size=65.0),
 ]
 
 
@@ -37,7 +39,7 @@ class Overlay:
     cols: int = 12
     margin_x: float = 1.88
     margin_y: float = 2.82
-    patch_size: float = 77.4
+    patch_size: float = 65.0
     patch_offset: float = 0.0
     # TL, TR, BR, BL in image pixel coordinates
     corners: list[list[float]] = field(

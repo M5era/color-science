@@ -116,10 +116,11 @@ class ImageCanvas(QGraphicsView):
         self.scale(factor, factor)
 
     def wheelEvent(self, event):
-        if event.angleDelta().y() > 0:
-            self.zoom_in()
-        else:
-            self.zoom_out()
+        # Scale with the actual wheel delta so trackpads (many small
+        # events) and mouse wheels (few big ones) both feel gradual.
+        delta = event.angleDelta().y()
+        if delta:
+            self._apply_zoom(1.0015 ** delta)
         event.accept()
 
     # ---------------------------------------------- floating controls

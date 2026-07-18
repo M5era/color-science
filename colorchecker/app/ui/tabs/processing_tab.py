@@ -6,6 +6,7 @@ rect-select -> auto-detect. Layout: tool buttons | canvas | sidebar.
 
 from pathlib import Path
 
+import numpy as np
 from PySide6.QtCore import Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
@@ -27,6 +28,7 @@ from app.core.detect import detect_chart_quad
 from app.core.overlay import PRESETS, Overlay
 from app.core.project import ImageEntry, ProjectStore
 from app.core.preview import to_display_u8
+from app.core.refine import refine_margins
 from app.core.sampler import sample_overlay
 from app.ui.canvas import ImageCanvas
 from app.ui.overlay_item import OverlayItem
@@ -101,7 +103,7 @@ class ProcessingTab(QWidget):
 
     def _build_tool_column(self) -> QWidget:
         column = QWidget()
-        column.setFixedWidth(44)
+        column.setFixedWidth(72)
         vbox = QVBoxLayout(column)
         vbox.setContentsMargins(6, 12, 6, 12)
         vbox.setSpacing(6)
@@ -110,12 +112,11 @@ class ProcessingTab(QWidget):
         group.setExclusive(True)
         self._tool_buttons: dict[str, QPushButton] = {}
         for tool, text, tip in (
-            ("pan", "✥", "Pan / drag corners"),
-            ("select", "⬚", "Select chart region (auto-detect)"),
+            ("pan", "Pan", "Drag to pan the image; drag the white dots to adjust corners"),
+            ("select", "Detect", "Drag a loose box around the chart to auto-detect it"),
         ):
             btn = QPushButton(text)
             btn.setCheckable(True)
-            btn.setFixedSize(32, 32)
             btn.setToolTip(tip)
             btn.clicked.connect(lambda _=False, t=tool: self._set_tool(t))
             group.addButton(btn)
@@ -339,8 +340,21 @@ class ProcessingTab(QWidget):
         if item is None:
             self._add_overlay()
             item = self._active_item()
-        item.overlay.corners = [list(pt) for pt in result.corners]
+        overlay = item.overlay
+        overlay.corners = [list(pt) for pt in result.corners]
+
+        # Snap the grid onto the patches: find the margins that put every
+        # sample square on uniform color (works whether the detected quad
+        # is the chart's outer edge or the patch field itself).
+        refined = refine_margins(
+            self._current.pixels, overlay.corners, overlay.rows, overlay.cols
+        )
+        if np.isfinite(refined.score):
+            overlay.margin_x = round(refined.margin_x, 2)
+            overlay.margin_y = round(refined.margin_y, 2)
+
         item.model_changed()
+        self.sidebar.show_overlay_values(overlay)
         self._set_tool("pan")
 
     # --------------------------------------------------------- top bar
@@ -374,11 +388,18 @@ class ProcessingTab(QWidget):
     # --------------------------------------------------------- loading
 
     def _on_load_clicked(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Load Image", "", "TIFF images (*.tif *.tiff)"
+        """Multi-select import: pick one file or a whole EV sweep at once
+        (Cmd-A in the dialog). Every picked file becomes a session entry;
+        the first one opens on the canvas."""
+        paths, _ = QFileDialog.getOpenFileNames(
+            self, "Load Images", "", "TIFF images (*.tif *.tiff)"
         )
-        if path:
-            self.open_image(path)
+        if not paths:
+            return
+        for path in paths:
+            self._ensure_entry(Path(path))
+        self._refresh_session_list()
+        self.open_image(paths[0])
 
     def open_image(self, path: str | Path) -> None:
         try:

@@ -187,6 +187,15 @@ only the zone DCTL itself remains to be built.
 Flow once Algorithm B exists: Marc saves a one-time template .drx
 containing our zone DCTL node(s) with defaults; the app clones it,
 writes fitted values into the sliders, outputs a ready PowerGrade.
+
+OPEN QUESTION — native custom curves in DRX (would let Stages 3/4
+ship as Resolve's own curve UI instead of 1D LUT/DCTL): Marc's K64
+drx contains NO curve data (untouched tools are omitted), so encoding
+unknown. Experiment defined: save curves_default.drx + one drx with a
+single known curve point (0.25->0.40 master), diff decompressed blobs
+to reveal the encoding. If readable: template must carry curves with
+the SAME point count as the fitter outputs (variable-length protobuf
+arrays — patch values only, fix point count, e.g. always 8 points).
 Commercial DCTLs (PrimeGrade / MONONODES etc.): these are ENCRYPTED
 .dctle — no source to read, so "map parameter semantics" is off the
 table. Black-box paths instead:

@@ -19,9 +19,21 @@ zone model + companion DCTL that we author ourselves.
   NOTE: Oklab expects ~linear input; bracket the zone math with a
   fixed documented log<->linear transform, identical in Python and
   DCTL, so parameter parity holds end to end.
-  No existing Oklab-DCTL blueprint needed: Ottosson's reference math
-  is public (two 3x3 matrices + cbrt each way, ~15 DCTL lines) and we
-  author both sides. Known porting risks + fixes: signed cbrt for
+  BLUEPRINT FOUND (2026-07-18): Demystify-Color/DCTLs (MIT, Nico Fink)
+  ships OKLAB.dctl — AWG<->OKLAB with signed cbrt AND an inset/outset
+  gamut guard for extreme blues; AWG matches Marc's Alexa footage.
+  Plus open Linear<->LogC DCTLs = the exact log/linear bracket in Arri
+  math. Plan: adopt these constants verbatim (with credit) in BOTH our
+  zone DCTL and the Python fitter — shared published reference instead
+  of two homegrown implementations; Python can be sanity-checked
+  against Nico's node in Resolve before our DCTL exists. Also there:
+  DMC_3x3Matrix v1-v3 (open, slider coefficients) — Stage 1 matrix
+  export can target these directly, no own matrix DCTL needed.
+  Encrypted (.dctle, black-box only): DMC_PiecewisePower (contrast),
+  AWG3_To_CamNative.
+  Fallback if ever needed: Ottosson's reference math is public
+  (two 3x3 matrices + cbrt each way, ~15 DCTL lines) and we author
+  both sides. Known porting risks + fixes: signed cbrt for
   negative scene values (pick convention once, mirror exactly);
   guard hue at chroma~0 so neutrals pass through; float32 GPU vs
   float64 numpy parity ~1e-6 (invisible; covered by the mandatory

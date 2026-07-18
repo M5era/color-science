@@ -138,6 +138,12 @@ with identical parameters):
 2. Prismatic Saturation DCTL (Hart's prismatic space): global amount
    + optional per-hue-zone amounts; the open Advanced-Natural-Sat-
    character tool; fittable stage AND standalone hand tool
+2b. OkLab Saturation DCTL (alternative sat model): chroma scaling in
+   OkLCh — global amount + 6 fixed hue-vector sliders (RGBCMY, cos^2
+   partition weights), the open equivalent of Nico's OKLAB Sat
+   Shaper; perceptually uniform character vs prismatic's subtractive
+   film character. Same fitter slot as 2 — solve with either, or
+   compare both against the target and keep the lower-error one
 3. Matrix stage: fitted 3x3 targeting Nico's DMC_3x3Matrix (mind the
    sequential quirk) or plain matrix DCTL
 4. Curves stage: 1D .cube or curve control points

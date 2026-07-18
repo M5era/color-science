@@ -98,7 +98,15 @@ only the zone DCTL itself remains to be built.
 Flow once Algorithm B exists: Marc saves a one-time template .drx
 containing our zone DCTL node(s) with defaults; the app clones it,
 writes fitted values into the sliders, outputs a ready PowerGrade.
-Bonus possibility: same patching can drive the commercial DCTLs he
-already owns (PrimeGrade / MONONODES crosstalk / split tone /
-FilmicContrast) IF we map our fitted stages onto their parameter
-semantics — investigate per node later.
+Commercial DCTLs (PrimeGrade / MONONODES etc.): these are ENCRYPTED
+.dctle — no source to read, so "map parameter semantics" is off the
+table. Black-box paths instead:
+- Tier 1 (easy, frozen): bake a node's transform at fixed settings to
+  a LUT via Resolve's Generate 3D LUT / identity-lattice render.
+- Tier 2 (experimental, keeps sliders live): automated black-box
+  fitting loop — app patches candidate params into .drx (proven),
+  Resolve scripting API applies grade + renders a probe frame, app
+  measures error vs target patches, optimizer iterates. Resolve
+  executes the encrypted math; we only steer sliders. Needs Resolve
+  Studio scripting; slow (render per iteration); most experimental
+  item — attempt only after Algorithm B ships.

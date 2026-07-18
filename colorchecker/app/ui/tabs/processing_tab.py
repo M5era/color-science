@@ -20,12 +20,25 @@ from PySide6.QtWidgets import (
 from app.core import image_io
 from app.core.detect import detect_chart_quad
 from app.core.overlay import PRESETS, Overlay
+from app.core.project import ImageEntry, ProjectStore
 from app.core.preview import to_display_u8
 from app.core.sampler import sample_overlay
 from app.ui.canvas import ImageCanvas
 from app.ui.overlay_item import OverlayItem
 from app.ui.patch_table import PatchTable
+from app.ui.session_list import SessionList
 from app.ui.sidebar import Sidebar
+
+
+def _sample_from_dict(data: dict):
+    from app.core.sampler import PatchSample
+
+    return PatchSample(
+        row=data["row"],
+        col=data["col"],
+        rgb=tuple(data["rgb"]),
+        pixel_count=data.get("pixel_count", 0),
+    )
 
 
 class ProcessingTab(QWidget):
@@ -35,6 +48,7 @@ class ProcessingTab(QWidget):
         self._overlay_items: list[OverlayItem] = []
         self._active_index: int = -1
         self._last_samples = []
+        self.store = ProjectStore()
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -61,6 +75,15 @@ class ProcessingTab(QWidget):
         self.sidebar.overlayRemoved.connect(self._remove_active_overlay)
         self.sidebar.processClicked.connect(self.process_grid)
         layout.addWidget(self.sidebar)
+
+        self.session_list = SessionList()
+        self.session_list.entryActivated.connect(self._on_entry_activated)
+        self.session_list.entriesEdited.connect(self._on_entries_edited)
+        self.session_list.moveRequested.connect(self._on_move_entry)
+        self.session_list.sortByEvRequested.connect(self._on_sort_by_ev)
+        self.session_list.removeRequested.connect(self._on_remove_entry)
+        # Between the parameter grid and the Process button in the sidebar.
+        self.sidebar.layout().insertWidget(1, self.session_list, stretch=1)
 
         self.top_bar = self._build_top_bar()
 
@@ -160,7 +183,8 @@ class ProcessingTab(QWidget):
     # ------------------------------------------------------- sampling
 
     def process_grid(self) -> None:
-        """Sample the active overlay from the raw buffer, show the table."""
+        """Sample the active overlay from the raw buffer, show the table,
+        and store the results in the image's session entry."""
         item = self._active_item()
         if self._current is None or item is None:
             return
@@ -169,6 +193,67 @@ class ProcessingTab(QWidget):
             self._last_samples, item.overlay.rows, item.overlay.cols
         )
         self.table.show()
+
+        entry = self._current_entry()
+        if entry is not None:
+            entry.overlays = [o.overlay.to_dict() for o in self._overlay_items]
+            entry.patch_results = [s.to_dict() for s in self._last_samples]
+            self._refresh_session_list()
+
+    # -------------------------------------------------------- session
+
+    def _current_entry(self) -> ImageEntry | None:
+        if self._current is None:
+            return None
+        path = str(self._current.path)
+        for entry in self.store.images:
+            if entry.source_path == path:
+                return entry
+        return None
+
+    def _ensure_entry(self, path) -> ImageEntry:
+        for entry in self.store.images:
+            if entry.source_path == str(path):
+                return entry
+        entry = ImageEntry(
+            source_path=str(path),
+            label=path.name,
+            ev=image_io.parse_ev_from_filename(path.name),
+        )
+        self.store.images.append(entry)
+        return entry
+
+    def _entry_index(self) -> int:
+        entry = self._current_entry()
+        return self.store.images.index(entry) if entry in self.store.images else -1
+
+    def _refresh_session_list(self) -> None:
+        self.session_list.set_entries(self.store.images, self._entry_index())
+
+    def _on_entry_activated(self, index: int) -> None:
+        if 0 <= index < len(self.store.images):
+            entry = self.store.images[index]
+            if self._current is None or str(self._current.path) != entry.source_path:
+                self.open_image(entry.source_path)
+
+    def _on_entries_edited(self) -> None:
+        self.session_list.apply_edits(self.store.images)
+
+    def _on_move_entry(self, from_index: int, to_index: int) -> None:
+        images = self.store.images
+        images.insert(to_index, images.pop(from_index))
+        self._refresh_session_list()
+        self.session_list.table.selectRow(to_index)
+
+    def _on_sort_by_ev(self) -> None:
+        # Entries without an EV keep their relative order, after the sorted ones.
+        self.store.images.sort(key=lambda e: (e.ev is None, e.ev if e.ev is not None else 0))
+        self._refresh_session_list()
+
+    def _on_remove_entry(self, index: int) -> None:
+        if 0 <= index < len(self.store.images):
+            self.store.images.pop(index)
+            self._refresh_session_list()
 
     # ------------------------------------------------------ auto-detect
 
@@ -234,6 +319,20 @@ class ProcessingTab(QWidget):
         self._update_nav_state()
         if first_image:
             self._add_overlay()
+        self._ensure_entry(loaded.path)
+        self._refresh_session_list()
+
+        # Show this image's stored results if it was processed before.
+        entry = self._current_entry()
+        if entry is not None and entry.patch_results:
+            item = self._active_item()
+            if item is not None:
+                self.table.show_samples(
+                    [_sample_from_dict(d) for d in entry.patch_results],
+                    item.overlay.rows,
+                    item.overlay.cols,
+                )
+                self.table.show()
 
     def _step(self, step: int) -> None:
         if self._current is None:

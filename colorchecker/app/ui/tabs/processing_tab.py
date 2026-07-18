@@ -224,8 +224,29 @@ class ProcessingTab(QWidget):
         item = self._active_item()
         if item is None:
             return
-        self.sidebar.apply_to_overlay(item.overlay)
+        overlay = item.overlay
+        prev_kind = overlay.kind
+        self.sidebar.apply_to_overlay(overlay)
+        if overlay.kind == "emissive" and prev_kind != "emissive":
+            self._reshape_portrait(overlay)
         item.model_changed()
+
+    @staticmethod
+    def _reshape_portrait(overlay: Overlay) -> None:
+        """Give a freshly-applied light-source overlay a portrait shape
+        (light panels are taller than wide), centered where it was."""
+        xs = [pt[0] for pt in overlay.corners]
+        ys = [pt[1] for pt in overlay.corners]
+        cx, cy = sum(xs) / 4.0, sum(ys) / 4.0
+        height = max(ys) - min(ys)
+        half_h = height / 2.0
+        half_w = height / 3.0  # 2:3 width-to-height
+        overlay.corners = [
+            [cx - half_w, cy - half_h],
+            [cx + half_w, cy - half_h],
+            [cx + half_w, cy + half_h],
+            [cx - half_w, cy + half_h],
+        ]
 
     def _on_corners_dragged(self) -> None:
         pass  # corners aren't shown in the sidebar; nothing to sync yet

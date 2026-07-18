@@ -180,6 +180,12 @@ class Sidebar(QWidget):
         overlay.patch_size = self.patch_size_spin.value()
         overlay.patch_offset = self.patch_offset_spin.value()
         overlay.preset_name = self.preset_combo.currentText()
+        # The preset determines reflective vs emissive — picking Light
+        # Source from the dropdown must tag the overlay emissive.
+        for preset in PRESETS:
+            if preset.name == overlay.preset_name:
+                overlay.kind = preset.kind
+                break
 
     def set_overlay_use(self, enabled: bool, available: bool) -> None:
         self._updating = True

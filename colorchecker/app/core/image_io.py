@@ -15,8 +15,12 @@ import tifffile
 
 SUPPORTED_SUFFIXES = {".tif", ".tiff"}
 
-# EV markers, number-first: "+3EV", "-5EV", "0_EV", "3.5EV", "+2 EV"
-_EV_PATTERN = re.compile(r"([+-]?\d+(?:[.,]\d+)?)\s*_?\s*EV", re.IGNORECASE)
+# EV markers, number-first: "+3EV", "-5EV", "0_EV", "3.5EV", "+2 EV".
+# The lookbehind keeps digits that belong to a preceding word (hue120,
+# 5600K) from being read as an EV value.
+_EV_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9])([+-]?\d+(?:[.,]\d+)?)\s*_?\s*EV", re.IGNORECASE
+)
 # EV markers, EV-first: "EV+1", "EV-1", "EV1", "EV_2.5". Only whitespace
 # and underscores may separate — a hyphen is always the minus sign.
 _EV_PATTERN_PREFIX = re.compile(r"EV[\s_]*([+-]?\d+(?:[.,]\d+)?)", re.IGNORECASE)

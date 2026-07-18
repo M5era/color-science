@@ -10,6 +10,7 @@ import numpy as np
 from PySide6.QtCore import Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
+    QApplication,
     QButtonGroup,
     QDialog,
     QFileDialog,
@@ -84,6 +85,7 @@ class ProcessingTab(QWidget):
         self.sidebar.overlayAdded.connect(self._add_overlay)
         self.sidebar.overlayRemoved.connect(self._remove_active_overlay)
         self.sidebar.processClicked.connect(self.process_grid)
+        self.sidebar.processAllClicked.connect(self.process_all)
         self.sidebar.exportClicked.connect(self.export_csv)
         self.sidebar.previewClicked.connect(self.preview_csv)
         self.sidebar.overlayUseToggled.connect(self._on_overlay_use_toggled)
@@ -190,11 +192,21 @@ class ProcessingTab(QWidget):
         entry = self._current_entry()
         if item is None or entry is None:
             return
+        # With several session rows selected, the toggle applies to all of
+        # them; otherwise just to the current frame.
+        selected = self.session_list.selected_rows()
+        if len(selected) > 1:
+            targets = [self.store.images[r] for r in selected if r < len(self.store.images)]
+            if entry not in targets:
+                targets.append(entry)
+        else:
+            targets = [entry]
         name = item.overlay.name
-        if checked and name in entry.disabled_overlays:
-            entry.disabled_overlays.remove(name)
-        elif not checked and name not in entry.disabled_overlays:
-            entry.disabled_overlays.append(name)
+        for target in targets:
+            if checked and name in target.disabled_overlays:
+                target.disabled_overlays.remove(name)
+            elif not checked and name not in target.disabled_overlays:
+                target.disabled_overlays.append(name)
         item.set_visible(checked)
         self.storeChanged.emit()
 
@@ -261,6 +273,72 @@ class ProcessingTab(QWidget):
         self._sync_overlay_use_ui()
         self._show_results_for_active_overlay(results)
 
+    def _sample_entry(self, entry: ImageEntry, pixels) -> None:
+        """Sample all overlays enabled for `entry` and store tagged results."""
+        results = []
+        for item in self._overlay_items:
+            overlay = item.overlay
+            if overlay.name in entry.disabled_overlays:
+                continue
+            for sample in sample_overlay(pixels, overlay):
+                row = sample.to_dict()
+                row["overlay"] = overlay.name
+                row["kind"] = overlay.kind
+                results.append(row)
+        entry.overlays = [o.overlay.to_dict() for o in self._overlay_items]
+        entry.patch_results = results
+
+    def process_all(self, only_missing: bool = False) -> int:
+        """Process every session entry with the current overlays.
+
+        Returns the number of entries processed; shows a progress dialog
+        and reports files that could not be loaded."""
+        if not self._overlay_items or not self.store.images:
+            return 0
+        targets = [
+            e for e in self.store.images
+            if not (only_missing and e.patch_results)
+        ]
+        if not targets:
+            return 0
+
+        from PySide6.QtWidgets import QProgressDialog
+
+        progress = QProgressDialog("Processing…", "Cancel", 0, len(targets), self)
+        progress.setMinimumDuration(0)
+        failures = []
+        done = 0
+        for i, entry in enumerate(targets):
+            progress.setValue(i)
+            progress.setLabelText(f"Processing {entry.label}…")
+            QApplication.processEvents()
+            if progress.wasCanceled():
+                break
+            # Reuse the already-loaded buffer for the on-screen frame.
+            if self._current is not None and str(self._current.path) == entry.source_path:
+                pixels = self._current.pixels
+            else:
+                try:
+                    pixels = image_io.load_image(entry.source_path).pixels
+                except Exception as exc:
+                    failures.append(f"{entry.label}: {exc}")
+                    continue
+            self._sample_entry(entry, pixels)
+            done += 1
+        progress.setValue(len(targets))
+
+        self._refresh_session_list()
+        self.storeChanged.emit()
+        entry = self._current_entry()
+        if entry is not None and entry.patch_results:
+            self._show_results_for_active_overlay(entry.patch_results)
+        if failures:
+            QMessageBox.warning(
+                self, "Some files failed",
+                "Not processed:\n" + "\n".join(failures[:12]),
+            )
+        return done
+
     def _show_results_for_active_overlay(self, results: list[dict]) -> None:
         item = self._active_item()
         if item is None:
@@ -280,6 +358,17 @@ class ProcessingTab(QWidget):
 
     def _csv_or_complain(self) -> str | None:
         count, skipped = exportable_count(self.store.images)
+        if skipped and self._overlay_items:
+            answer = QMessageBox.question(
+                self,
+                "Unprocessed entries",
+                f"{skipped} checked entr{'y has' if skipped == 1 else 'ies have'} "
+                "no results yet. Process them now with the current overlays?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            )
+            if answer == QMessageBox.StandardButton.Yes:
+                self.process_all(only_missing=True)
+                count, skipped = exportable_count(self.store.images)
         if count == 0:
             QMessageBox.information(
                 self,
@@ -519,10 +608,13 @@ class ProcessingTab(QWidget):
         self._apply_overlay_visibility_for_frame()
         self._sync_overlay_use_ui()
 
-        # Show this image's stored results if it was processed before.
+        # Show this image's stored results, or clear the table so stale
+        # values from the previous frame can't be mistaken for this one's.
         entry = self._current_entry()
         if entry is not None and entry.patch_results:
             self._show_results_for_active_overlay(entry.patch_results)
+        else:
+            self.table.hide()
 
     def _step(self, step: int) -> None:
         if self._current is None:

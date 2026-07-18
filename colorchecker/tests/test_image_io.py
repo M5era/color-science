@@ -88,6 +88,9 @@ def test_ev_parsing():
     assert parse_ev_from_filename("EV-1.tif") == -1.0
     assert parse_ev_from_filename("EV_2.5.tif") == 2.5
     assert parse_ev_from_filename("chart_EV0.tif") == 0.0
+    # Digits belonging to another token must not be read as EV
+    assert parse_ev_from_filename("hue120_EV0.tif") == 0.0
+    assert parse_ev_from_filename("5600K_EV-2.tif") == -2.0
 
 
 def test_group_parsing():

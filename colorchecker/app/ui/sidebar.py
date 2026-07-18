@@ -29,6 +29,7 @@ class Sidebar(QWidget):
     overlayAdded = Signal()
     overlayRemoved = Signal()
     processClicked = Signal()
+    processAllClicked = Signal()
     exportClicked = Signal()
     previewClicked = Signal()
     overlayUseToggled = Signal(bool)
@@ -110,9 +111,17 @@ class Sidebar(QWidget):
         self.patch_offset_spin = self._pct_spin(-50.0, 50.0)
         grid.addWidget(self.patch_offset_spin, row, 1)
 
+        process_row = QHBoxLayout()
         self.process_btn = QPushButton("Process Grid")
         self.process_btn.clicked.connect(self.processClicked.emit)
-        root.addWidget(self.process_btn)
+        process_row.addWidget(self.process_btn)
+        self.process_all_btn = QPushButton("Process All")
+        self.process_all_btn.setToolTip(
+            "Process every image in the session with the current overlays"
+        )
+        self.process_all_btn.clicked.connect(self.processAllClicked.emit)
+        process_row.addWidget(self.process_all_btn)
+        root.addLayout(process_row)
 
         export_row = QHBoxLayout()
         self.export_btn = QPushButton("Export CSV")

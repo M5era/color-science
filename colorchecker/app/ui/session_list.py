@@ -45,7 +45,9 @@ class SessionList(QWidget):
         self.table.setColumnWidth(0, 24)
         self.table.setColumnWidth(2, 40)
         self.table.setColumnWidth(3, 60)
-        self.table.cellClicked.connect(self._cell_clicked)
+        # currentCellChanged covers clicks AND arrow-key navigation, so
+        # stepping through rows with the keyboard switches frames too.
+        self.table.currentCellChanged.connect(self._current_cell_changed)
         self.table.itemChanged.connect(self._item_changed)
         root.addWidget(self.table, stretch=1)
 
@@ -112,8 +114,15 @@ class SessionList(QWidget):
 
     # ----------------------------------------------------------- signals
 
-    def _cell_clicked(self, row: int, col: int) -> None:
-        if col != 0:  # checkbox clicks shouldn't switch images
+    def selected_rows(self) -> list[int]:
+        return sorted(i.row() for i in self.table.selectionModel().selectedRows())
+
+    def _current_cell_changed(self, row: int, _col: int, prev_row: int, _pc: int) -> None:
+        if self._updating or row < 0 or row == prev_row:
+            return
+        # Only switch frames on single-row focus moves; building a
+        # multi-selection (Shift/Cmd-click) shouldn't load images.
+        if len(self.selected_rows()) <= 1:
             self.entryActivated.emit(row)
 
     def _item_changed(self, item) -> None:

@@ -19,11 +19,21 @@ zone model + companion DCTL that we author ourselves.
   NOTE: Oklab expects ~linear input; bracket the zone math with a
   fixed documented log<->linear transform, identical in Python and
   DCTL, so parameter parity holds end to end.
+  No existing Oklab-DCTL blueprint needed: Ottosson's reference math
+  is public (two 3x3 matrices + cbrt each way, ~15 DCTL lines) and we
+  author both sides. Known porting risks + fixes: signed cbrt for
+  negative scene values (pick convention once, mirror exactly);
+  guard hue at chroma~0 so neutrals pass through; float32 GPU vs
+  float64 numpy parity ~1e-6 (invisible; covered by the mandatory
+  Resolve pixel-match gate).
   Reuleaux remains design reference only, not a dependency.
-- Model: N adjustment units (start N=3), each with FREE hue anchor +
-  width, value (luminance) center + width, and delta hue/chroma/value
-  with smooth Gaussian falloff — not tied to fixed R/G/B/C/M/Y sliders.
-  ~6-7 params/unit, cap ~20 total.
+- Model (clarified 2026-07-18): up to ~20 SIMPLE NODES, each one zone.
+  One tiny single-zone DCTL (~7 sliders: hue anchor + width, luminance
+  center + width, delta hue/chroma/lightness, Gaussian falloff),
+  instantiated as separate stacked Resolve nodes — bypass/tweak each in
+  isolation. Solver grows the chain greedily: fit a zone, measure the
+  residual, add the next node where error is largest, stop at target
+  error or the node cap. Auto-name each node by its job.
 - Solver: scipy least_squares over unit params against patch pairs
   (same data path as RBF).
 - Auto-naming of fitted units: hue center -> color word, value center

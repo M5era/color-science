@@ -57,16 +57,34 @@ class MainWindow(QMainWindow):
 
         self._stack = QStackedWidget()
         self.router = TabRouter(self._stack)
-        self.router.register(Tab.PROCESSING, ProcessingTab())
-        self.router.register(Tab.MATCHING, MatchingTab())
-        self.router.register(Tab.LUT_INSPECTOR, LutInspectorTab())
+        self._tabs: dict[Tab, QWidget] = {
+            Tab.PROCESSING: ProcessingTab(),
+            Tab.MATCHING: MatchingTab(),
+            Tab.LUT_INSPECTOR: LutInspectorTab(),
+        }
+        for tab, widget in self._tabs.items():
+            self.router.register(tab, widget)
 
         root.addWidget(self._build_top_bar())
         root.addWidget(self._stack, stretch=1)
         self.setCentralWidget(central)
 
+        # Tabs may expose a `top_bar` widget shown on the right of the top
+        # bar while they are active (Processing: filename / arrows / Load).
+        for tab, widget in self._tabs.items():
+            tab_bar = getattr(widget, "top_bar", None)
+            if tab_bar is not None:
+                self._top_right_layout.addWidget(tab_bar)
+
         self._tab_buttons[Tab.PROCESSING].setChecked(True)
-        self.router.select(Tab.PROCESSING)
+        self._select_tab(Tab.PROCESSING)
+
+    def _select_tab(self, tab: Tab) -> None:
+        self.router.select(tab)
+        for other, widget in self._tabs.items():
+            tab_bar = getattr(widget, "top_bar", None)
+            if tab_bar is not None:
+                tab_bar.setVisible(other is tab)
 
     def _build_top_bar(self) -> QWidget:
         bar = QWidget()
@@ -89,11 +107,16 @@ class MainWindow(QMainWindow):
         for tab in Tab:
             btn = QPushButton(tab.value)
             btn.setCheckable(True)
-            btn.clicked.connect(lambda _=False, t=tab: self.router.select(t))
+            btn.clicked.connect(lambda _=False, t=tab: self._select_tab(t))
             group.addButton(btn)
             seg_layout.addWidget(btn)
             self._tab_buttons[tab] = btn
         layout.addWidget(segment)
         layout.addStretch(1)
+
+        top_right = QWidget()
+        self._top_right_layout = QHBoxLayout(top_right)
+        self._top_right_layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(top_right)
 
         return bar

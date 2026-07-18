@@ -1,9 +1,32 @@
 # Roadmap
 
-## Matching: Algorithm B — parametric spherical model (reuleaux-style)
+## Matching: Algorithm B — parametric zone model (refined 2026-07)
 
 Status: planned, NOT started. Do after the current toolchain is proven on
 real footage.
+
+REFINED DESIGN (supersedes plain reuleaux port): custom hue-anchored
+zone model + companion DCTL that we author ourselves.
+- Space: cylindrical hue/chroma/value about the neutral axis on log
+  input (cf. thatcherfreeman Cylindrical DCTL); reuleaux is design
+  reference only, not a dependency.
+- Model: N adjustment units (start N=3), each with FREE hue anchor +
+  width, value (luminance) center + width, and delta hue/chroma/value
+  with smooth Gaussian falloff — not tied to fixed R/G/B/C/M/Y sliders.
+  ~6-7 params/unit, cap ~20 total.
+- Solver: scipy least_squares over unit params against patch pairs
+  (same data path as RBF).
+- Auto-naming of fitted units: hue center -> color word, value center
+  -> shadows/mids/highlights, dominant delta -> verb ("light green
+  desat", "bleach highlights").
+- Companion DCTL written by us with IDENTICAL parameters — parity by
+  construction; fitted numbers paste straight into Resolve.
+- Existing alternatives evaluated (thatcherfreeman/utility-dctls):
+  Smooth Tetra (C1-smooth Yedlin tetra, fixed anchors), Hue Curve DCTL
+  (free-anchor single-hue primitive — closest existing tool), Matrix
+  Manipulator, Cylindrical/Spherical space conversions.
+
+Original reference (kept for the zone-control scheme):
 
 Reference: https://github.com/hotgluebanjo/reuleaux (HSV-like spherical
 color model for film characterisation, Yedlin-inspired; implementations

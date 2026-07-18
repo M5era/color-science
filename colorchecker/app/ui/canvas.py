@@ -6,7 +6,7 @@ receives the one-way 8-bit preview — never the raw float data.
 """
 
 import numpy as np
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QPointF, Qt, Signal
 from PySide6.QtGui import QColor, QImage, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QGraphicsPixmapItem,
@@ -23,6 +23,9 @@ _ZOOM_MAX = 64.0
 
 
 class ImageCanvas(QGraphicsView):
+    #: emitted after a rect-select drag: x0, y0, x1, y1 in image coordinates
+    rectSelected = Signal(float, float, float, float)
+
     def __init__(self):
         super().__init__()
         self._scene = QGraphicsScene(self)
@@ -38,6 +41,38 @@ class ImageCanvas(QGraphicsView):
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
 
         self._zoom_controls = self._build_zoom_controls()
+        self._tool = "pan"
+        self._band_start: QPointF | None = None
+        self._band_end: QPointF | None = None
+        self.rubberBandChanged.connect(self._band_changed)
+
+    # -------------------------------------------------------------- tools
+
+    def set_tool(self, tool: str) -> None:
+        """'pan' (drag to scroll) or 'select' (rubber-band a chart region)."""
+        self._tool = tool
+        if tool == "select":
+            self.setDragMode(QGraphicsView.DragMode.RubberBandDrag)
+            self.viewport().setCursor(Qt.CursorShape.CrossCursor)
+        else:
+            self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
+            self.viewport().unsetCursor()
+
+    def _band_changed(self, viewport_rect, from_scene: QPointF, to_scene: QPointF):
+        if not viewport_rect.isNull():
+            self._band_start = from_scene
+            self._band_end = to_scene
+
+    def mouseReleaseEvent(self, event):
+        super().mouseReleaseEvent(event)
+        if (
+            self._tool == "select"
+            and self._band_start is not None
+            and self._band_end is not None
+        ):
+            start, end = self._band_start, self._band_end
+            self._band_start = self._band_end = None
+            self.rectSelected.emit(start.x(), start.y(), end.x(), end.y())
 
     # ------------------------------------------------------------- image
 

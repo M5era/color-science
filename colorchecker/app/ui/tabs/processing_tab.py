@@ -28,7 +28,7 @@ from app.core.detect import detect_chart_quad
 from app.core.overlay import PRESETS, Overlay
 from app.core.project import ImageEntry, ProjectStore
 from app.core.preview import to_display_u8
-from app.core.refine import refine_margins
+from app.core.refine import align_grid
 from app.core.sampler import sample_overlay
 from app.ui.canvas import ImageCanvas
 from app.ui.overlay_item import OverlayItem
@@ -349,11 +349,13 @@ class ProcessingTab(QWidget):
         for entry in self.store.images:
             if entry.source_path == str(path):
                 return entry
+        parsed_ev = image_io.parse_ev_from_filename(path.name)
         entry = ImageEntry(
             source_path=str(path),
             label=path.name,
-            ev=image_io.parse_ev_from_filename(path.name),
-            group=image_io.parse_group_from_filename(path.name),
+            # Unmarked filenames mean the reference setup: EV 0 at 5600K.
+            ev=0.0 if parsed_ev is None else parsed_ev,
+            group=image_io.parse_group_from_filename(path.name) or "5600K",
         )
         self.store.images.append(entry)
         self.storeChanged.emit()
@@ -406,17 +408,23 @@ class ProcessingTab(QWidget):
             self._add_overlay()
             item = self._active_item()
         overlay = item.overlay
-        overlay.corners = [list(pt) for pt in result.corners]
 
-        # Snap the grid onto the patches: find the margins that put every
-        # sample square on uniform color (works whether the detected quad
-        # is the chart's outer edge or the patch field itself).
-        refined = refine_margins(
-            self._current.pixels, overlay.corners, overlay.rows, overlay.cols
+        # Snap the grid onto the patch centers: the detected quad may span
+        # more patches than the working grid (SG is physically 10x14, the
+        # preset grid 8x12), so solve patch pitch + phase per axis and move
+        # the corners to the aligned window. Margins become 0 by definition.
+        aligned = align_grid(
+            self._current.pixels,
+            [list(pt) for pt in result.corners],
+            overlay.rows,
+            overlay.cols,
         )
-        if np.isfinite(refined.score):
-            overlay.margin_x = round(refined.margin_x, 2)
-            overlay.margin_y = round(refined.margin_y, 2)
+        if np.isfinite(aligned.score):
+            overlay.corners = aligned.corners
+            overlay.margin_x = 0.0
+            overlay.margin_y = 0.0
+        else:
+            overlay.corners = [list(pt) for pt in result.corners]
 
         item.model_changed()
         self.sidebar.show_overlay_values(overlay)

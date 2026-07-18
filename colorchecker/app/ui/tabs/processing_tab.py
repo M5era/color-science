@@ -6,18 +6,23 @@ rect-select -> auto-detect. Layout: tool buttons | canvas | sidebar.
 
 from pathlib import Path
 
+from PySide6.QtCore import Signal
+from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QButtonGroup,
+    QDialog,
     QFileDialog,
     QHBoxLayout,
     QLabel,
     QMessageBox,
+    QPlainTextEdit,
     QPushButton,
     QVBoxLayout,
     QWidget,
 )
 
 from app.core import image_io
+from app.core.csv_export import combined_csv, exportable_count
 from app.core.detect import detect_chart_quad
 from app.core.overlay import PRESETS, Overlay
 from app.core.project import ImageEntry, ProjectStore
@@ -42,6 +47,9 @@ def _sample_from_dict(data: dict):
 
 
 class ProcessingTab(QWidget):
+    #: emitted whenever the project store's content changes (dirty tracking)
+    storeChanged = Signal()
+
     def __init__(self):
         super().__init__()
         self._current: image_io.LoadedImage | None = None
@@ -74,6 +82,8 @@ class ProcessingTab(QWidget):
         self.sidebar.overlayAdded.connect(self._add_overlay)
         self.sidebar.overlayRemoved.connect(self._remove_active_overlay)
         self.sidebar.processClicked.connect(self.process_grid)
+        self.sidebar.exportClicked.connect(self.export_csv)
+        self.sidebar.previewClicked.connect(self.preview_csv)
         layout.addWidget(self.sidebar)
 
         self.session_list = SessionList()
@@ -199,8 +209,67 @@ class ProcessingTab(QWidget):
             entry.overlays = [o.overlay.to_dict() for o in self._overlay_items]
             entry.patch_results = [s.to_dict() for s in self._last_samples]
             self._refresh_session_list()
+            self.storeChanged.emit()
+
+    # --------------------------------------------------------- export
+
+    def _csv_or_complain(self) -> str | None:
+        count, skipped = exportable_count(self.store.images)
+        if count == 0:
+            QMessageBox.information(
+                self,
+                "Nothing to export",
+                "No checked entries with processed results.\n"
+                "Run Process Grid on the exposures you want to export.",
+            )
+            return None
+        text = combined_csv(self.store.images)
+        if skipped:
+            QMessageBox.warning(
+                self,
+                "Some entries skipped",
+                f"{skipped} checked entr{'y' if skipped == 1 else 'ies'} "
+                "without processed results were left out.",
+            )
+        return text
+
+    def preview_csv(self) -> None:
+        text = self._csv_or_complain()
+        if text is None:
+            return
+        dialog = QDialog(self)
+        dialog.setWindowTitle("CSV Preview")
+        dialog.resize(760, 480)
+        box = QVBoxLayout(dialog)
+        view = QPlainTextEdit(text)
+        view.setReadOnly(True)
+        font = QFont("Menlo")
+        font.setStyleHint(QFont.StyleHint.Monospace)
+        view.setFont(font)
+        box.addWidget(view)
+        dialog.exec()
+
+    def export_csv(self) -> None:
+        text = self._csv_or_complain()
+        if text is None:
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export CSV", "patches.csv", "CSV files (*.csv)"
+        )
+        if not path:
+            return
+        try:
+            Path(path).write_text(text)
+        except OSError as exc:
+            QMessageBox.critical(self, "Export failed", str(exc))
 
     # -------------------------------------------------------- session
+
+    def set_store(self, store: ProjectStore) -> None:
+        """Replace the project (project open). Canvas keeps showing the
+        current image; entries are opened by clicking them in the list."""
+        self.store = store
+        self._refresh_session_list()
 
     def _current_entry(self) -> ImageEntry | None:
         if self._current is None:
@@ -221,6 +290,7 @@ class ProcessingTab(QWidget):
             ev=image_io.parse_ev_from_filename(path.name),
         )
         self.store.images.append(entry)
+        self.storeChanged.emit()
         return entry
 
     def _entry_index(self) -> int:
@@ -238,22 +308,26 @@ class ProcessingTab(QWidget):
 
     def _on_entries_edited(self) -> None:
         self.session_list.apply_edits(self.store.images)
+        self.storeChanged.emit()
 
     def _on_move_entry(self, from_index: int, to_index: int) -> None:
         images = self.store.images
         images.insert(to_index, images.pop(from_index))
         self._refresh_session_list()
         self.session_list.table.selectRow(to_index)
+        self.storeChanged.emit()
 
     def _on_sort_by_ev(self) -> None:
         # Entries without an EV keep their relative order, after the sorted ones.
         self.store.images.sort(key=lambda e: (e.ev is None, e.ev if e.ev is not None else 0))
         self._refresh_session_list()
+        self.storeChanged.emit()
 
     def _on_remove_entry(self, index: int) -> None:
         if 0 <= index < len(self.store.images):
             self.store.images.pop(index)
             self._refresh_session_list()
+            self.storeChanged.emit()
 
     # ------------------------------------------------------ auto-detect
 

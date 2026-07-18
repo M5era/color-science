@@ -28,6 +28,8 @@ class Sidebar(QWidget):
     overlayAdded = Signal()
     overlayRemoved = Signal()
     processClicked = Signal()
+    exportClicked = Signal()
+    previewClicked = Signal()
 
     def __init__(self):
         super().__init__()
@@ -100,6 +102,15 @@ class Sidebar(QWidget):
         self.process_btn = QPushButton("Process Grid")
         self.process_btn.clicked.connect(self.processClicked.emit)
         root.addWidget(self.process_btn)
+
+        export_row = QHBoxLayout()
+        self.export_btn = QPushButton("Export CSV")
+        self.export_btn.clicked.connect(self.exportClicked.emit)
+        export_row.addWidget(self.export_btn)
+        self.preview_btn = QPushButton("Preview CSV")
+        self.preview_btn.clicked.connect(self.previewClicked.emit)
+        export_row.addWidget(self.preview_btn)
+        root.addLayout(export_row)
 
         for spin in (self.rows_spin, self.cols_spin):
             spin.valueChanged.connect(self._field_edited)

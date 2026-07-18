@@ -275,5 +275,5 @@ class MatchingTab(QWidget):
                 domain_min=self.domain_min_spin.value(),
                 domain_max=self.domain_max_spin.value(),
             )
-        except OSError as exc:
+        except (OSError, ValueError) as exc:
             QMessageBox.critical(self, "Export failed", str(exc))

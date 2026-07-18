@@ -132,3 +132,10 @@ def test_session_rows_follow_export_order():
     assert values.shape == (3, 3)  # B excluded
     assert values[2][0] == 0.3
     assert labels[0] == "A [Overlay 1] r1c1"
+
+
+def test_zero_width_domain_rejected(tmp_path):
+    source, target = _film_like_pairs(100)
+    result = solve_match(source, target, layers=2)
+    with pytest.raises(ValueError, match="collapses the whole LUT"):
+        write_cube(result.model, tmp_path / "bad.cube", domain_min=1.0, domain_max=1.0)

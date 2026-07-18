@@ -219,6 +219,12 @@ def write_cube(
     title: str = "Color Checker match",
 ) -> None:
     """Bake the model into a .cube 3D LUT (R varies fastest, per spec)."""
+    if domain_max - domain_min < 0.05:
+        raise ValueError(
+            f"Domain max ({domain_max:g}) must be clearly above domain min "
+            f"({domain_min:g}) — a zero-width domain collapses the whole LUT "
+            "to a single constant color."
+        )
     grid = np.linspace(domain_min, domain_max, size)
     b, g, r = np.meshgrid(grid, grid, grid, indexing="ij")
     pts = np.stack([r.ravel(), g.ravel(), b.ravel()], axis=1)

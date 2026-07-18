@@ -83,6 +83,11 @@ def test_ev_parsing():
     assert parse_ev_from_filename("stock_2.5EV.tif") == 2.5
     assert parse_ev_from_filename("stock_+1,5EV.tif") == 1.5
     assert parse_ev_from_filename("no_marker_here.tif") is None
+    # EV-first order, as in Marc's capture pack
+    assert parse_ev_from_filename("EV+1.tif") == 1.0
+    assert parse_ev_from_filename("EV-1.tif") == -1.0
+    assert parse_ev_from_filename("EV_2.5.tif") == 2.5
+    assert parse_ev_from_filename("chart_EV0.tif") == 0.0
 
 
 def test_group_parsing():

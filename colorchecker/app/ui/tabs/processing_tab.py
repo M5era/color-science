@@ -86,6 +86,7 @@ class ProcessingTab(QWidget):
         self.sidebar.processClicked.connect(self.process_grid)
         self.sidebar.exportClicked.connect(self.export_csv)
         self.sidebar.previewClicked.connect(self.preview_csv)
+        self.sidebar.overlayUseToggled.connect(self._on_overlay_use_toggled)
         layout.addWidget(self.sidebar)
 
         self.session_list = SessionList()
@@ -176,6 +177,36 @@ class ProcessingTab(QWidget):
             entry = self._current_entry()
             if entry is not None and entry.patch_results:
                 self._show_results_for_active_overlay(entry.patch_results)
+        self._sync_overlay_use_ui()
+
+    # ---------------------------------------------- per-frame overlay use
+
+    def _overlay_enabled_here(self, overlay: Overlay) -> bool:
+        entry = self._current_entry()
+        return entry is None or overlay.name not in entry.disabled_overlays
+
+    def _on_overlay_use_toggled(self, checked: bool) -> None:
+        item = self._active_item()
+        entry = self._current_entry()
+        if item is None or entry is None:
+            return
+        name = item.overlay.name
+        if checked and name in entry.disabled_overlays:
+            entry.disabled_overlays.remove(name)
+        elif not checked and name not in entry.disabled_overlays:
+            entry.disabled_overlays.append(name)
+        item.set_visible(checked)
+        self.storeChanged.emit()
+
+    def _sync_overlay_use_ui(self) -> None:
+        item = self._active_item()
+        available = item is not None and self._current_entry() is not None
+        enabled = item is not None and self._overlay_enabled_here(item.overlay)
+        self.sidebar.set_overlay_use(enabled, available)
+
+    def _apply_overlay_visibility_for_frame(self) -> None:
+        for item in self._overlay_items:
+            item.set_visible(self._overlay_enabled_here(item.overlay))
 
     def _on_sidebar_edited(self) -> None:
         item = self._active_item()
@@ -205,6 +236,8 @@ class ProcessingTab(QWidget):
         results = []
         for item in self._overlay_items:
             overlay = item.overlay
+            if not self._overlay_enabled_here(overlay):
+                continue  # e.g. light-source square unticked for this frame
             for sample in sample_overlay(self._current.pixels, overlay):
                 row = sample.to_dict()
                 row["overlay"] = overlay.name
@@ -217,6 +250,15 @@ class ProcessingTab(QWidget):
             entry.patch_results = results
             self._refresh_session_list()
             self.storeChanged.emit()
+
+        # Show the chart in the table, not whichever overlay happened to be
+        # selected (a 1x1 light square makes it look like nothing else ran).
+        for i, item in enumerate(self._overlay_items):
+            if item.overlay.kind == "reflective" and self._overlay_enabled_here(item.overlay):
+                self._active_index = i
+                break
+        self._refresh_sidebar()
+        self._sync_overlay_use_ui()
         self._show_results_for_active_overlay(results)
 
     def _show_results_for_active_overlay(self, results: list[dict]) -> None:
@@ -464,6 +506,10 @@ class ProcessingTab(QWidget):
             self._add_overlay()
         self._ensure_entry(loaded.path)
         self._refresh_session_list()
+
+        # Per-frame overlay enablement follows the frame.
+        self._apply_overlay_visibility_for_frame()
+        self._sync_overlay_use_ui()
 
         # Show this image's stored results if it was processed before.
         entry = self._current_entry()

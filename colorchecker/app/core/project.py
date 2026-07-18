@@ -30,6 +30,10 @@ class ImageEntry:
     include: bool = True
     overlays: list[dict[str, Any]] = field(default_factory=list)
     patch_results: list[dict[str, Any]] = field(default_factory=list)
+    # Overlay names switched off for THIS frame (e.g. the light-source
+    # square on frames without the light). Overlays are shared across
+    # frames; this records the per-frame exceptions.
+    disabled_overlays: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -40,6 +44,7 @@ class ImageEntry:
             "include": self.include,
             "overlays": self.overlays,
             "patch_results": self.patch_results,
+            "disabled_overlays": self.disabled_overlays,
         }
 
     @classmethod
@@ -52,6 +57,7 @@ class ImageEntry:
             include=data.get("include", True),
             overlays=data.get("overlays", []),
             patch_results=data.get("patch_results", []),
+            disabled_overlays=data.get("disabled_overlays", []),
         )
 
 

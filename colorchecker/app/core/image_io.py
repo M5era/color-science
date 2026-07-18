@@ -15,8 +15,11 @@ import tifffile
 
 SUPPORTED_SUFFIXES = {".tif", ".tiff"}
 
-# Matches EV markers in filenames: "+3EV", "-5EV", "0_EV", "3.5EV", "+2 EV"
+# EV markers, number-first: "+3EV", "-5EV", "0_EV", "3.5EV", "+2 EV"
 _EV_PATTERN = re.compile(r"([+-]?\d+(?:[.,]\d+)?)\s*_?\s*EV", re.IGNORECASE)
+# EV markers, EV-first: "EV+1", "EV-1", "EV1", "EV_2.5". Only whitespace
+# and underscores may separate — a hyphen is always the minus sign.
+_EV_PATTERN_PREFIX = re.compile(r"EV[\s_]*([+-]?\d+(?:[.,]\d+)?)", re.IGNORECASE)
 
 # Lighting-setup markers: "5600K" / "2700k" (4 digits + K), "Hue120" / "hue_60".
 # Lookarounds instead of \b: underscores are word chars, so \b fails on "_5600K_".
@@ -94,8 +97,8 @@ def neighbor_image(path: str | Path, step: int) -> Path | None:
 
 
 def parse_ev_from_filename(name: str) -> float | None:
-    """Best-effort EV extraction from a filename, e.g. '0_EV_v1-800T.tif' -> 0.0."""
-    match = _EV_PATTERN.search(name)
+    """Best-effort EV extraction: '0_EV_v1.tif' -> 0.0, 'EV+1.tif' -> 1.0."""
+    match = _EV_PATTERN.search(name) or _EV_PATTERN_PREFIX.search(name)
     if not match:
         return None
     return float(match.group(1).replace(",", "."))

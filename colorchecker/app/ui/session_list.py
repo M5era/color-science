@@ -39,7 +39,9 @@ class SessionList(QWidget):
         self.table.setHorizontalHeaderLabels(["✓", "Label", "EV", "Group"])
         self.table.verticalHeader().setVisible(False)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        self.table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
+        # Multi-select (Cmd/Shift-click): editing EV/Group or toggling the
+        # checkbox on one selected row applies to every selected row.
+        self.table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
         self.table.setColumnWidth(0, 24)
         self.table.setColumnWidth(2, 40)
         self.table.setColumnWidth(3, 60)
@@ -114,9 +116,26 @@ class SessionList(QWidget):
         if col != 0:  # checkbox clicks shouldn't switch images
             self.entryActivated.emit(row)
 
-    def _item_changed(self, _item) -> None:
-        if not self._updating:
-            self.entriesEdited.emit()
+    def _item_changed(self, item) -> None:
+        if self._updating:
+            return
+        # Batch edit: propagate the change to every other selected row
+        # (EV, Group, and the include checkbox; labels stay per-file).
+        selected = {index.row() for index in self.table.selectionModel().selectedRows()}
+        if item.row() in selected and len(selected) > 1 and item.column() in (0, 2, 3):
+            self._updating = True
+            for row in selected:
+                if row == item.row():
+                    continue
+                target = self.table.item(row, item.column())
+                if target is None:
+                    continue
+                if item.column() == 0:
+                    target.setCheckState(item.checkState())
+                else:
+                    target.setText(item.text())
+            self._updating = False
+        self.entriesEdited.emit()
 
     def _move(self, delta: int) -> None:
         row = self.table.currentRow()

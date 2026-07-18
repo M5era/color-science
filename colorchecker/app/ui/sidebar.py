@@ -8,6 +8,7 @@ Emits `changed` when the user edits a field, `overlaySelected`,
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QDoubleSpinBox,
     QGridLayout,
@@ -30,6 +31,7 @@ class Sidebar(QWidget):
     processClicked = Signal()
     exportClicked = Signal()
     previewClicked = Signal()
+    overlayUseToggled = Signal(bool)
 
     def __init__(self):
         super().__init__()
@@ -58,6 +60,15 @@ class Sidebar(QWidget):
         remove_btn.clicked.connect(self.overlayRemoved.emit)
         overlay_row.addWidget(remove_btn)
         grid.addLayout(overlay_row, row, 1)
+        row += 1
+
+        self.use_check = QCheckBox("Use on this frame")
+        self.use_check.setToolTip(
+            "Untick to skip this overlay on the current frame\n"
+            "(e.g. the light-source square on frames without the light)"
+        )
+        self.use_check.toggled.connect(self._use_toggled)
+        grid.addWidget(self.use_check, row, 1)
         row += 1
 
         grid.addWidget(QLabel("Preset"), row, 0)
@@ -161,7 +172,17 @@ class Sidebar(QWidget):
         overlay.patch_offset = self.patch_offset_spin.value()
         overlay.preset_name = self.preset_combo.currentText()
 
+    def set_overlay_use(self, enabled: bool, available: bool) -> None:
+        self._updating = True
+        self.use_check.setChecked(enabled)
+        self.use_check.setEnabled(available)
+        self._updating = False
+
     # ---------------------------------------------------------- signals
+
+    def _use_toggled(self, checked: bool) -> None:
+        if not self._updating:
+            self.overlayUseToggled.emit(checked)
 
     def _field_edited(self) -> None:
         if not self._updating:

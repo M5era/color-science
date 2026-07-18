@@ -63,9 +63,10 @@ class MainWindow(QMainWindow):
 
         self._stack = QStackedWidget()
         self.router = TabRouter(self._stack)
+        processing = ProcessingTab()
         self._tabs: dict[Tab, QWidget] = {
-            Tab.PROCESSING: ProcessingTab(),
-            Tab.MATCHING: MatchingTab(),
+            Tab.PROCESSING: processing,
+            Tab.MATCHING: MatchingTab(store_provider=lambda: processing.store),
             Tab.LUT_INSPECTOR: LutInspectorTab(),
         }
         for tab, widget in self._tabs.items():

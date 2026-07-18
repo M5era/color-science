@@ -105,8 +105,23 @@ table. Black-box paths instead:
   a LUT via Resolve's Generate 3D LUT / identity-lattice render.
 - Tier 2 (experimental, keeps sliders live): automated black-box
   fitting loop — app patches candidate params into .drx (proven),
-  Resolve scripting API applies grade + renders a probe frame, app
+  Resolve scripting API applies grade + exports a probe still, app
   measures error vs target patches, optimizer iterates. Resolve
   executes the encrypted math; we only steer sliders. Needs Resolve
-  Studio scripting; slow (render per iteration); most experimental
-  item — attempt only after Algorithm B ships.
+  Studio scripting; most experimental item — only after Algorithm B.
+
+  Mechanics (designed 2026-07-18):
+  - One-time setup: solver project with a tiny synthetic lattice TIFF
+    probe clip (all LUT lattice points encoded in one small frame) on
+    a dedicated timeline. Probe imported ONCE, never re-imported.
+  - Per iteration: ApplyGradeFromDRX(patched.drx) -> GrabStill() ->
+    ExportStills(16-bit tif) -> read with our loader -> error ->
+    optimizer step. ~1s/iteration; no render queue involved.
+  - Batching: N probe clips on the timeline, N candidate .drx per
+    pass. Plus surrogate modeling (sample slider responses with
+    ~100-200 evals, optimize the surrogate natively in Python, verify
+    + refine with a few real evals) -> expect 10-20 min per one-time
+    solve per stock.
+  - MANDATORY gate before any fitting: identity-grade round trip —
+    exported probe must equal the input bit-for-bit (16-bit), proving
+    the still-export path is color-management-clean.

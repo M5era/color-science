@@ -130,11 +130,24 @@ is a stage chain; this slots in as an alternative stage.
    later stages cleaner input, but last-in-chain is nicer to have.
    Current lean: fit early, place late, re-fit once to confirm.
 
+Plan B tool deliverables (each = Python fitter mirror + open DCTL
+with identical parameters):
+1. Single-zone DCTL (OkLCh): hue anchor + width, lum center + width,
+   delta hue/chroma/lightness — stacked <=20x; fixed-6 "reuleaux
+   mode" + free-anchor solver mode
+2. Prismatic Saturation DCTL (Hart's prismatic space): global amount
+   + optional per-hue-zone amounts; the open Advanced-Natural-Sat-
+   character tool; fittable stage AND standalone hand tool
+3. Matrix stage: fitted 3x3 targeting Nico's DMC_3x3Matrix (mind the
+   sequential quirk) or plain matrix DCTL
+4. Curves stage: 1D .cube or curve control points
+
 Per-stage export (the point of the whole design):
 - Stage 1: the 9 matrix numbers (RGB Mixer / matrix DCTL)
-- Stage 2a reuleaux: the fitted PARAMETER SET, portable 1:1 into the
-  reuleaux DCTL in Resolve — fully parametric, no LUT
+- Stage 2a zones: the fitted PARAMETER SET, portable 1:1 into our
+  zone DCTL in Resolve — fully parametric, no LUT
 - Stage 2b RBF: 3D .cube (only stage that inherently needs a LUT)
+- Stage 2c saturation: prismatic saturation parameters -> our DCTL
 - Stages 3/4: 1D .cube or curve control points
 Each stage individually toggleable, solvable, exportable, and hand-
 adjustable without touching the others.

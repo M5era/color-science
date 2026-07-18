@@ -78,3 +78,25 @@ settings, run the same frame through our port, assert pixel match.
 Notes:
 - The more that lands in interpretable stages (1, 2a, 3, 4), the less
   any residual RBF has to explain — better extrapolation, smaller warp.
+
+## PowerGrade (.drx) generation — feasibility PROVEN 2026-07-18
+
+DRX format (verified on Marc's K64_1.0_1.5.2.drx): XML wrapper; grade
+node graph in <Body> = 1 prefix byte + zstd-compressed protobuf.
+DCTL effect nodes carry the .dctl path plus named params —
+sliderFloatParamN as 8-byte LE doubles after b"<name>\x12\x09\x11",
+checkboxes as varint bools, combos as indices. All readable.
+
+Generation strategy: TEMPLATE PATCHING, not authoring from scratch.
+Slider doubles are fixed-width -> patching changes no lengths, no
+protobuf surgery. Proven round-trip: decompress -> patch value ->
+zstd recompress -> splice hex -> reparse OK. Awaiting Resolve import
+verification by Marc (patched test file delivered in chat).
+
+Flow once Algorithm B exists: Marc saves a one-time template .drx
+containing our zone DCTL node(s) with defaults; the app clones it,
+writes fitted values into the sliders, outputs a ready PowerGrade.
+Bonus possibility: same patching can drive the commercial DCTLs he
+already owns (PrimeGrade / MONONODES crosstalk / split tone /
+FilmicContrast) IF we map our fitted stages onto their parameter
+semantics — investigate per node later.

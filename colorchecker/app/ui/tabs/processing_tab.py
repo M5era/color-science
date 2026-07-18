@@ -29,7 +29,7 @@ from app.core.detect import detect_chart_quad
 from app.core.overlay import PRESETS, Overlay
 from app.core.project import ImageEntry, ProjectStore
 from app.core.preview import to_display_u8
-from app.core.refine import align_grid
+from app.core.refine import refine_margins
 from app.core.sampler import sample_overlay
 from app.ui.canvas import ImageCanvas
 from app.ui.overlay_item import OverlayItem
@@ -497,23 +497,16 @@ class ProcessingTab(QWidget):
             self._add_overlay()
             item = self._active_item()
         overlay = item.overlay
+        overlay.corners = [list(pt) for pt in result.corners]
 
-        # Snap the grid onto the patch centers: the detected quad may span
-        # more patches than the working grid (SG is physically 10x14, the
-        # preset grid 8x12), so solve patch pitch + phase per axis and move
-        # the corners to the aligned window. Margins become 0 by definition.
-        aligned = align_grid(
-            self._current.pixels,
-            [list(pt) for pt in result.corners],
-            overlay.rows,
-            overlay.cols,
+        # Snap the grid onto the patches: find the margins that put every
+        # sample square on uniform color.
+        refined = refine_margins(
+            self._current.pixels, overlay.corners, overlay.rows, overlay.cols
         )
-        if np.isfinite(aligned.score):
-            overlay.corners = aligned.corners
-            overlay.margin_x = 0.0
-            overlay.margin_y = 0.0
-        else:
-            overlay.corners = [list(pt) for pt in result.corners]
+        if np.isfinite(refined.score):
+            overlay.margin_x = round(refined.margin_x, 2)
+            overlay.margin_y = round(refined.margin_y, 2)
 
         item.model_changed()
         self.sidebar.show_overlay_values(overlay)

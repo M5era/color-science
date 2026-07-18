@@ -6,7 +6,7 @@ receives the one-way 8-bit preview — never the raw float data.
 """
 
 import numpy as np
-from PySide6.QtCore import QPointF, Qt, Signal
+from PySide6.QtCore import QEvent, QPointF, Qt, Signal
 from PySide6.QtGui import QColor, QImage, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QGraphicsPixmapItem,
@@ -116,12 +116,28 @@ class ImageCanvas(QGraphicsView):
         self.scale(factor, factor)
 
     def wheelEvent(self, event):
-        # Scale with the actual wheel delta so trackpads (many small
-        # events) and mouse wheels (few big ones) both feel gradual.
-        delta = event.angleDelta().y()
-        if delta:
-            self._apply_zoom(1.0015 ** delta)
+        # Trackpad two-finger scroll (has pixelDelta) pans the image;
+        # a classic mouse wheel (angleDelta only) zooms. Pinch-to-zoom
+        # arrives separately as a native gesture (see event()).
+        pixel_delta = event.pixelDelta()
+        if not pixel_delta.isNull():
+            hbar, vbar = self.horizontalScrollBar(), self.verticalScrollBar()
+            hbar.setValue(hbar.value() - pixel_delta.x())
+            vbar.setValue(vbar.value() - pixel_delta.y())
+        else:
+            delta = event.angleDelta().y()
+            if delta:
+                self._apply_zoom(1.0015 ** delta)
         event.accept()
+
+    def event(self, ev):
+        # macOS trackpad pinch: zoom like on a phone, anchored under the
+        # fingers (AnchorUnderMouse applies to scale()).
+        if ev.type() == QEvent.Type.NativeGesture:
+            if ev.gestureType() == Qt.NativeGestureType.ZoomNativeGesture:
+                self._apply_zoom(1.0 + ev.value())
+                return True
+        return super().event(ev)
 
     # ---------------------------------------------- floating controls
 

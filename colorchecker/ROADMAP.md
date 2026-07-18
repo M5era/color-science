@@ -33,7 +33,22 @@ zone model + companion DCTL that we author ourselves.
   AWG3_To_CamNative.
   Fallback if ever needed: Ottosson's reference math is public
   (two 3x3 matrices + cbrt each way, ~15 DCTL lines) and we author
-  both sides. Known porting risks + fixes: signed cbrt for
+  both sides.
+
+  Source verified 2026-07-18 from Marc's fork
+  (M5era/Demystify-Color-DCTLs, cloned in-session):
+  - OKLAB.dctl: inset -> AWG->XYZ->LMS -> signed cbrt -> OKLAB
+    (+ inverse with outset). Expects LINEAR AWG input -> bracket is
+    LogC->Linear, inset+oklab, zone math, inverse, Linear->LogC.
+  - Log-C_To_Linear.dctl / inverse: Arri LogC3 EI800 constants
+    (cut 0.1496582, a 5.555556, b 0.052272, c 0.2471896, d 0.385537,
+    e 5.367655, f 0.092809).
+  - CAUTION DMC_3x3Matrix_v3 "Preserve Neutrals" mode is SEQUENTIAL,
+    not a true matrix: red is overwritten first, green computed from
+    the MODIFIED red, blue from both. A fitted true 3x3 cannot be
+    pasted into those sliders naively — map to the sequential form or
+    use the standard mode (verify rest of file first). Exactly the
+    failure class the Resolve pixel-match gate exists for. Known porting risks + fixes: signed cbrt for
   negative scene values (pick convention once, mirror exactly);
   guard hue at chroma~0 so neutrals pass through; float32 GPU vs
   float64 numpy parity ~1e-6 (invisible; covered by the mandatory

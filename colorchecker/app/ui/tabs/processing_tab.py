@@ -173,6 +173,9 @@ class ProcessingTab(QWidget):
         item = self._active_item()
         if item is not None:
             self.sidebar.show_overlay_values(item.overlay)
+            entry = self._current_entry()
+            if entry is not None and entry.patch_results:
+                self._show_results_for_active_overlay(entry.patch_results)
 
     def _on_sidebar_edited(self) -> None:
         item = self._active_item()
@@ -194,23 +197,42 @@ class ProcessingTab(QWidget):
     # ------------------------------------------------------- sampling
 
     def process_grid(self) -> None:
-        """Sample the active overlay from the raw buffer, show the table,
-        and store the results in the image's session entry."""
-        item = self._active_item()
-        if self._current is None or item is None:
+        """Sample EVERY overlay on this frame from the raw buffer (chart
+        grids and light-source squares alike), store all results tagged
+        with their overlay, and show the active overlay in the table."""
+        if self._current is None or not self._overlay_items:
             return
-        self._last_samples = sample_overlay(self._current.pixels, item.overlay)
-        self.table.show_samples(
-            self._last_samples, item.overlay.rows, item.overlay.cols
-        )
-        self.table.show()
+        results = []
+        for item in self._overlay_items:
+            overlay = item.overlay
+            for sample in sample_overlay(self._current.pixels, overlay):
+                row = sample.to_dict()
+                row["overlay"] = overlay.name
+                row["kind"] = overlay.kind
+                results.append(row)
 
         entry = self._current_entry()
         if entry is not None:
             entry.overlays = [o.overlay.to_dict() for o in self._overlay_items]
-            entry.patch_results = [s.to_dict() for s in self._last_samples]
+            entry.patch_results = results
             self._refresh_session_list()
             self.storeChanged.emit()
+        self._show_results_for_active_overlay(results)
+
+    def _show_results_for_active_overlay(self, results: list[dict]) -> None:
+        item = self._active_item()
+        if item is None:
+            return
+        name = item.overlay.name
+        rows = [r for r in results if r.get("overlay", name) == name]
+        if not rows:
+            return
+        self.table.show_samples(
+            [_sample_from_dict(r) for r in rows],
+            item.overlay.rows,
+            item.overlay.cols,
+        )
+        self.table.show()
 
     # --------------------------------------------------------- export
 
@@ -289,6 +311,7 @@ class ProcessingTab(QWidget):
             source_path=str(path),
             label=path.name,
             ev=image_io.parse_ev_from_filename(path.name),
+            group=image_io.parse_group_from_filename(path.name),
         )
         self.store.images.append(entry)
         self.storeChanged.emit()
@@ -382,6 +405,11 @@ class ProcessingTab(QWidget):
         load_btn.clicked.connect(self._on_load_clicked)
         layout.addWidget(load_btn)
 
+        folder_btn = QPushButton("Load Folder")
+        folder_btn.setToolTip("Import every TIFF in a folder as session entries")
+        folder_btn.clicked.connect(self._on_load_folder_clicked)
+        layout.addWidget(folder_btn)
+
         self._update_nav_state()
         return bar
 
@@ -398,6 +426,26 @@ class ProcessingTab(QWidget):
             return
         for path in paths:
             self._ensure_entry(Path(path))
+        self._refresh_session_list()
+        self.open_image(paths[0])
+
+    def _on_load_folder_clicked(self) -> None:
+        """Import every TIFF in a chosen folder (sorted by name)."""
+        folder = QFileDialog.getExistingDirectory(self, "Load Folder")
+        if not folder:
+            return
+        paths = sorted(
+            p for p in Path(folder).iterdir()
+            if p.suffix.lower() in image_io.SUPPORTED_SUFFIXES
+            and not p.name.startswith(".")
+        )
+        if not paths:
+            QMessageBox.information(
+                self, "No TIFFs found", "That folder contains no .tif/.tiff files."
+            )
+            return
+        for path in paths:
+            self._ensure_entry(path)
         self._refresh_session_list()
         self.open_image(paths[0])
 
@@ -420,14 +468,7 @@ class ProcessingTab(QWidget):
         # Show this image's stored results if it was processed before.
         entry = self._current_entry()
         if entry is not None and entry.patch_results:
-            item = self._active_item()
-            if item is not None:
-                self.table.show_samples(
-                    [_sample_from_dict(d) for d in entry.patch_results],
-                    item.overlay.rows,
-                    item.overlay.cols,
-                )
-                self.table.show()
+            self._show_results_for_active_overlay(entry.patch_results)
 
     def _step(self, step: int) -> None:
         if self._current is None:

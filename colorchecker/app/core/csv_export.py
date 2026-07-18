@@ -2,11 +2,13 @@
 
 Combined long format, one row per patch per included exposure:
 
-    label,ev,group,patch_row,patch_col,R,G,B
+    label,ev,group,overlay,kind,patch_row,patch_col,R,G,B
 
-Exposures appear in session-list order, patches row-major within each —
+Exposures appear in session-list order; within an exposure, overlays in
+stored order (chart grids, light-source squares), patches row-major —
 the deterministic ordering that lines up row-for-row against a
-companion capture exported with the same conventions. Values are
+companion capture exported with the same conventions. `kind` separates
+reflective chart patches from emissive light-source samples. Values are
 written with repr-level precision (no rounding).
 """
 
@@ -14,7 +16,7 @@ import io
 
 from app.core.project import ImageEntry
 
-HEADER = "label,ev,group,patch_row,patch_col,R,G,B"
+HEADER = "label,ev,group,overlay,kind,patch_row,patch_col,R,G,B"
 
 
 def _escape(text: str) -> str:
@@ -34,7 +36,12 @@ def combined_csv(entries: list[ImageEntry]) -> str:
         prefix = f"{_escape(entry.label)},{ev_text},{_escape(entry.group)}"
         for result in entry.patch_results:
             r, g, b = result["rgb"]
-            out.write(f"{prefix},{result['row']},{result['col']},{r!r},{g!r},{b!r}\n")
+            overlay = _escape(result.get("overlay", "Overlay 1"))
+            kind = result.get("kind", "reflective")
+            out.write(
+                f"{prefix},{overlay},{kind},"
+                f"{result['row']},{result['col']},{r!r},{g!r},{b!r}\n"
+            )
     return out.getvalue()
 
 

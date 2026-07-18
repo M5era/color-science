@@ -18,6 +18,11 @@ SUPPORTED_SUFFIXES = {".tif", ".tiff"}
 # Matches EV markers in filenames: "+3EV", "-5EV", "0_EV", "3.5EV", "+2 EV"
 _EV_PATTERN = re.compile(r"([+-]?\d+(?:[.,]\d+)?)\s*_?\s*EV", re.IGNORECASE)
 
+# Lighting-setup markers: "5600K" / "2700k" (4 digits + K), "Hue120" / "hue_60".
+# Lookarounds instead of \b: underscores are word chars, so \b fails on "_5600K_".
+_KELVIN_PATTERN = re.compile(r"(?<![0-9A-Za-z])(\d{4})\s*K(?![0-9A-Za-z])", re.IGNORECASE)
+_HUE_PATTERN = re.compile(r"hue[_\- ]?(\d{1,3})", re.IGNORECASE)
+
 
 @dataclass
 class LoadedImage:
@@ -94,3 +99,15 @@ def parse_ev_from_filename(name: str) -> float | None:
     if not match:
         return None
     return float(match.group(1).replace(",", "."))
+
+
+def parse_group_from_filename(name: str) -> str:
+    """Best-effort lighting-setup tag: '..._5600K_Hue120.tif' -> '5600K Hue120'."""
+    parts = []
+    kelvin = _KELVIN_PATTERN.search(name)
+    if kelvin:
+        parts.append(f"{kelvin.group(1)}K")
+    hue = _HUE_PATTERN.search(name)
+    if hue:
+        parts.append(f"Hue{int(hue.group(1))}")
+    return " ".join(parts)

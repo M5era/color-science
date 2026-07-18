@@ -83,3 +83,14 @@ def test_ev_parsing():
     assert parse_ev_from_filename("stock_2.5EV.tif") == 2.5
     assert parse_ev_from_filename("stock_+1,5EV.tif") == 1.5
     assert parse_ev_from_filename("no_marker_here.tif") is None
+
+
+def test_group_parsing():
+    from app.core.image_io import parse_group_from_filename
+
+    assert parse_group_from_filename("chart_5600K_0EV.tif") == "5600K"
+    assert parse_group_from_filename("chart_2700k.tif") == "2700K"
+    assert parse_group_from_filename("swing_Hue120.tif") == "Hue120"
+    assert parse_group_from_filename("swing_hue_60.tif") == "Hue60"
+    assert parse_group_from_filename("ap_5600K_Hue330.tif") == "5600K Hue330"
+    assert parse_group_from_filename("800T_0EV.tif") == ""  # no false positives

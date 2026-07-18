@@ -18,6 +18,7 @@ class Preset:
     margin_x: float  # % of chart width consumed by the border on each side
     margin_y: float  # % of chart height
     patch_size: float  # % of a grid cell covered by the sample area
+    kind: str = "reflective"  # "reflective" (chart) or "emissive" (light source)
 
 
 # Patch size 65% samples ~42% of each patch's area — enough pixels for a
@@ -27,6 +28,10 @@ PRESETS: list[Preset] = [
            margin_x=1.88, margin_y=2.82, patch_size=65.0),
     Preset("ColorChecker Classic (4 × 6)", rows=4, cols=6,
            margin_x=2.0, margin_y=3.0, patch_size=60.0),
+    # One big sample square dragged over a light's panel: emissive source,
+    # measured with the identical averaging path as chart patches.
+    Preset("Light Source (1 × 1)", rows=1, cols=1,
+           margin_x=0.0, margin_y=0.0, patch_size=70.0, kind="emissive"),
     Preset("Custom", rows=8, cols=12, margin_x=2.0, margin_y=2.0, patch_size=65.0),
 ]
 
@@ -41,6 +46,7 @@ class Overlay:
     margin_y: float = 2.82
     patch_size: float = 65.0
     patch_offset: float = 0.0
+    kind: str = "reflective"
     # TL, TR, BR, BL in image pixel coordinates
     corners: list[list[float]] = field(
         default_factory=lambda: [[0.0, 0.0], [100.0, 0.0], [100.0, 100.0], [0.0, 100.0]]
@@ -55,6 +61,7 @@ class Overlay:
             margin_x=preset.margin_x,
             margin_y=preset.margin_y,
             patch_size=preset.patch_size,
+            kind=preset.kind,
             **kwargs,
         )
 
@@ -65,6 +72,7 @@ class Overlay:
         self.margin_x = preset.margin_x
         self.margin_y = preset.margin_y
         self.patch_size = preset.patch_size
+        self.kind = preset.kind
 
     # ------------------------------------------------- chart-space grid
 
@@ -116,6 +124,7 @@ class Overlay:
             "margin_y": self.margin_y,
             "patch_size": self.patch_size,
             "patch_offset": self.patch_offset,
+            "kind": self.kind,
             "corners": [list(map(float, pt)) for pt in self.corners],
         }
 
@@ -130,5 +139,6 @@ class Overlay:
             margin_y=data.get("margin_y", 2.82),
             patch_size=data.get("patch_size", 77.4),
             patch_offset=data.get("patch_offset", 0.0),
+            kind=data.get("kind", "reflective"),
             corners=[list(map(float, pt)) for pt in data["corners"]],
         )

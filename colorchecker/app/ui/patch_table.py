@@ -1,9 +1,21 @@
-"""Bottom patch table: sampled values in chart layout, cells tinted
-with the patch color (display-mapped, clamped — tint is cosmetic only)."""
+"""Bottom results panel: sampled values in chart layout, cells tinted
+with the patch color (display-mapped, clamped — tint is cosmetic only).
+
+PatchTablePanel shows every overlay that has results side by side —
+the chart grid and a light-source square appear together instead of
+being filtered by the sidebar's overlay selection."""
 
 import numpy as np
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QBrush, QColor
-from PySide6.QtWidgets import QTableWidget, QTableWidgetItem
+from PySide6.QtWidgets import (
+    QHBoxLayout,
+    QLabel,
+    QTableWidget,
+    QTableWidgetItem,
+    QVBoxLayout,
+    QWidget,
+)
 
 from app.core.sampler import PatchSample
 
@@ -42,3 +54,65 @@ class PatchTable(QTableWidget):
 
         self.resizeRowsToContents()
         self.resizeColumnsToContents()
+
+
+def _sample_from_dict(data: dict) -> PatchSample:
+    return PatchSample(
+        row=data["row"],
+        col=data["col"],
+        rgb=tuple(data["rgb"]),
+        pixel_count=data.get("pixel_count", 0),
+    )
+
+
+class PatchTablePanel(QWidget):
+    """All overlays' results at once: one titled table per overlay,
+    laid out horizontally; the widest grid gets the most space."""
+
+    def __init__(self):
+        super().__init__()
+        self._layout = QHBoxLayout(self)
+        self._layout.setContentsMargins(0, 4, 0, 0)
+        self._layout.setSpacing(8)
+        self.setMaximumHeight(340)
+        self.hide()
+
+    def show_results(self, results: list[dict]) -> None:
+        while self._layout.count():
+            item = self._layout.takeAt(0)
+            if item.widget() is not None:
+                item.widget().deleteLater()
+
+        # Group rows by overlay, preserving order of first appearance.
+        order: list[str] = []
+        grouped: dict[str, list[dict]] = {}
+        for row in results:
+            name = row.get("overlay", "Overlay 1")
+            if name not in grouped:
+                grouped[name] = []
+                order.append(name)
+            grouped[name].append(row)
+
+        if not order:
+            self.hide()
+            return
+
+        for name in order:
+            rows_data = grouped[name]
+            n_rows = max(r["row"] for r in rows_data)
+            n_cols = max(r["col"] for r in rows_data)
+            kind = rows_data[0].get("kind", "reflective")
+
+            box = QWidget()
+            vbox = QVBoxLayout(box)
+            vbox.setContentsMargins(0, 0, 0, 0)
+            vbox.setSpacing(2)
+            title = QLabel(f"{name} — {kind}")
+            title.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+            vbox.addWidget(title)
+            table = PatchTable()
+            table.show_samples([_sample_from_dict(r) for r in rows_data], n_rows, n_cols)
+            vbox.addWidget(table)
+            self._layout.addWidget(box, stretch=n_cols)
+
+        self.show()

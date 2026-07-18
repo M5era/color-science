@@ -33,20 +33,9 @@ from app.core.refine import refine_margins
 from app.core.sampler import sample_overlay
 from app.ui.canvas import ImageCanvas
 from app.ui.overlay_item import OverlayItem
-from app.ui.patch_table import PatchTable
+from app.ui.patch_table import PatchTablePanel
 from app.ui.session_list import SessionList
 from app.ui.sidebar import Sidebar
-
-
-def _sample_from_dict(data: dict):
-    from app.core.sampler import PatchSample
-
-    return PatchSample(
-        row=data["row"],
-        col=data["col"],
-        rgb=tuple(data["rgb"]),
-        pixel_count=data.get("pixel_count", 0),
-    )
 
 
 class ProcessingTab(QWidget):
@@ -74,9 +63,8 @@ class ProcessingTab(QWidget):
         self.canvas = ImageCanvas()
         self.canvas.rectSelected.connect(self._on_rect_selected)
         center_box.addWidget(self.canvas, stretch=1)
-        self.table = PatchTable()
-        self.table.hide()  # appears after the first Process Grid
-        center_box.addWidget(self.table)
+        self.results_panel = PatchTablePanel()  # appears after processing
+        center_box.addWidget(self.results_panel)
         layout.addWidget(center, stretch=1)
 
         self.sidebar = Sidebar()
@@ -178,7 +166,7 @@ class ProcessingTab(QWidget):
             self.sidebar.show_overlay_values(item.overlay)
             entry = self._current_entry()
             if entry is not None and entry.patch_results:
-                self._show_results_for_active_overlay(entry.patch_results)
+                self._show_results(entry.patch_results)
         self._sync_overlay_use_ui()
 
     # ---------------------------------------------- per-frame overlay use
@@ -292,7 +280,7 @@ class ProcessingTab(QWidget):
                 break
         self._refresh_sidebar()
         self._sync_overlay_use_ui()
-        self._show_results_for_active_overlay(results)
+        self._show_results(results)
 
     def _sample_entry(self, entry: ImageEntry, pixels) -> None:
         """Sample all overlays enabled for `entry` and store tagged results."""
@@ -352,7 +340,7 @@ class ProcessingTab(QWidget):
         self.storeChanged.emit()
         entry = self._current_entry()
         if entry is not None and entry.patch_results:
-            self._show_results_for_active_overlay(entry.patch_results)
+            self._show_results(entry.patch_results)
         if failures:
             QMessageBox.warning(
                 self, "Some files failed",
@@ -360,20 +348,8 @@ class ProcessingTab(QWidget):
             )
         return done
 
-    def _show_results_for_active_overlay(self, results: list[dict]) -> None:
-        item = self._active_item()
-        if item is None:
-            return
-        name = item.overlay.name
-        rows = [r for r in results if r.get("overlay", name) == name]
-        if not rows:
-            return
-        self.table.show_samples(
-            [_sample_from_dict(r) for r in rows],
-            item.overlay.rows,
-            item.overlay.cols,
-        )
-        self.table.show()
+    def _show_results(self, results: list[dict]) -> None:
+        self.results_panel.show_results(results)
 
     # --------------------------------------------------------- export
 
@@ -626,9 +602,9 @@ class ProcessingTab(QWidget):
         # values from the previous frame can't be mistaken for this one's.
         entry = self._current_entry()
         if entry is not None and entry.patch_results:
-            self._show_results_for_active_overlay(entry.patch_results)
+            self._show_results(entry.patch_results)
         else:
-            self.table.hide()
+            self.results_panel.hide()
 
     def _step(self, step: int) -> None:
         if self._current is None:

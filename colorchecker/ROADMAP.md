@@ -7,9 +7,19 @@ real footage.
 
 REFINED DESIGN (supersedes plain reuleaux port): custom hue-anchored
 zone model + companion DCTL that we author ourselves.
-- Space: cylindrical hue/chroma/value about the neutral axis on log
-  input (cf. thatcherfreeman Cylindrical DCTL); reuleaux is design
-  reference only, not a dependency.
+- Space (decided 2026-07-18): OkLCh — cylindrical form of Oklab.
+  Chosen for hue LINEARITY (broad adjustments don't bend blue->purple
+  etc.) and perceptual smoothness, i.e. the Chromogen-like "doesn't
+  break anything" character; Chromogen's own space is proprietary
+  (Truelight/TCAM) and not copyable. Oklab math is two 3x3 matrices +
+  a cube root — trivial to mirror bit-exact in DCTL. Alternatives
+  considered: IPT (fine, clunkier constants), ICtCp (only if PQ/HDR
+  pipelines), CIELAB LCh (rejected: blue-hue bend), naive HSV
+  cylindrical (rejected: perceptually crooked, the breakage source).
+  NOTE: Oklab expects ~linear input; bracket the zone math with a
+  fixed documented log<->linear transform, identical in Python and
+  DCTL, so parameter parity holds end to end.
+  Reuleaux remains design reference only, not a dependency.
 - Model: N adjustment units (start N=3), each with FREE hue anchor +
   width, value (luminance) center + width, and delta hue/chroma/value
   with smooth Gaussian falloff — not tied to fixed R/G/B/C/M/Y sliders.

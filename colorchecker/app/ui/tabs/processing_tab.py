@@ -21,8 +21,10 @@ from app.core import image_io
 from app.core.detect import detect_chart_quad
 from app.core.overlay import PRESETS, Overlay
 from app.core.preview import to_display_u8
+from app.core.sampler import sample_overlay
 from app.ui.canvas import ImageCanvas
 from app.ui.overlay_item import OverlayItem
+from app.ui.patch_table import PatchTable
 from app.ui.sidebar import Sidebar
 
 
@@ -32,6 +34,7 @@ class ProcessingTab(QWidget):
         self._current: image_io.LoadedImage | None = None
         self._overlay_items: list[OverlayItem] = []
         self._active_index: int = -1
+        self._last_samples = []
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -39,15 +42,24 @@ class ProcessingTab(QWidget):
 
         layout.addWidget(self._build_tool_column())
 
+        center = QWidget()
+        center_box = QVBoxLayout(center)
+        center_box.setContentsMargins(0, 0, 0, 0)
+        center_box.setSpacing(0)
         self.canvas = ImageCanvas()
         self.canvas.rectSelected.connect(self._on_rect_selected)
-        layout.addWidget(self.canvas, stretch=1)
+        center_box.addWidget(self.canvas, stretch=1)
+        self.table = PatchTable()
+        self.table.hide()  # appears after the first Process Grid
+        center_box.addWidget(self.table)
+        layout.addWidget(center, stretch=1)
 
         self.sidebar = Sidebar()
         self.sidebar.changed.connect(self._on_sidebar_edited)
         self.sidebar.overlaySelected.connect(self._on_overlay_selected)
         self.sidebar.overlayAdded.connect(self._add_overlay)
         self.sidebar.overlayRemoved.connect(self._remove_active_overlay)
+        self.sidebar.processClicked.connect(self.process_grid)
         layout.addWidget(self.sidebar)
 
         self.top_bar = self._build_top_bar()
@@ -144,6 +156,19 @@ class ProcessingTab(QWidget):
         item = self._active_item()
         if item is not None:
             self.sidebar.show_overlay_values(item.overlay)
+
+    # ------------------------------------------------------- sampling
+
+    def process_grid(self) -> None:
+        """Sample the active overlay from the raw buffer, show the table."""
+        item = self._active_item()
+        if self._current is None or item is None:
+            return
+        self._last_samples = sample_overlay(self._current.pixels, item.overlay)
+        self.table.show_samples(
+            self._last_samples, item.overlay.rows, item.overlay.cols
+        )
+        self.table.show()
 
     # ------------------------------------------------------ auto-detect
 

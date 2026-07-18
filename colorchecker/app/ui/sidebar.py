@@ -27,6 +27,7 @@ class Sidebar(QWidget):
     overlaySelected = Signal(int)
     overlayAdded = Signal()
     overlayRemoved = Signal()
+    processClicked = Signal()
 
     def __init__(self):
         super().__init__()
@@ -95,6 +96,10 @@ class Sidebar(QWidget):
         grid.addWidget(QLabel("Patch Offset (%)"), row, 0)
         self.patch_offset_spin = self._pct_spin(-50.0, 50.0)
         grid.addWidget(self.patch_offset_spin, row, 1)
+
+        self.process_btn = QPushButton("Process Grid")
+        self.process_btn.clicked.connect(self.processClicked.emit)
+        root.addWidget(self.process_btn)
 
         for spin in (self.rows_spin, self.cols_spin):
             spin.valueChanged.connect(self._field_edited)

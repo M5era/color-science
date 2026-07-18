@@ -108,7 +108,8 @@ table. Black-box paths instead:
   Resolve scripting API applies grade + exports a probe still, app
   measures error vs target patches, optimizer iterates. Resolve
   executes the encrypted math; we only steer sliders. Needs Resolve
-  Studio scripting; most experimental item — only after Algorithm B.
+  Studio scripting. STATUS: backup plan only (Marc, 2026-07-18) —
+  revisit if the primary path (own zone DCTL) proves insufficient.
 
   Mechanics (designed 2026-07-18):
   - One-time setup: solver project with a tiny synthetic lattice TIFF

@@ -43,6 +43,16 @@ zone model + companion DCTL that we author ourselves.
   - Log-C_To_Linear.dctl / inverse: Arri LogC3 EI800 constants
     (cut 0.1496582, a 5.555556, b 0.052272, c 0.2471896, d 0.385537,
     e 5.367655, f 0.092809).
+  - LCHab.dctl is MISNAMED: it is LCh on OKLAB (OkLCh!) — AWG->Oklab->
+    polar (L, C, h degrees, hue normalized 0-1). The full conversion
+    shell for the zone model exists verbatim in the fork.
+  - Zone math spec (2026-07-18): in OkLCh per zone k:
+    w = cos^2(pi*d/120deg) for wrapped hue distance d<60deg (fixed
+    6-anchor "reuleaux mode": weights partition unity, sliders never
+    fight) OR Gaussian at fitted anchor (solver mode) — same code,
+    swapped weight fn. Apply h+=sum(w*hueRot), C*=sum(w*sat),
+    L+=sum(w*lum)*C (chroma-scaled: neutrals untouchable). Bounded
+    hue rotation (~±30deg) keeps mapping monotonic/invertible.
   - CAUTION DMC_3x3Matrix_v3 "Preserve Neutrals" mode is SEQUENTIAL,
     not a true matrix: red is overwritten first, green computed from
     the MODIFIED red, blue from both. A fitted true 3x3 cannot be

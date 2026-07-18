@@ -53,6 +53,19 @@ zone model + companion DCTL that we author ourselves.
     swapped weight fn. Apply h+=sum(w*hueRot), C*=sum(w*sat),
     L+=sum(w*lum)*C (chroma-scaled: neutrals untouchable). Bounded
     hue rotation (~±30deg) keeps mapping monotonic/invertible.
+  - Saturation stage decision (Marc, 2026-07-18): model it on the
+    PRISMATIC COLOR SPACE — Hart, "The Prismatic Color Space for RGB
+    Computations" (2015, PDF public; implemented in colour-science as
+    colour.models.rgb.prismatic and in ColorAide). Barycentric Maxwell
+    triangle chromaticity + rho=max(R,G,B) light/dark axis; saturating
+    pins the max channel while purity rises -> subtractive film-like
+    character, no garish high-sat+high-lum. This is (per its
+    description) the model behind Nico's Advanced Natural Saturation
+    DCTLE; we implement openly from the paper, not from his product.
+    Division of labor: saturation in prismatic space, hue rotation +
+    per-zone luminance in OkLCh zones. Nico's RGBCMY OKLAB Sat Shaper
+    (6 fixed vectors in Oklab, Bogdanowicz LAB-sat rationale) equals
+    our fixed-anchor mode — external validation of the design.
   - CAUTION DMC_3x3Matrix_v3 "Preserve Neutrals" mode is SEQUENTIAL,
     not a true matrix: red is overwritten first, green computed from
     the MODIFIED red, blue from both. A fitted true 3x3 cannot be

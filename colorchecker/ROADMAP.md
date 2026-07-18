@@ -90,8 +90,10 @@ checkboxes as varint bools, combos as indices. All readable.
 Generation strategy: TEMPLATE PATCHING, not authoring from scratch.
 Slider doubles are fixed-width -> patching changes no lengths, no
 protobuf surgery. Proven round-trip: decompress -> patch value ->
-zstd recompress -> splice hex -> reparse OK. Awaiting Resolve import
-verification by Marc (patched test file delivered in chat).
+zstd recompress -> splice hex -> reparse OK. VERIFIED IN RESOLVE
+2026-07-18: patched K64 test file imported cleanly and showed the
+changed slider value. The full app -> .drx pipeline is validated;
+only the zone DCTL itself remains to be built.
 
 Flow once Algorithm B exists: Marc saves a one-time template .drx
 containing our zone DCTL node(s) with defaults; the app clones it,

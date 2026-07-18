@@ -37,8 +37,21 @@ is a stage chain; this slots in as an alternative stage.
    later stages cleaner input, but last-in-chain is nicer to have.
    Current lean: fit early, place late, re-fit once to confirm.
 
+Per-stage export (the point of the whole design):
+- Stage 1: the 9 matrix numbers (RGB Mixer / matrix DCTL)
+- Stage 2a reuleaux: the fitted PARAMETER SET, portable 1:1 into the
+  reuleaux DCTL in Resolve — fully parametric, no LUT
+- Stage 2b RBF: 3D .cube (only stage that inherently needs a LUT)
+- Stages 3/4: 1D .cube or curve control points
+Each stage individually toggleable, solvable, exportable, and hand-
+adjustable without touching the others.
+
+Parameter parity requirement (2a): our port must be bit-faithful to
+the reuleaux DCTL — identical math, parameter names, ranges, defaults,
+op order — so fitted numbers transfer verbatim. MANDATORY verification:
+render a test frame through the real DCTL in Resolve with known
+settings, run the same frame through our port, assert pixel match.
+
 Notes:
-- Each stage should be individually toggleable + exportable (matrix
-  values, curve points, zone params, cube for whatever remains).
-- The more that lands in interpretable stages (1, 3, 4), the less the
-  RBF has to explain — better extrapolation, smaller residual warp.
+- The more that lands in interpretable stages (1, 2a, 3, 4), the less
+  any residual RBF has to explain — better extrapolation, smaller warp.

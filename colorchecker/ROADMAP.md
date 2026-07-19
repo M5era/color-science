@@ -1,5 +1,27 @@
 # Roadmap
 
+## Matching: sandwich fit under a fixed DRT (designed 2026-07-19)
+
+For display-referred targets (E100 reversal scans, print stocks) where
+a direct log->display RBF is hazardous (shoulder extrapolation,
+ringing on steep slopes, no monotonicity guarantee — see chat): let
+the user supply a FIXED DRT .cube with roughly the right contrast;
+fit the RBF underneath it.
+
+Method: invert the DRT numerically AT THE TARGET PATCH VALUES only
+(per-patch root-find through our cube interpolation — no global LUT
+inversion needed), then solve the standard log-domain fit
+log -> DRT^-1(target). Ship as RBF cube + DRT stacked in Resolve.
+
+Handling: patches clipped by the target stock (D-max/D-min plateaus)
+have undefined inverses -> drop + count, like NaN patches (they carry
+no information about what's under the DRT). Ambiguous inverses at
+gamut edges -> nearest least-squares + residual report. Error metric
+reported THROUGH the DRT (display-referred, what the eye sees).
+
+UI: Matching tab gains "Output transform (fixed): load .cube";
+export = RBF cube alone (DRT stays its own node) or baked combo.
+
 ## Matching: Algorithm B — parametric zone model (refined 2026-07)
 
 Status: planned, NOT started. Do after the current toolchain is proven on

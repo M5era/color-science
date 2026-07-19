@@ -8,6 +8,7 @@ tool's sidebar fields.
 
 from dataclasses import dataclass, field
 from typing import Any
+from uuid import uuid4
 
 
 @dataclass
@@ -39,6 +40,10 @@ PRESETS: list[Preset] = [
 @dataclass
 class Overlay:
     name: str = "Overlay 1"
+    # Stable identity that survives renames and add/remove cycles —
+    # anything that stores per-overlay state must key by uid, NOT name
+    # (names can repeat after remove + re-add).
+    uid: str = field(default_factory=lambda: uuid4().hex)
     preset_name: str = PRESETS[0].name
     rows: int = 8
     cols: int = 12
@@ -117,6 +122,7 @@ class Overlay:
     def to_dict(self) -> dict[str, Any]:
         return {
             "name": self.name,
+            "uid": self.uid,
             "preset_name": self.preset_name,
             "rows": self.rows,
             "cols": self.cols,
@@ -132,6 +138,7 @@ class Overlay:
     def from_dict(cls, data: dict[str, Any]) -> "Overlay":
         return cls(
             name=data.get("name", "Overlay 1"),
+            uid=data.get("uid") or uuid4().hex,
             preset_name=data.get("preset_name", PRESETS[0].name),
             rows=data.get("rows", 8),
             cols=data.get("cols", 12),

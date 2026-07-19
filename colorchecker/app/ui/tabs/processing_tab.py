@@ -49,6 +49,9 @@ class ProcessingTab(QWidget):
         self._active_index: int = -1
         self._last_samples = []
         self.store = ProjectStore()
+        # Shared (all-frames) corner positions per overlay name; frames
+        # with an entry.overlay_overrides[name] use their own instead.
+        self._shared_corners: dict[str, list] = {}
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -77,6 +80,7 @@ class ProcessingTab(QWidget):
         self.sidebar.exportClicked.connect(self.export_csv)
         self.sidebar.previewClicked.connect(self.preview_csv)
         self.sidebar.overlayUseToggled.connect(self._on_overlay_use_toggled)
+        self.sidebar.overlayLocalPosToggled.connect(self._on_local_pos_toggled)
         layout.addWidget(self.sidebar)
 
         self.session_list = SessionList()
@@ -145,19 +149,29 @@ class ProcessingTab(QWidget):
         overlay = Overlay.from_preset(
             PRESETS[0], name=name, corners=self._default_corners()
         )
-        item = OverlayItem(self.canvas.scene(), overlay, self._on_corners_dragged)
+        item = OverlayItem(
+            self.canvas.scene(), overlay,
+            lambda n=name: self._on_corners_dragged(n),
+        )
         self._overlay_items.append(item)
+        self._shared_corners[name] = [list(pt) for pt in overlay.corners]
         self._active_index = len(self._overlay_items) - 1
         self._refresh_sidebar()
+        self._sync_overlay_use_ui()
 
     def _remove_active_overlay(self) -> None:
         item = self._active_item()
         if item is None:
             return
+        name = item.overlay.name
         item.remove()
         self._overlay_items.pop(self._active_index)
+        self._shared_corners.pop(name, None)
+        for entry in self.store.images:
+            entry.overlay_overrides.pop(name, None)
         self._active_index = min(self._active_index, len(self._overlay_items) - 1)
         self._refresh_sidebar()
+        self._sync_overlay_use_ui()
 
     def _on_overlay_selected(self, index: int) -> None:
         self._active_index = index
@@ -200,9 +214,14 @@ class ProcessingTab(QWidget):
 
     def _sync_overlay_use_ui(self) -> None:
         item = self._active_item()
-        available = item is not None and self._current_entry() is not None
+        entry = self._current_entry()
+        available = item is not None and entry is not None
         enabled = item is not None and self._overlay_enabled_here(item.overlay)
         self.sidebar.set_overlay_use(enabled, available)
+        local = (
+            available and item.overlay.name in entry.overlay_overrides
+        )
+        self.sidebar.set_overlay_local_pos(local, available)
 
     def _apply_overlay_visibility_for_frame(self) -> None:
         for item in self._overlay_items:
@@ -236,8 +255,53 @@ class ProcessingTab(QWidget):
             [cx - half_w, cy + half_h],
         ]
 
-    def _on_corners_dragged(self) -> None:
-        pass  # corners aren't shown in the sidebar; nothing to sync yet
+    def _on_corners_dragged(self, name: str) -> None:
+        """Persist a corner move: to this frame's override if one is
+        active for the overlay, otherwise to the shared position."""
+        item = next((i for i in self._overlay_items if i.overlay.name == name), None)
+        if item is None:
+            return
+        corners = [list(pt) for pt in item.overlay.corners]
+        entry = self._current_entry()
+        if entry is not None and name in entry.overlay_overrides:
+            entry.overlay_overrides[name] = corners
+        else:
+            self._shared_corners[name] = corners
+        self.storeChanged.emit()
+
+    def _persist_active_corners(self) -> None:
+        item = self._active_item()
+        if item is not None:
+            self._on_corners_dragged(item.overlay.name)
+
+    def _apply_frame_positions(self) -> None:
+        """Show each overlay at this frame's effective position."""
+        entry = self._current_entry()
+        for item in self._overlay_items:
+            name = item.overlay.name
+            override = entry.overlay_overrides.get(name) if entry else None
+            corners = override or self._shared_corners.get(name)
+            if corners is not None:
+                item.overlay.corners = [list(pt) for pt in corners]
+                item.model_changed()
+
+    def _on_local_pos_toggled(self, checked: bool) -> None:
+        item = self._active_item()
+        entry = self._current_entry()
+        if item is None or entry is None:
+            return
+        name = item.overlay.name
+        if checked:
+            # Freeze the currently shown position as this frame's own.
+            entry.overlay_overrides[name] = [list(pt) for pt in item.overlay.corners]
+        else:
+            entry.overlay_overrides.pop(name, None)
+            shared = self._shared_corners.get(name)
+            if shared is not None:
+                item.overlay.corners = [list(pt) for pt in shared]
+                item.model_changed()
+        self.storeChanged.emit()
+        self._sync_overlay_use_ui()
 
     def _refresh_sidebar(self) -> None:
         names = [item.overlay.name for item in self._overlay_items]
@@ -283,13 +347,20 @@ class ProcessingTab(QWidget):
         self._show_results(results)
 
     def _sample_entry(self, entry: ImageEntry, pixels) -> None:
-        """Sample all overlays enabled for `entry` and store tagged results."""
+        """Sample all overlays enabled for `entry` and store tagged
+        results, using the entry's own corner override where present."""
         results = []
         for item in self._overlay_items:
             overlay = item.overlay
             if overlay.name in entry.disabled_overlays:
                 continue
-            for sample in sample_overlay(pixels, overlay):
+            corners = entry.overlay_overrides.get(
+                overlay.name, self._shared_corners.get(overlay.name, overlay.corners)
+            )
+            effective = Overlay.from_dict(
+                {**overlay.to_dict(), "corners": [list(pt) for pt in corners]}
+            )
+            for sample in sample_overlay(pixels, effective):
                 row = sample.to_dict()
                 row["overlay"] = overlay.name
                 row["kind"] = overlay.kind
@@ -506,6 +577,7 @@ class ProcessingTab(QWidget):
             overlay.margin_y = round(refined.margin_y, 2)
 
         item.model_changed()
+        self._persist_active_corners()
         self.sidebar.show_overlay_values(overlay)
         self._set_tool("pan")
 
@@ -594,8 +666,9 @@ class ProcessingTab(QWidget):
         self._ensure_entry(loaded.path)
         self._refresh_session_list()
 
-        # Per-frame overlay enablement follows the frame.
+        # Per-frame overlay enablement and positions follow the frame.
         self._apply_overlay_visibility_for_frame()
+        self._apply_frame_positions()
         self._sync_overlay_use_ui()
 
         # Show this image's stored results, or clear the table so stale

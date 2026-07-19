@@ -101,18 +101,33 @@ class CurvesView(QWidget):
 
 
 class LatticeView(QWidget):
-    """Output lattice as a colored point cloud; drag to orbit."""
+    """Output lattice as a colored point cloud; drag to orbit, wheel zooms."""
 
     def __init__(self):
         super().__init__()
         self._points: tuple[np.ndarray, np.ndarray] | None = None
         self._yaw, self._pitch = 0.6, 0.4
+        self._zoom = 1.0
+        self._extent = 1.0
         self._last_pos = None
         self.setMinimumSize(400, 300)
 
     def set_lut(self, lut: CubeLUT | None, resolution: int = 17) -> None:
         self._points = lattice_points(lut, resolution) if lut is not None else None
+        if self._points is not None:
+            # Auto-fit: solved LUTs can output beyond [0,1]; scale to the
+            # actual cloud so it always fits the view.
+            centered = self._points[1] - 0.5
+            self._extent = max(float(np.abs(centered).max()), 0.5)
+        self._zoom = 1.0
         self.update()
+
+    def wheelEvent(self, event):
+        delta = event.pixelDelta().y() or event.angleDelta().y()
+        if delta:
+            self._zoom = float(np.clip(self._zoom * (1.0015 ** delta), 0.2, 10.0))
+            self.update()
+        event.accept()
 
     def mousePressEvent(self, event):
         self._last_pos = event.position()
@@ -138,18 +153,35 @@ class LatticeView(QWidget):
             return
 
         _, outputs = self._points
-        centered = outputs - 0.5
-        cy, sy = np.cos(self._yaw), np.sin(self._yaw)
-        cp, sp = np.cos(self._pitch), np.sin(self._pitch)
-        x = centered[:, 0] * cy + centered[:, 2] * sy
-        z = -centered[:, 0] * sy + centered[:, 2] * cy
-        y = centered[:, 1] * cp - z * sp
-        depth = centered[:, 1] * sp + z * cp
-
-        scale = min(self.width(), self.height()) * 0.62
+        scale = min(self.width(), self.height()) * 0.42 / self._extent * self._zoom
         cx_screen, cy_screen = self.width() / 2, self.height() / 2
-        order = np.argsort(depth)
+        cy_, sy_ = np.cos(self._yaw), np.sin(self._yaw)
+        cp_, sp_ = np.cos(self._pitch), np.sin(self._pitch)
 
+        def project(points):
+            centered = points - 0.5
+            x = centered[:, 0] * cy_ + centered[:, 2] * sy_
+            z = -centered[:, 0] * sy_ + centered[:, 2] * cy_
+            y = centered[:, 1] * cp_ - z * sp_
+            depth = centered[:, 1] * sp_ + z * cp_
+            return x, y, depth
+
+        # Faint [0,1] unit-cube wireframe for orientation.
+        corners = np.array(
+            [[i, j, k] for i in (0, 1) for j in (0, 1) for k in (0, 1)], dtype=float
+        )
+        wx, wy, _ = project(corners)
+        painter.setPen(QPen(QColor(90, 90, 90)))
+        edges = [(a, b) for a in range(8) for b in range(a + 1, 8)
+                 if bin(a ^ b).count("1") == 1]
+        for a, b in edges:
+            painter.drawLine(
+                int(cx_screen + wx[a] * scale), int(cy_screen - wy[a] * scale),
+                int(cx_screen + wx[b] * scale), int(cy_screen - wy[b] * scale),
+            )
+
+        x, y, depth = project(outputs)
+        order = np.argsort(depth)
         colors = np.clip(outputs, 0.0, 1.0)
         for i in order:
             painter.fillRect(
@@ -159,7 +191,7 @@ class LatticeView(QWidget):
                 QColor(int(colors[i, 0] * 255), int(colors[i, 1] * 255), int(colors[i, 2] * 255)),
             )
         painter.setPen(QColor(200, 200, 200))
-        painter.drawText(10, 18, "Drag to rotate")
+        painter.drawText(10, 18, "Drag to rotate — scroll to zoom (grey box = 0–1 cube)")
 
 
 class LutInspectorTab(QWidget):

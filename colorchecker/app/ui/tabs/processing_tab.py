@@ -444,8 +444,19 @@ class ProcessingTab(QWidget):
             group=image_io.parse_group_from_filename(path.name) or "5600K",
         )
         self.store.images.append(entry)
+        # Keep the export order deterministic without relying on the Sort
+        # button: every newly imported file re-sorts the session.
+        self.store.images.sort(key=self._sort_key)
         self.storeChanged.emit()
         return entry
+
+    @staticmethod
+    def _sort_key(entry: ImageEntry):
+        # EV first, label second: fully deterministic even among frames
+        # sharing an EV (Kelvin sweeps, hue swings), so two sessions
+        # processed independently always export in the same order.
+        return (entry.ev is None, entry.ev if entry.ev is not None else 0.0,
+                entry.label.lower())
 
     def _entry_index(self) -> int:
         entry = self._current_entry()
@@ -472,8 +483,7 @@ class ProcessingTab(QWidget):
         self.storeChanged.emit()
 
     def _on_sort_by_ev(self) -> None:
-        # Entries without an EV keep their relative order, after the sorted ones.
-        self.store.images.sort(key=lambda e: (e.ev is None, e.ev if e.ev is not None else 0))
+        self.store.images.sort(key=self._sort_key)
         self._refresh_session_list()
         self.storeChanged.emit()
 

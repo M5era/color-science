@@ -139,3 +139,64 @@ def test_zero_width_domain_rejected(tmp_path):
     result = solve_match(source, target, layers=2)
     with pytest.raises(ValueError, match="collapses the whole LUT"):
         write_cube(result.model, tmp_path / "bad.cube", domain_min=1.0, domain_max=1.0)
+
+
+def _drt_cube(tmp_path, name="drt.cube"):
+    """A DRT-like cube: contrasty S-ish curve with a clipped shoulder."""
+    size = 33
+    grid = np.linspace(0, 1, size)
+    b, g, r = np.meshgrid(grid, grid, grid, indexing="ij")
+    def curve(v):
+        return np.clip(1.6 * v - 0.15, 0.0, 1.0) ** 1.1
+    table = np.stack([curve(r), curve(g), curve(b)], axis=-1)
+    lines = [f"LUT_3D_SIZE {size}"]
+    lines += [f"{v[0]:.8f} {v[1]:.8f} {v[2]:.8f}" for v in table.reshape(-1, 3)]
+    path = tmp_path / name
+    path.write_text("\n".join(lines) + "\n")
+    from app.core.lut import parse_cube
+    return parse_cube(path)
+
+
+def test_invert_lut_midrange_and_plateaus(tmp_path):
+    from app.core.match import invert_lut_at
+
+    drt = _drt_cube(tmp_path)
+    # Mid-range gray targets invert accurately; clipped extremes don't.
+    targets = np.array([
+        [0.5, 0.5, 0.5],      # reachable
+        [0.0, 0.0, 0.0],      # toe plateau (inputs < 0.09375 all map to 0)
+        [1.0, 1.0, 1.0],      # shoulder plateau
+    ])
+    inverted, reachable, _ = invert_lut_at(drt, targets)
+    assert reachable[0] and not reachable[1] and not reachable[2]
+    from app.core.lut import apply_lut
+    np.testing.assert_allclose(apply_lut(drt, inverted[0:1]), targets[0:1], atol=5e-3)
+
+
+def test_sandwich_fit_recovers_underlying_transform(tmp_path):
+    drt = _drt_cube(tmp_path)
+    rng = np.random.default_rng(7)
+    source = rng.uniform(0.15, 0.7, (600, 3))  # log-ish working range
+    underlying = np.array([[0.92, 0.06, 0.02], [0.03, 0.9, 0.07], [0.02, 0.08, 0.9]])
+    from app.core.lut import apply_lut
+    target = apply_lut(drt, source @ underlying.T)  # display-referred scan
+
+    result = solve_match(source, target, layers=4, output_transform=drt)
+    assert result.display_referred
+    assert result.error_after < 0.01  # measured through the DRT
+    assert result.error_after < result.error_before
+    # The model itself recovered the underlying (pre-DRT) transform.
+    probe = np.array([[0.3, 0.4, 0.5]])
+    np.testing.assert_allclose(result.model(probe), probe @ underlying.T, atol=0.02)
+
+
+def test_sandwich_drops_clipped_patches(tmp_path):
+    drt = _drt_cube(tmp_path)
+    rng = np.random.default_rng(8)
+    source = rng.uniform(0.15, 0.7, (100, 3))
+    from app.core.lut import apply_lut
+    target = apply_lut(drt, source)
+    target[:10] = 0.0  # crushed to D-max black: uninvertible
+    result = solve_match(source, target, layers=2, output_transform=drt)
+    assert result.pairs_unreachable == 10
+    assert result.pairs_used == 90

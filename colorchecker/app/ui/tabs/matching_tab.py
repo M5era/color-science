@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app.core.lut import CubeLUT, parse_cube
 from app.core.match import (
     MatchResult,
     load_patch_csv,
@@ -120,6 +121,33 @@ class MatchingTab(QWidget):
 
         right = QVBoxLayout()
 
+        match_type = QGroupBox("Match type")
+        mt_layout = QVBoxLayout(match_type)
+        self.scene_radio = QRadioButton("Scene-referred (log → log)")
+        self.scene_radio.setChecked(True)
+        self.display_radio = QRadioButton("Display-referred (through a DRT)")
+        self.display_radio.setToolTip(
+            "Target is a display-referred scan (e.g. slide film). A fixed\n"
+            "DRT carries the contrast; the match is solved underneath it\n"
+            "and exports as a cube you stack BEFORE the DRT."
+        )
+        mt_layout.addWidget(self.scene_radio)
+        mt_layout.addWidget(self.display_radio)
+
+        drt_row = QHBoxLayout()
+        drt_row.addWidget(QLabel("DRT:"))
+        self.drt_combo = QComboBox()
+        self.drt_combo.setEnabled(False)
+        drt_row.addWidget(self.drt_combo, stretch=1)
+        self.drt_load_btn = QPushButton("Load DRT…")
+        self.drt_load_btn.setEnabled(False)
+        self.drt_load_btn.clicked.connect(self._load_drt)
+        drt_row.addWidget(self.drt_load_btn)
+        mt_layout.addLayout(drt_row)
+        self._drts: list[tuple[str, CubeLUT]] = []
+        self.display_radio.toggled.connect(self._match_type_changed)
+        right.addWidget(match_type)
+
         params = QGroupBox("Model")
         grid = QGridLayout(params)
         row = 0
@@ -204,6 +232,34 @@ class MatchingTab(QWidget):
 
     # ------------------------------------------------------------ actions
 
+    def _match_type_changed(self, display_mode: bool) -> None:
+        self.drt_combo.setEnabled(display_mode)
+        self.drt_load_btn.setEnabled(display_mode)
+
+    def _load_drt(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Load DRT", "", "Cube LUT (*.cube)"
+        )
+        if not path:
+            return
+        try:
+            lut = parse_cube(path)
+        except ValueError as exc:
+            QMessageBox.critical(self, "Cannot load DRT", str(exc))
+            return
+        name = Path(path).name
+        self._drts.append((name, lut))
+        self.drt_combo.addItem(name)
+        self.drt_combo.setCurrentIndex(len(self._drts) - 1)
+
+    def _selected_drt(self) -> CubeLUT | None:
+        if not self.display_radio.isChecked():
+            return None
+        idx = self.drt_combo.currentIndex()
+        if idx < 0 or idx >= len(self._drts):
+            return None
+        return self._drts[idx][1]
+
     def showEvent(self, event):
         super().showEvent(event)
         self.source_box.refresh()
@@ -219,6 +275,13 @@ class MatchingTab(QWidget):
                 "or load a CSV on each side).",
             )
             return
+        drt = self._selected_drt()
+        if self.display_radio.isChecked() and drt is None:
+            QMessageBox.information(
+                self, "No DRT loaded",
+                "Display-referred matching needs a DRT — click Load DRT…",
+            )
+            return
         try:
             result = solve_match(
                 source,
@@ -227,6 +290,7 @@ class MatchingTab(QWidget):
                 layers=self.layers_spin.value(),
                 smoothing=self.smoothness_spin.value(),
                 strength=self.strength_spin.value() / 100.0,
+                output_transform=drt,
             )
         except ValueError as exc:
             QMessageBox.critical(self, "Cannot solve", str(exc))
@@ -237,14 +301,22 @@ class MatchingTab(QWidget):
 
         parts = [
             f"Pairs used: {result.pairs_used}"
-            + (f" ({result.pairs_dropped} dropped: missing values)" if result.pairs_dropped else ""),
-            f"Error before: {result.error_before:.5f}",
+            + (f" ({result.pairs_dropped} dropped: missing values)" if result.pairs_dropped else "")
+            + (
+                f" ({result.pairs_unreachable} dropped: clipped by the DRT/stock)"
+                if result.pairs_unreachable else ""
+            ),
         ]
+        if result.display_referred:
+            parts.append("Errors measured through the DRT (what you'd see):")
+        parts.append(f"Error before: {result.error_before:.5f}")
         if result.error_matrix is not None:
             parts.append(f"After matrix: {result.error_matrix:.5f}")
         parts.append(
             f"After match: {result.error_after:.5f} (worst patch {result.error_after_max:.5f})"
         )
+        if result.display_referred:
+            parts.append("Export = correction cube; apply it BEFORE the DRT node.")
 
         valid_labels = [
             lbl for lbl, keep in zip(

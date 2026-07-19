@@ -21,9 +21,12 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
+from scipy.optimize import least_squares
 from scipy.sparse import csr_matrix
 from scipy.sparse.linalg import lsqr
 from scipy.spatial import cKDTree
+
+from app.core.lut import CubeLUT, apply_lut, lattice_points
 
 # Compactly-supported Gaussian-like basis, phi(u) with u = distance/radius.
 # Constants reproduce ALGLIB's V2 basis to < 6e-5 over its support.
@@ -145,6 +148,59 @@ class MatchResult:
     error_after: float  # after the full model
     error_after_max: float
     per_patch_error: np.ndarray  # (N,) distances after the full model
+    # Sandwich fit only: patches whose target the fixed output transform
+    # cannot reach or resolve (clipped plateaus) — dropped from the fit.
+    pairs_unreachable: int = 0
+    display_referred: bool = False  # True -> error metrics are through the DRT
+
+
+def invert_lut_at(
+    lut: CubeLUT, targets: np.ndarray,
+    tol: float = 0.004, min_slope: float = 0.02,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """For each target value, find the LUT input that produces it.
+
+    Returns (inputs, reachable_mask, residuals). A target is unreachable
+    when no input gets within `tol` of it, or when the LUT is locally
+    flat there (clipped plateau: the preimage is ambiguous and carries
+    no information — min singular value of the local Jacobian < min_slope).
+    """
+    targets = np.asarray(targets, dtype=np.float64)
+    grid_in, grid_out = lattice_points(lut, resolution=17)
+    span = lut.domain_max - lut.domain_min
+    grid_in = lut.domain_min + grid_in * span
+
+    inverted = np.full_like(targets, np.nan)
+    residuals = np.full(len(targets), np.inf)
+    reachable = np.zeros(len(targets), dtype=bool)
+    eps = 1e-3 * max(float(span.max()), 1e-6)
+
+    for i, y in enumerate(targets):
+        if np.isnan(y).any():
+            continue
+        start = grid_in[int(np.argmin(((grid_out - y) ** 2).sum(axis=1)))]
+        with np.errstate(all="ignore"):  # plateau Jacobians degenerate harmlessly
+            sol = least_squares(
+                lambda v: apply_lut(lut, v[None, :])[0] - y,
+                start,
+                bounds=(lut.domain_min, lut.domain_max),
+                xtol=1e-12, ftol=1e-14, gtol=None, method="trf",
+            )
+        inverted[i] = sol.x
+        residuals[i] = float(np.linalg.norm(sol.fun))
+        if residuals[i] > tol:
+            continue
+        # Local flatness check: finite-difference Jacobian at the solution.
+        jac = np.empty((3, 3))
+        for axis in range(3):
+            hi = sol.x.copy(); hi[axis] = min(hi[axis] + eps, lut.domain_max[axis])
+            lo = sol.x.copy(); lo[axis] = max(lo[axis] - eps, lut.domain_min[axis])
+            step = hi[axis] - lo[axis]
+            jac[:, axis] = (apply_lut(lut, hi[None, :])[0] - apply_lut(lut, lo[None, :])[0]) / step
+        if np.linalg.svd(jac, compute_uv=False)[-1] >= min_slope:
+            reachable[i] = True
+
+    return inverted, reachable, residuals
 
 
 def _mean_dist(a: np.ndarray, b: np.ndarray) -> float:
@@ -159,7 +215,11 @@ def solve_match(
     smoothing: float = 0.001,
     radius: float = 5.0,
     strength: float = 1.0,
+    output_transform: CubeLUT | None = None,
 ) -> MatchResult:
+    """Fit source -> target. With `output_transform` (a fixed DRT), the
+    sandwich fit is solved instead: model such that DRT(model(source))
+    matches the display-referred target; error metrics go through the DRT."""
     source = np.asarray(source, dtype=np.float64)
     target = np.asarray(target, dtype=np.float64)
     if source.ndim != 2 or source.shape[1] != 3 or target.ndim != 2 or target.shape[1] != 3:
@@ -173,28 +233,44 @@ def solve_match(
     valid = ~(np.isnan(source).any(axis=1) | np.isnan(target).any(axis=1))
     dropped = int((~valid).sum())
     source, target = source[valid], target[valid]
+
+    unreachable = 0
+    if output_transform is not None:
+        # Solve "what must the model output so the DRT lands on the scan":
+        # consult the DRT's preimage at each target patch. Targets the DRT
+        # cannot reach or resolve (clipped plateaus) constrain nothing.
+        fit_target, reachable, _ = invert_lut_at(output_transform, target)
+        unreachable = int((~reachable).sum())
+        source, target = source[reachable], target[reachable]
+        fit_target = fit_target[reachable]
+    else:
+        fit_target = target
+
     if source.shape[0] < 4:
         raise ValueError("Need at least 4 valid patch pairs to fit")
 
-    error_before = _mean_dist(source, target)
+    def display(values: np.ndarray) -> np.ndarray:
+        return apply_lut(output_transform, values) if output_transform is not None else values
+
+    error_before = _mean_dist(display(source), target)
 
     matrix = None
     error_matrix = None
     stage_source = source
     if use_matrix:
         # Plain least-squares 3x3, no offset: exposure invariant.
-        matrix, *_ = np.linalg.lstsq(source, target, rcond=None)
+        matrix, *_ = np.linalg.lstsq(source, fit_target, rcond=None)
         matrix = matrix.T
         stage_source = source @ matrix.T
-        error_matrix = _mean_dist(stage_source, target)
+        error_matrix = _mean_dist(display(stage_source), target)
 
     rbf = None
     if layers > 0:
         rbf = HierarchicalRBF(radius=radius, layers=layers, smoothing=smoothing)
-        rbf.fit(stage_source, target)
+        rbf.fit(stage_source, fit_target)
 
     model = MatchModel(matrix=matrix, rbf=rbf, strength=strength)
-    fitted = model(source)
+    fitted = display(model(source))
     per_patch = np.linalg.norm(fitted - target, axis=1)
     return MatchResult(
         model=model,
@@ -205,6 +281,8 @@ def solve_match(
         error_after=float(per_patch.mean()),
         error_after_max=float(per_patch.max()),
         per_patch_error=per_patch,
+        pairs_unreachable=unreachable,
+        display_referred=output_transform is not None,
     )
 
 

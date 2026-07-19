@@ -46,6 +46,7 @@ class _PatchSource(QGroupBox):
         self._store_provider = store_provider
         self._csv_values: np.ndarray | None = None
         self._csv_labels: list[str] = []
+        self._csv_name: str = ""
 
         layout = QVBoxLayout(self)
         self.session_radio = QRadioButton("Current session (Processing tab)")
@@ -78,8 +79,10 @@ class _PatchSource(QGroupBox):
         except ValueError as exc:
             QMessageBox.critical(self, "Cannot read file", str(exc))
             return
-        self.csv_radio.setChecked(True)
+        # Name must be recorded BEFORE toggling the radio: the toggle
+        # signal triggers refresh(), which displays the name.
         self._csv_name = Path(path).name
+        self.csv_radio.setChecked(True)
         self.refresh()
 
     def values(self) -> tuple[np.ndarray, list[str]]:

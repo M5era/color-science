@@ -67,15 +67,3 @@ def test_newer_schema_rejected_cleanly():
 def test_label_defaults_to_filename():
     entry = ImageEntry.from_dict({"source_path": "/x/0_EV_v1-800T_MatRem.tif"})
     assert entry.label == "0_EV_v1-800T_MatRem.tif"
-
-
-def test_overlay_overrides_roundtrip(tmp_path):
-    store = _sample_store()
-    store.images[0].overlay_overrides = {
-        "Overlay 1": [[10.0, 10.0], [110.0, 10.0], [110.0, 80.0], [10.0, 80.0]]
-    }
-    path = tmp_path / "p.json"
-    store.save(path)
-    loaded = ProjectStore.load(path)
-    assert loaded.images[0].overlay_overrides["Overlay 1"][2] == [110.0, 80.0]
-    assert loaded.images[1].overlay_overrides == {}

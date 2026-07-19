@@ -33,7 +33,6 @@ class Sidebar(QWidget):
     exportClicked = Signal()
     previewClicked = Signal()
     overlayUseToggled = Signal(bool)
-    overlayLocalPosToggled = Signal(bool)
 
     def __init__(self):
         super().__init__()
@@ -71,16 +70,6 @@ class Sidebar(QWidget):
         )
         self.use_check.toggled.connect(self._use_toggled)
         grid.addWidget(self.use_check, row, 1)
-        row += 1
-
-        self.local_pos_check = QCheckBox("Position for this frame only")
-        self.local_pos_check.setToolTip(
-            "Tick when this shot shifted against the others: corner moves\n"
-            "and Detect then reposition the overlay on THIS frame only.\n"
-            "Untick to snap back to the shared position."
-        )
-        self.local_pos_check.toggled.connect(self._local_pos_toggled)
-        grid.addWidget(self.local_pos_check, row, 1)
         row += 1
 
         grid.addWidget(QLabel("Preset"), row, 0)
@@ -204,21 +193,11 @@ class Sidebar(QWidget):
         self.use_check.setEnabled(available)
         self._updating = False
 
-    def set_overlay_local_pos(self, local: bool, available: bool) -> None:
-        self._updating = True
-        self.local_pos_check.setChecked(local)
-        self.local_pos_check.setEnabled(available)
-        self._updating = False
-
     # ---------------------------------------------------------- signals
 
     def _use_toggled(self, checked: bool) -> None:
         if not self._updating:
             self.overlayUseToggled.emit(checked)
-
-    def _local_pos_toggled(self, checked: bool) -> None:
-        if not self._updating:
-            self.overlayLocalPosToggled.emit(checked)
 
     def _field_edited(self) -> None:
         if not self._updating:

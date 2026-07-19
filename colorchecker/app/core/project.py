@@ -34,10 +34,6 @@ class ImageEntry:
     # square on frames without the light). Overlays are shared across
     # frames; this records the per-frame exceptions.
     disabled_overlays: list[str] = field(default_factory=list)
-    # Per-frame corner positions: overlay name -> [TL, TR, BR, BL] used
-    # for THIS frame only (a shot that shifted against the others).
-    # Absent name = frame follows the shared overlay position.
-    overlay_overrides: dict[str, list] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -49,7 +45,6 @@ class ImageEntry:
             "overlays": self.overlays,
             "patch_results": self.patch_results,
             "disabled_overlays": self.disabled_overlays,
-            "overlay_overrides": self.overlay_overrides,
         }
 
     @classmethod
@@ -63,7 +58,6 @@ class ImageEntry:
             overlays=data.get("overlays", []),
             patch_results=data.get("patch_results", []),
             disabled_overlays=data.get("disabled_overlays", []),
-            overlay_overrides=data.get("overlay_overrides", {}),
         )
 
 

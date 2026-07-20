@@ -16,6 +16,18 @@ Parity with the numpy stages is enforced by tests/test_backprop.py.
 import numpy as np
 import torch
 
+from app.core import chromogen
+from app.core.chromogen import (
+    ColourCrosstalkStage,
+    ColourSaturationStage,
+    ContrastBoostStage,
+    HighlightBleachStage,
+    NeutralTintStage,
+    SectorBrightnessStage,
+    SectorSaturationStage,
+    SectorSkewStage,
+    SectorSquashStage,
+)
 from app.core.stages import (
     LinearMatrixStage,
     LumaCurveStage,
@@ -174,12 +186,182 @@ def _fine_apply(stage, x, p):
     return _reuleaux_to_rgb(hue_result, sat_result, val_result)
 
 
+# ------------------------------------------- chromogen-family mirrors
+
+def _ramp(x, pivot, falloff):
+    t = ((x - pivot) / torch.clamp(falloff, min=1e-6) + 0.5).clamp(0.0, 1.0)
+    return torch.sin(0.5 * torch.pi * t) ** 2
+
+
+def _modulation(val, sat, zone, pivot, falloff, chroma):
+    r = _ramp(val, pivot, falloff)
+    m_luma = 1.0 - torch.abs(zone) + torch.abs(zone) * torch.where(
+        zone >= 0.0, r, 1.0 - r
+    )
+    rs = _ramp(sat,
+               torch.as_tensor(chromogen.SAT_GATE_PIVOT, dtype=val.dtype),
+               torch.as_tensor(chromogen.SAT_GATE_FALLOFF, dtype=val.dtype))
+    m_chroma = 1.0 - torch.abs(chroma) + torch.abs(chroma) * torch.where(
+        chroma >= 0.0, rs, 1.0 - rs
+    )
+    return m_luma * m_chroma
+
+
+def _to_chroma_vec(hue, sat):
+    ang = hue * (2.0 * torch.pi)
+    return sat * torch.cos(ang), sat * torch.sin(ang)
+
+
+def _from_chroma_vec(c1, c2):
+    sat = torch.sqrt(c1 * c1 + c2 * c2 + 1e-24)
+    hue = torch.atan2(c2, c1) / (2.0 * torch.pi)
+    return hue - torch.floor(hue), sat
+
+
+def _rygb_interp(hue, amounts4):
+    xs = torch.as_tensor(chromogen._RYGB_XS, dtype=hue.dtype)
+    ys = amounts4[list(chromogen._RYGB_WRAP)]
+    return _interp(hue, xs, ys, extrapolate=False)
+
+
+def _softplus_t(x, width):
+    return width * torch.nn.functional.softplus(x / width)
+
+
+def _colour_saturation_apply(stage, x, p):
+    hue, sat, val = _rgb_to_reuleaux(x)
+    m = _modulation(val, sat, p[3], p[4], p[5], p[6])
+    c1, c2 = _to_chroma_vec(hue, sat)
+
+    theta = (chromogen.YB_AXIS_TURNS + p[2] / 360.0) * (2.0 * torch.pi)
+    cos_t, sin_t = torch.cos(theta), torch.sin(theta)
+    u = cos_t * c1 + sin_t * c2
+    v = -sin_t * c1 + cos_t * c2
+    u = u * (1.0 + m * (p[1] - 1.0))
+    v = v * (1.0 + m * (p[0] - 1.0))
+    c1 = cos_t * u - sin_t * v
+    c2 = sin_t * u + cos_t * v
+    hue2, sat2 = _from_chroma_vec(c1, c2)
+    return _reuleaux_to_rgb(hue2, sat2, val)
+
+
+def _contrast_curve(v, boost, pivot, highlight, width):
+    return v + boost * (
+        (v - pivot)
+        - _softplus_t(v - highlight, width)
+        + _softplus_t(pivot - highlight, width)
+    )
+
+
+def _contrast_boost_apply(stage, x, p):
+    w = stage._SHOULDER
+    hue, sat, val = _rgb_to_reuleaux(x)
+    val_mode = _reuleaux_to_rgb(hue, sat, _contrast_curve(val, p[0], p[1], p[2], w))
+    rgb_mode = _contrast_curve(x, p[0], p[1], p[2], w)
+    return (1.0 - p[3]) * val_mode + p[3] * rgb_mode
+
+
+def _highlight_bleach_apply(stage, x, p):
+    hue, sat, val = _rgb_to_reuleaux(x)
+    zero = p[6] * 0.0
+    w = (
+        _rygb_interp(hue, p[:4])
+        * _ramp(val, p[4], p[5])
+        * _modulation(val, sat, zero, p[4], p[5], p[6])
+    )
+    return _reuleaux_to_rgb(hue, sat * (1.0 - w), val)
+
+
+def _neutral_tint_apply(stage, x, p):
+    hue, sat, val = _rgb_to_reuleaux(x)
+    r = _ramp(val, p[2], p[3])
+    side = torch.where(p[1] >= 0.0, r, 1.0 - r)
+    zero = p[4] * 0.0
+    m = side * _modulation(val, sat, zero, p[2], p[3], p[4])
+
+    ang = (p[0] / 360.0) * (2.0 * torch.pi)
+    c1, c2 = _to_chroma_vec(hue, sat)
+    c1 = c1 + torch.abs(p[1]) * m * torch.cos(ang)
+    c2 = c2 + torch.abs(p[1]) * m * torch.sin(ang)
+    hue2, sat2 = _from_chroma_vec(c1, c2)
+    return _reuleaux_to_rgb(hue2, sat2, val)
+
+
+def _colour_crosstalk_apply(stage, x, p):
+    hue, sat, val = _rgb_to_reuleaux(x)
+    lum = _ramp(val, p[4], p[5])
+    c1, c2 = _to_chroma_vec(hue, sat)
+    eye = torch.eye(4, dtype=x.dtype)
+    for i in range(4):
+        w = _rygb_interp(hue, eye[i]) * lum * sat * p[i]
+        ang = stage._AXES[i] * 2.0 * np.pi
+        c1 = c1 + w * float(np.cos(ang))
+        c2 = c2 + w * float(np.sin(ang))
+    hue2, sat2 = _from_chroma_vec(c1, c2)
+    return _reuleaux_to_rgb(hue2, sat2, val)
+
+
+def _sector_weight(hue, sat, val, p):
+    center = (p[0] / 360.0)
+    center = center - torch.floor(center)
+    zero_flat = p[1] * 0.0
+    return (
+        _wrapped_window(hue, center, zero_flat, p[1] / 360.0)
+        * _modulation(val, sat, p[3], p[4], p[5], p[6])
+    )
+
+
+def _sector_skew_apply(stage, x, p):
+    hue, sat, val = _rgb_to_reuleaux(x)
+    w = _sector_weight(hue, sat, val, p)
+    return _reuleaux_to_rgb(hue + w * (p[2] / 360.0), sat, val)
+
+
+def _sector_brightness_apply(stage, x, p):
+    hue, sat, val = _rgb_to_reuleaux(x)
+    w = _sector_weight(hue, sat, val, p)
+    val2 = val * torch.clamp(1.0 + sat * (w * p[2]), min=1e-6)
+    return _reuleaux_to_rgb(hue, sat, val2)
+
+
+def _sector_saturation_apply(stage, x, p):
+    hue, sat, val = _rgb_to_reuleaux(x)
+    w = _sector_weight(hue, sat, val, p)
+    sat2 = _spow(sat, 1.0 / (1.0 + w * (p[2] - 1.0)))
+    return _reuleaux_to_rgb(hue, sat2, val)
+
+
+def _sector_squash_apply(stage, x, p):
+    hue, sat, val = _rgb_to_reuleaux(x)
+    target = p[0] / 360.0
+    target = target - torch.floor(target)
+    width = torch.clamp(p[1] / 360.0, min=1e-6)
+
+    v = hue - target + 0.5
+    delta = v - torch.floor(v) - 0.5
+    t = (torch.abs(delta) / width).clamp(0.0, 1.0)
+    w = torch.cos(0.5 * torch.pi * t) ** 2
+
+    m = _modulation(val, sat, p[3], p[4], p[5], p[6])
+    hue2 = target + delta * (1.0 - (p[2] * m) * w)
+    return _reuleaux_to_rgb(hue2, sat, val)
+
+
 _APPLY = {
     LinearMatrixStage: _matrix_apply,
     LumaCurveStage: _luma_apply,
     RGBCurvesStage: _rgb_curves_apply,
     ReuleauxBroadStage: _broad_apply,
     ReuleauxFineStage: _fine_apply,
+    ColourSaturationStage: _colour_saturation_apply,
+    ContrastBoostStage: _contrast_boost_apply,
+    HighlightBleachStage: _highlight_bleach_apply,
+    NeutralTintStage: _neutral_tint_apply,
+    ColourCrosstalkStage: _colour_crosstalk_apply,
+    SectorSkewStage: _sector_skew_apply,
+    SectorBrightnessStage: _sector_brightness_apply,
+    SectorSaturationStage: _sector_saturation_apply,
+    SectorSquashStage: _sector_squash_apply,
 }
 
 

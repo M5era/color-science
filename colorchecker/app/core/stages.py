@@ -15,8 +15,6 @@ fixed-6-anchor port), ReuleauxFineStage (one freely placed hue zone
 with smooth hue window + sat mask + luma mask).
 """
 
-from abc import ABC, abstractmethod
-
 import numpy as np
 
 from app.core.reuleaux import (
@@ -26,23 +24,8 @@ from app.core.reuleaux import (
     reuleaux_user,
     rgb_to_reuleaux,
 )
+from app.core.stage_base import Stage
 from app.core.windows import plateau_window, wrapped_window
-
-
-class Stage(ABC):
-    name: str = "stage"
-
-    @abstractmethod
-    def identity(self) -> np.ndarray: ...
-
-    @abstractmethod
-    def bounds(self) -> tuple[np.ndarray, np.ndarray]: ...
-
-    @abstractmethod
-    def apply(self, x: np.ndarray, params: np.ndarray) -> np.ndarray: ...
-
-    def describe(self, params: np.ndarray) -> str:
-        return f"{self.name}: {np.round(params, 4).tolist()}"
 
 
 class LinearMatrixStage(Stage):
@@ -297,9 +280,22 @@ STAGE_POOL = {
     "Reuleaux Fine": ReuleauxFineStage,
 }
 
+# Chromogen-style stages live in app/core/chromogen.py; imported at the
+# bottom of this module (they subclass Stage) and registered here.
+
 CHAIN_PRESETS = {
     "Full (Luma → RGB → Reuleaux Broad)": ["Luma Curve", "RGB Curves", "Reuleaux Broad"],
     "Reuleaux Broad only": ["Reuleaux Broad"],
     "Matrix + Reuleaux Broad": ["Matrix", "Reuleaux Broad"],
     "Reuleaux Broad + Fine": ["Reuleaux Broad", "Reuleaux Fine"],
+    "Chromogen broad (Sat → Crosstalk → Contrast → Bleach → Tint)": [
+        "Colour Saturation", "Colour Crosstalk", "Contrast Boost",
+        "Highlight Bleach", "Neutral Tint",
+    ],
 }
+
+
+from app.core.chromogen import CHROMOGEN_STAGES  # noqa: E402
+
+for _cls in CHROMOGEN_STAGES:
+    STAGE_POOL[_cls.name] = _cls

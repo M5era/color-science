@@ -67,8 +67,7 @@ def test_gradients_flow_and_are_finite():
         dtype=torch.float64,
     )
     x = torch.cat([x, extra])
-    stages = [LinearMatrixStage(), LumaCurveStage(5), RGBCurvesStage(5),
-              ReuleauxBroadStage(), ReuleauxFineStage()]
+    stages = [cls() for cls in STAGE_POOL.values()]  # every stage, chained
     params = [
         torch.tensor(s.identity(), dtype=torch.float64, requires_grad=True)
         for s in stages

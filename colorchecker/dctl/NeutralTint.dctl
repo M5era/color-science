@@ -1,0 +1,136 @@
+// NeutralTint.dctl — tint toward a picked hue (+ = highlights, - = shadows), val untouched
+//
+// Companion to the "Neutral Tint" stage of the colorchecker parametric
+// solver (app/core/chromogen.py). The solver's stage report prints
+// values in EXACTLY these slider units — paste them straight in.
+// Defaults are the identity: the node does nothing until moved.
+//
+// Part of the Chromogen-style stage family (see ROADMAP.md): behavior
+// replication of FilmLight's look-dev tools in reuleaux space. Scene-
+// referred, pure formulas, smooth by construction.
+//
+// The rgb<->reuleaux conversion functions are transcribed from
+// Reuleaux (hotgluebanjo & calvinsilly, github.com/hotgluebanjo/reuleaux),
+// which carries NO license file: private evaluation only — do NOT
+// redistribute this file. Windowing/masking/tool math is original to
+// this project.
+
+DEFINE_UI_PARAMS(hue, Hue, DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 360.0, 0.1)
+DEFINE_UI_PARAMS(amount, Amount, DCTLUI_SLIDER_FLOAT, 0.0, -0.5, 0.5, 0.001)
+DEFINE_UI_PARAMS(pivot, Pivot, DCTLUI_SLIDER_FLOAT, 0.4, -0.5, 2.0, 0.001)
+DEFINE_UI_PARAMS(falloff, Falloff, DCTLUI_SLIDER_FLOAT, 0.6, 0.02, 2.0, 0.001)
+DEFINE_UI_PARAMS(chroma, Chroma, DCTLUI_SLIDER_FLOAT, -0.5, -1.0, 1.0, 0.001)
+
+#define PI_LOCAL 3.141592653589f
+#define SAT_GATE_PIVOT 0.25f
+#define SAT_GATE_FALLOFF 0.5f
+
+// ---- reuleaux conversions (1:1 with the validated port) -------------
+
+__DEVICE__ float3 rgb_to_reuleaux(float3 rgb) {
+    float rot_x = _sqrtf(2.0f) / 6.0f * (2.0f * rgb.x - rgb.y - rgb.z);
+    float rot_y = (rgb.y - rgb.z) / _sqrtf(6.0f);
+    float rot_z = (rgb.x + rgb.y + rgb.z) / 3.0f;
+
+    float hue = PI_LOCAL - _atan2f(rot_y, -rot_x);
+    float sat = rot_z == 0.0f ? 0.0f : _sqrtf(rot_x * rot_x + rot_y * rot_y) / rot_z;
+    float val = _fmaxf(rgb.x, _fmaxf(rgb.y, rgb.z));
+
+    return make_float3(hue / (2.0f * PI_LOCAL), sat / _sqrtf(2.0f), val);
+}
+
+__DEVICE__ float3 reuleaux_to_rgb(float3 reuleaux) {
+    float hue = reuleaux.x * 2.0f * PI_LOCAL;
+    float sat = reuleaux.y * _sqrtf(2.0f);
+    float val = reuleaux.z;
+
+    float m = _sqrtf(2.0f) * _fmaxf(_cosf(hue),
+                  _fmaxf(_cosf(hue + 2.0f * PI_LOCAL / 3.0f),
+                         _cosf(hue - 2.0f * PI_LOCAL / 3.0f))) + 1.0f / sat;
+
+    float ocs_x = val * _cosf(hue) / m;
+    float ocs_y = val * _sinf(hue) / m;
+    float ocs_z = val;
+    if (sat == 0.0f) { ocs_x = 0.0f; ocs_y = 0.0f; }
+
+    float s32 = _sqrtf(1.5f);
+    float s3 = _sqrtf(3.0f);
+    float r = ocs_z - s32 * _fmaxf(_fabs(ocs_y) - s3 * ocs_x, 0.0f);
+    float g = ocs_z - s32 * (_fmaxf(_fabs(ocs_y), s3 * ocs_x) - ocs_y);
+    float b = ocs_z - s32 * (_fmaxf(_fabs(ocs_y), s3 * ocs_x) + ocs_y);
+    return make_float3(r, g, b);
+}
+
+__DEVICE__ float spow(float x, float p) {
+    float mag = _powf(_fabs(x), p);
+    return x < 0.0f ? -mag : mag;
+}
+
+// ---- smooth windows + modulation (mirror of app/core) ---------------
+
+__DEVICE__ float ramp_window(float x, float pivot, float falloff) {
+    float t = _clampf((x - pivot) / _fmaxf(falloff, 1e-6f) + 0.5f, 0.0f, 1.0f);
+    if (t <= 0.0f) return 0.0f;
+    if (t >= 1.0f) return 1.0f;
+    float s = _sinf(0.5f * PI_LOCAL * t);
+    return s * s;
+}
+
+__DEVICE__ float wrapped_bump(float x, float center, float soft) {
+    float d = x - center + 0.5f;
+    d = _fabs(d - _floorf(d) - 0.5f);
+    float t = _clampf(d / _fmaxf(soft, 1e-6f), 0.0f, 1.0f);
+    if (t >= 1.0f) return 0.0f;
+    float c = _cosf(0.5f * PI_LOCAL * t);
+    return c * c;
+}
+
+__DEVICE__ float modulation(float val, float sat, float zone, float pivot,
+                            float falloff, float chroma) {
+    float r = ramp_window(val, pivot, falloff);
+    float m_luma = 1.0f - _fabs(zone)
+                 + _fabs(zone) * (zone >= 0.0f ? r : 1.0f - r);
+    float rs = ramp_window(sat, SAT_GATE_PIVOT, SAT_GATE_FALLOFF);
+    float m_chroma = 1.0f - _fabs(chroma)
+                   + _fabs(chroma) * (chroma >= 0.0f ? rs : 1.0f - rs);
+    return m_luma * m_chroma;
+}
+
+// 4-anchor (R,Y,G,B) piecewise-linear hue amount, wrap like the port
+__DEVICE__ float rygb_interp(float hue, float aR, float aY, float aG, float aB) {
+    float xs[7] = {2.0f/3.0f - 1.0f, 0.0f, 1.0f/6.0f, 1.0f/3.0f,
+                   2.0f/3.0f, 1.0f, 1.0f/6.0f + 1.0f};
+    float ys[7] = {aB, aR, aY, aG, aB, aR, aY};
+    if (hue <= xs[0]) return ys[0];
+    for (int i = 1; i < 7; ++i) {
+        if (hue <= xs[i]) {
+            float t = (hue - xs[i-1]) / (xs[i] - xs[i-1]);
+            return ys[i-1] + t * (ys[i] - ys[i-1]);
+        }
+    }
+    return ys[6];
+}
+
+__DEVICE__ float softplusw(float x, float w) {
+    return w * _logf(1.0f + _expf(_fminf(x / w, 60.0f)));
+}
+
+__DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y,
+                            float p_R, float p_G, float p_B) {
+    float3 rl = rgb_to_reuleaux(make_float3(p_R, p_G, p_B));
+    float r = ramp_window(rl.z, pivot, falloff);
+    float side = amount >= 0.0f ? r : 1.0f - r;
+    float m = side * modulation(rl.z, rl.y, 0.0f, pivot, falloff, chroma);
+
+    float ang0 = rl.x * 2.0f * PI_LOCAL;
+    float c1 = rl.y * _cosf(ang0);
+    float c2 = rl.y * _sinf(ang0);
+    float angT = hue / 360.0f * 2.0f * PI_LOCAL;
+    c1 += _fabs(amount) * m * _cosf(angT);
+    c2 += _fabs(amount) * m * _sinf(angT);
+
+    float sat2 = _sqrtf(c1 * c1 + c2 * c2);
+    float hue2 = _atan2f(c2, c1) / (2.0f * PI_LOCAL);
+    hue2 -= _floorf(hue2);
+    return reuleaux_to_rgb(make_float3(hue2, sat2, rl.z));
+}

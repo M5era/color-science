@@ -65,9 +65,14 @@ colorchecker/
     stages.py                  parametric stages (Matrix/Luma/RGB/Reuleaux) — ML-ready contract
     parametric.py              solve_parametric: stage chain fit + waterfall + paste-ready reports
   app/ui/                      PySide6; tabs/ = the three tabs
+  app/core/stage_base.py       the Stage ABC (own module: no import cycles)
+    chromogen.py               Chromogen-style family: 9 stages + modulation block
+    windows.py                 plateau/wrapped windows + signed ramp_window (pivot/falloff)
   tools/reuleaux_bake.py       CLI: bake reuleaux (Broad) params into a .cube for Resolve A/B
   tools/reuleaux_fine_bake.py  CLI: bake a Fine zone into a .cube (units = DCTL sliders)
-  dctl/ReuleauxFine.dctl       companion DCTL for the Fine stage — solver report pastes in 1:1
+  tools/stage_bake.py          CLI: bake ANY param_names stage by slider name (--list)
+  dctl/                        10 companion DCTLs — solver reports paste in 1:1
+                               (ReuleauxFine + the 9 Chromogen-style tools)
   tests/                       82 tests, all green, offscreen
   ROADMAP.md                   Plan B and future design (detailed)
   HANDOFF.md                   this file
@@ -238,11 +243,25 @@ tests: a Fine zone hidden in the greens that scipy provably cannot
 find (zero finite-diff gradient, no window overlap from the red start)
 is found and fit by the torch backend.
 
-**Next up:** the separate **HueSquash node** (compress nearby hues
-toward a chosen target; sat-gated; foldover-proof monotone
-parametrization — design agreed with Marc, in chat). OkLab/OkLCh is
-explicitly OFF the table for now — everything stays in reuleaux space
-until Marc says otherwise.
+**The Chromogen-style family is BUILT** (same session, Marc's pivot
+after watching the FilmLight demo — design in ROADMAP.md): 9 new
+stages in `app/core/chromogen.py` — Colour Saturation (2 opponent
+axes + rotate), Contrast Boost (chroma mix: constant-chromaticity ↔
+per-RGB), Highlight Bleach (4 sectors × highlight ramp), Neutral Tint
+(signed amount: + highs / − lows, val-preserving), Colour Crosstalk
+(luminance-weighted opponent displacement), and the single-picked-hue
+Sector tools (Skew / Brightness / Saturation / Squash — squash signed,
+negative = spread, foldover-proof for the whole ±1 range). All share
+the modulation block (Zone/Pivot/Falloff + SIGNED Chroma gate) built
+on the new `ramp_window`. **Every stage has a companion DCTL in
+dctl/** (sliders = exactly the solver-report units) so Marc can play
+by hand first, plus torch mirrors (backprop works on all 14 stages)
+and `tools/stage_bake.py` for cube A/B. Chain preset "Chromogen broad
+(Sat → Crosstalk → Contrast → Bleach → Tint)" added. NONE of the new
+DCTLs are pixel-verified in Resolve yet (needs Marc; bake + A/B flow
+as with Broad). The Sector Squash covers the earlier planned
+"HueSquash node". OkLab/OkLCh remains OFF the table — everything is
+in reuleaux space until Marc says otherwise.
 
 ---
 
@@ -256,9 +275,11 @@ until Marc says otherwise.
   `python3 -m pip`, NOT `pip3`** (repo path has spaces, which breaks the
   pip script shim). `scipy` IS required (a missing entry once crashed
   the app on import — it's in requirements now).
-- **Tests:** `QT_QPA_PLATFORM=offscreen python3 -m pytest tests/` — 104
-  green, ~22–35s (torch tests auto-skip if torch is not installed).
-  Synthetic TIFFs generated at runtime; no footage
+- **Tests:** `QT_QPA_PLATFORM=offscreen python3 -m pytest tests/` — 124
+  green, ~25–55s (torch tests auto-skip if torch is not installed).
+  The STAGE_POOL-looping tests (identity passthrough, torch-mirror
+  parity) cover every registered stage automatically — new stages get
+  those checks for free. Synthetic TIFFs generated at runtime; no footage
   committed (`*.tif` git-ignored). UI tests mock the file dialogs and
   fail fast on any unexpected modal (an unmocked modal hangs headless).
 - **Detection:** the current detect flow is the one Marc blessed

@@ -35,6 +35,16 @@ def wrapped_window(x: np.ndarray, center: float, flat: float,
     return _shoulder(d, flat, soft)
 
 
+def ramp_window(x: np.ndarray, pivot: float, falloff: float) -> np.ndarray:
+    """Signed-axis ramp: 0 below the pivot, 1 above it, smooth cos^2
+    transition spanning pivot +- falloff/2. The 'pivot for our luma
+    masks' — the Chromogen-style modulation shape."""
+    t = np.clip((np.asarray(x, dtype=np.float64) - pivot)
+                / max(falloff, _MIN_SOFT) + 0.5, 0.0, 1.0)
+    w = np.sin(0.5 * np.pi * t) ** 2
+    return np.where(t >= 1.0, 1.0, np.where(t <= 0.0, 0.0, w))
+
+
 def _shoulder(d: np.ndarray, flat: float, soft: float) -> np.ndarray:
     t = np.clip((d - flat) / max(soft, _MIN_SOFT), 0.0, 1.0)
     w = np.cos(0.5 * np.pi * t) ** 2

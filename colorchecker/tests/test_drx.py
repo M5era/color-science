@@ -55,3 +55,33 @@ def test_unknown_slider_rejected():
     node = drx.nodes[0]
     with pytest.raises(KeyError, match="sliderFloatParam99"):
         drx.set_slider(node, 99, 1.0)
+
+
+def test_lut_match_to_drx_end_to_end(tmp_path, monkeypatch, capsys):
+    """The full Plan C pipeline: LUT in -> fitted PowerGrade out."""
+    import sys
+
+    import numpy as np
+
+    from app.core.drx import DrxTemplate
+    from tests.test_lut_match import _chromogen_look_cube
+    from tools import lut_match as cli
+
+    _chromogen_look_cube(tmp_path)
+    out_drx = tmp_path / "fitted.drx"
+    monkeypatch.setattr(sys, "argv", [
+        "lut_match", "--lut", str(tmp_path / "look.cube"),
+        "--samples", "500",
+        "--drx-out", str(out_drx), "--drx-template", str(TEMPLATE),
+    ])
+    cli.main()
+    text = capsys.readouterr().out
+    assert "drx node ColourSaturation#0" in text
+    assert "NO NODE IN TEMPLATE" in text  # LGG/Contrast not in template
+
+    fitted = DrxTemplate(out_drx)
+    sat = next(n for n in fitted.nodes if n.dctl_name == "ColourSaturation")
+    # the fit recovers the baked look's Y/B boost (1.45): the patched
+    # node must carry a clearly-raised Y/B slider, not the default
+    assert sat.sliders[1] > 1.2
+    assert abs(sat.sliders[0] - 1.15) < 0.2

@@ -40,6 +40,11 @@ def main() -> None:
                              "of the lattice sample")
     parser.add_argument("--out", help="export the fitted chain as .cube")
     parser.add_argument("--size", type=int, default=33)
+    parser.add_argument("--drx-out",
+                        help="also write a PowerGrade with the fitted "
+                             "values patched into the template's DCTL nodes")
+    parser.add_argument("--drx-template",
+                        default="templates/example_powergrade_1.6.1.T.drx")
     args = parser.parse_args()
 
     if args.list_presets or not args.lut:
@@ -75,6 +80,10 @@ def main() -> None:
     g = result.chain_noise_gain
     print(f"Chain noise gain: ×{g['median']:.2f} median, ×{g['max']:.2f} max")
     print()
+    print("Node names (<=9 chars for Resolve):",
+          " | ".join(s.short_label(p) for s, p in
+                     zip(result.model.stages, result.model.params)))
+    print()
     for report in result.stage_reports:
         print(report)
         print()
@@ -87,6 +96,37 @@ def main() -> None:
             title="Parametric LUT match",
         )
         print(f"wrote {args.out} ({args.size}^3) — A/B against {args.lut}")
+
+    if args.drx_out:
+        from app.core.drx import DrxTemplate
+
+        drx = DrxTemplate(args.drx_template)
+        counters: dict = {}
+        unmatched = []
+        for stage, params, label in zip(result.model.stages,
+                                        result.model.params,
+                                        result.stage_labels):
+            name = stage.name.replace(" ", "")
+            matches = [n for n in drx.nodes if n.dctl_name == name]
+            k = counters.get(name, 0)
+            counters[name] = k + 1
+            if k >= len(matches):
+                unmatched.append(f"{stage.name} — {label}")
+                continue
+            node = matches[k]
+            for i, value in enumerate(params):
+                if i in node._offsets:
+                    drx.set_slider(node, i, float(value))
+            print(f"drx node {name}#{k} <- {label}  "
+                  f"[node name: {stage.short_label(params)}]")
+        drx.write(args.drx_out)
+        print(f"wrote {args.drx_out} (template: {args.drx_template})")
+        if unmatched:
+            print("NO NODE IN TEMPLATE for these fitted stages — add the "
+                  "DCTL node to your powergrade and re-export it as the "
+                  "template, or paste the sliders by hand:")
+            for u in unmatched:
+                print(f"  {u}")
 
 
 if __name__ == "__main__":

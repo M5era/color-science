@@ -405,3 +405,25 @@ Sat(desat extremes) -> Sat(add) -> Crosstalk -> Contrast -> Sector* ->
 Bleach -> Tint(warm highs) -> Tint(cold lows) -> Sat(final shaping).
 Stage naming by job ("skin squash", "green-to-yellow") aligns with
 the auto-naming plan already in this roadmap.
+
+## PLAN C (Marc, 2026-07-20, for safekeeping)
+
+1. LUT MATCHING: upload a .cube and fit the parametric stage chain to
+   the LUT itself instead of measured patches. This works without any
+   footage: a LUT is a function, so sample source points, apply the
+   LUT (app.core.lut.apply_lut), and the input->output pairs ARE the
+   patch pairs — solve_parametric doesn't care where targets came
+   from. Design choices when built: sampling distribution (uniform
+   lattice vs footage-realistic distribution vs Marc's existing
+   1449-row LogC3 patch dataset — the dataset is attractive because it
+   weights the fit toward colors that actually occur on real charts),
+   domain coverage/weighting, and optionally reporting error through a
+   DRT. Output as usual: per-stage waterfall + paste-ready DCTL
+   sliders — i.e. "explain this LUT as Chromogen-style moves".
+2. TRANSFER-FUNCTION DROPDOWN: the stops calibration (MID_GREY 0.391,
+   STOP 0.0741 in app/core/chromogen.py) is hardcoded Arri LogC3
+   EI800 — Marc only shoots LogC3 today. Later: a dropdown selecting
+   the working transfer function (LogC3 / LogC4 / linear / ...) that
+   sets MID_GREY + STOP per curve, in the DCTLs likely as a
+   DCTLUI_COMBO_BOX. Keep slider VALUES in stops so looks stay
+   portable across transfer functions.

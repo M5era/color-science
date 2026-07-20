@@ -13,6 +13,8 @@ import pytest
 
 from app.core.chromogen import (
     CHROMOGEN_STAGES,
+    MID_GREY,
+    STOP,
     ColourCrosstalkStage,
     ColourSaturationStage,
     ContrastBoostStage,
@@ -130,7 +132,7 @@ def test_contrast_boost_chroma_modes():
     # chroma 0: chromaticity untouched (reuleaux sat constant)
     np.testing.assert_allclose(_sat_of(keep), _sat_of(x), atol=1e-6)
     # chroma 1: exactly the per-channel curve -> sat rises here
-    curve = stage._curve(x, 0.8, 0.4, 0.9)
+    curve = stage._curve(x, 0.8, MID_GREY, MID_GREY + 6.0 * STOP)
     np.testing.assert_allclose(film, curve, atol=1e-12)
     assert _sat_of(film)[0] > _sat_of(x)[0]
 
@@ -140,7 +142,7 @@ def test_contrast_boost_chroma_modes():
 def test_highlight_bleach_desats_highlights_only():
     stage = HighlightBleachStage()
     p = _with(stage, **{"R": 0.9, "Y": 0.9, "G": 0.9,
-                        "B": 0.9, "Pivot": 0.1, "Falloff": 0.3})
+                        "B": 0.9, "Pivot": 1.0, "Falloff": 3.0})
     bright = np.array([[0.95, 0.55, 0.45]])
     dark = np.array([[0.25, 0.12, 0.1]])
     assert _sat_of(stage.apply(bright, p))[0] < _sat_of(bright)[0] * 0.5
@@ -151,7 +153,7 @@ def test_highlight_bleach_unganged_spares_a_sector():
     """The save-the-blue-skies move: relax the blue slider."""
     stage = HighlightBleachStage()
     p = _with(stage, **{"R": 0.9, "Y": 0.9, "G": 0.9,
-                        "B": 0.0, "Pivot": 0.0, "Falloff": 0.3})
+                        "B": 0.0, "Pivot": 0.0, "Falloff": 3.0})
     sky = np.array([[0.55, 0.7, 0.95]])
     warm = np.array([[0.95, 0.7, 0.5]])
     sky_loss = 1.0 - _sat_of(stage.apply(sky, p))[0] / _sat_of(sky)[0]

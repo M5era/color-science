@@ -6,9 +6,10 @@
 // Defaults are the identity: the node does nothing until moved.
 //
 // Standard modulation (as in Chromogen): Zone 0 = everywhere, right =
-// highlights only, left = shadows only; Pivot = luma mask pivot,
-// 0 = mid-grey; Chroma 0 = everything, right = only saturated colors,
-// left = only neutrals.
+// highlights only, left = shadows only; Pivot = luma mask pivot IN
+// STOPS, 0 = mid-grey (calibrated for Arri LogC3 EI800); Chroma 0 =
+// everything, right = only saturated colors, left = only neutrals.
+// Ramp Falloff sliders are widths in stops.
 //
 // The rgb<->reuleaux conversion functions are transcribed from
 // Reuleaux (hotgluebanjo & calvinsilly, github.com/hotgluebanjo/reuleaux),
@@ -20,11 +21,12 @@ DEFINE_UI_PARAMS(hue, Hue, DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 360.0, 0.1)
 DEFINE_UI_PARAMS(skew, Skew, DCTLUI_SLIDER_FLOAT, 0.0, -60.0, 60.0, 0.1)
 DEFINE_UI_PARAMS(falloff, Falloff, DCTLUI_SLIDER_FLOAT, 60.0, 5.0, 180.0, 0.1)
 DEFINE_UI_PARAMS(zone, Zone, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 1.0, 0.001)
-DEFINE_UI_PARAMS(pivot, Pivot, DCTLUI_SLIDER_FLOAT, 0.0, -0.5, 1.6, 0.001)
+DEFINE_UI_PARAMS(pivot, Pivot, DCTLUI_SLIDER_FLOAT, 0.0, -6.0, 8.0, 0.01)
 DEFINE_UI_PARAMS(chroma, Chroma, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 1.0, 0.001)
 
 #define PI_LOCAL 3.141592653589f
-#define MID_GREY 0.4f
+#define MID_GREY 0.391f
+#define STOP 0.0740774f
 #define LUMA_FALLOFF 0.5f
 #define SAT_GATE_PIVOT 0.25f
 #define SAT_GATE_FALLOFF 0.5f
@@ -92,7 +94,7 @@ __DEVICE__ float wrapped_bump(float x, float center, float soft) {
 // Zone / Pivot / Chroma — the standard Chromogen-style modulation.
 // pivot is an OFFSET from mid-grey.
 __DEVICE__ float modulation(float val, float sat, float zone, float pivot, float chroma) {
-    float r = ramp_window(val, MID_GREY + pivot, LUMA_FALLOFF);
+    float r = ramp_window(val, MID_GREY + pivot * STOP, LUMA_FALLOFF);
     float m_luma = 1.0f - _fabs(zone)
                  + _fabs(zone) * (zone >= 0.0f ? r : 1.0f - r);
     float rs = ramp_window(sat, SAT_GATE_PIVOT, SAT_GATE_FALLOFF);

@@ -30,8 +30,14 @@ from app.core.windows import ramp_window, wrapped_window
 
 _TWO_PI = 2.0 * np.pi
 
-MID_GREY = 0.4          # "Pivot 0" reference in working units (LogC-ish)
-LUMA_FALLOFF = 0.5      # fixed smooth width of the Zone luma mask
+# Stops calibration (Arri LogC3 EI800: 18% grey encodes to ~0.391 and
+# one scene stop spans ~0.0741 code values in the log region). All
+# Pivot sliders are in STOPS relative to mid-grey; ramp Falloffs are a
+# width in stops. Future: transfer-function dropdown (see ROADMAP Plan
+# C notes) — for now Marc shoots LogC3 only.
+MID_GREY = 0.391
+STOP = 0.0740774
+LUMA_FALLOFF = 0.5      # fixed smooth width of the Zone luma mask (code values)
 SAT_GATE_PIVOT = 0.25   # fixed internal shape of the Chroma gate
 SAT_GATE_FALLOFF = 0.5
 
@@ -44,9 +50,9 @@ RG_AXIS_TURNS = 150.0 / 360.0   # green-cyan (+) <-> magenta-red (-)
 
 def modulation(val, sat, zone, pivot, chroma):
     """The standard Zone / Pivot / Chroma weight, in [0, 1].
-    `pivot` is an OFFSET from mid-grey. Identity (weight 1 everywhere)
+    `pivot` is in STOPS from mid-grey. Identity (weight 1 everywhere)
     at zone == 0 and chroma == 0."""
-    r = ramp_window(val, MID_GREY + pivot, LUMA_FALLOFF)
+    r = ramp_window(val, MID_GREY + pivot * STOP, LUMA_FALLOFF)
     m_luma = 1.0 - abs(zone) + abs(zone) * (r if zone >= 0.0 else 1.0 - r)
     rs = ramp_window(sat, SAT_GATE_PIVOT, SAT_GATE_FALLOFF)
     m_chroma = 1.0 - abs(chroma) + abs(chroma) * (
@@ -104,8 +110,8 @@ class ColourSaturationStage(Stage):
         return np.array([1.0, 1.0, 0.0, 0.0, 0.0])
 
     def bounds(self):
-        lo = [0.0, 0.0, -1.0, -0.5, -1.0]
-        hi = [3.0, 3.0, 1.0, 1.6, 1.0]
+        lo = [0.0, 0.0, -1.0, -6.0, -1.0]
+        hi = [3.0, 3.0, 1.0, 8.0, 1.0]
         return np.asarray(lo), np.asarray(hi)
 
     def apply(self, x, params):
@@ -157,8 +163,8 @@ class ColourCrosstalkStage(Stage):
         return np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
 
     def bounds(self):
-        lo = [-1.0, -1.0, -1.0, -1.0, -1.0, -0.5, -1.0]
-        hi = [1.0, 1.0, 1.0, 1.0, 1.0, 1.6, 1.0]
+        lo = [-1.0, -1.0, -1.0, -1.0, -1.0, -6.0, -1.0]
+        hi = [1.0, 1.0, 1.0, 1.0, 1.0, 8.0, 1.0]
         return np.asarray(lo), np.asarray(hi)
 
     def apply(self, x, params):
@@ -192,7 +198,7 @@ class ContrastBoostStage(Stage):
     """Chromogen Contrast Boost: analytic smooth contrast — slope
     (1 + boost) around the grey pivot, smoothly returning to slope 1
     above the highlight pivot (filmic shoulder; push Highlight Pivot to
-    max to disable it). Both pivots are offsets from mid-grey. The
+    max to disable it). Both pivots are in STOPS from mid-grey. The
     Chroma mix blends val-only application (0 = chromaticity untouched)
     with per-RGB-channel (1 = sat rises with contrast); default 0.5."""
 
@@ -202,11 +208,11 @@ class ContrastBoostStage(Stage):
     _SHOULDER = 0.15  # softplus width of the highlight return, val units
 
     def identity(self):
-        return np.array([0.0, 0.0, 0.5, 0.5])
+        return np.array([0.0, 0.0, 6.0, 0.5])
 
     def bounds(self):
-        return (np.asarray([-0.9, -0.4, 0.05, 0.0]),
-                np.asarray([2.0, 0.6, 2.6, 1.0]))
+        return (np.asarray([-0.9, -4.0, 0.5, 0.0]),
+                np.asarray([2.0, 4.0, 14.0, 1.0]))
 
     def _curve(self, v, boost, grey_abs, highlight_abs):
         w = self._SHOULDER
@@ -218,8 +224,8 @@ class ContrastBoostStage(Stage):
 
     def apply(self, x, params):
         boost, grey_pivot, highlight_pivot, mix = params
-        grey_abs = MID_GREY + grey_pivot
-        highlight_abs = MID_GREY + highlight_pivot
+        grey_abs = MID_GREY + grey_pivot * STOP
+        highlight_abs = MID_GREY + highlight_pivot * STOP
         reuleaux = rgb_to_reuleaux(x)
         hue, sat, val = reuleaux[..., 0], reuleaux[..., 1], reuleaux[..., 2]
 
@@ -250,11 +256,11 @@ class HighlightBleachStage(Stage):
     param_names = ["R", "Y", "G", "B", "Pivot", "Falloff", "Chroma"]
 
     def identity(self):
-        return np.array([0.0, 0.0, 0.0, 0.0, -0.15, 0.6, 0.0])
+        return np.array([0.0, 0.0, 0.0, 0.0, -2.0, 4.0, 0.0])
 
     def bounds(self):
-        lo = [0.0, 0.0, 0.0, 0.0, -0.6, 0.02, -1.0]
-        hi = [1.0, 1.0, 1.0, 1.0, 1.6, 2.0, 1.0]
+        lo = [0.0, 0.0, 0.0, 0.0, -6.0, 0.5, -1.0]
+        hi = [1.0, 1.0, 1.0, 1.0, 8.0, 16.0, 1.0]
         return np.asarray(lo), np.asarray(hi)
 
     def apply(self, x, params):
@@ -266,7 +272,7 @@ class HighlightBleachStage(Stage):
 
         w = (
             rygb_interp(hue, amounts)
-            * ramp_window(val, MID_GREY + pivot, falloff)
+            * ramp_window(val, MID_GREY + pivot * STOP, falloff * STOP)
             * modulation(val, sat, 0.0, 0.0, chroma)
         )
         sat2 = sat * (1.0 - w)
@@ -284,7 +290,7 @@ class HighlightBleachStage(Stage):
 class NeutralTintStage(Stage):
     """Chromogen Neutral Tint: tint toward a picked hue with a SIGNED
     amount (+ = highlights, - = shadows) at constant val — contrast
-    untouched by construction. Pivot is an offset from mid-grey; the
+    untouched by construction. Pivot/Falloff are in stops; the
     Chroma gate defaults protective (only-neutrals) so saturated colors
     aren't pushed toward a gamut edge. Two instances = warm highs +
     cold lows."""
@@ -298,11 +304,11 @@ class NeutralTintStage(Stage):
     TINT_SCALE = 0.25
 
     def identity(self):
-        return np.array([0.0, 0.0, 0.0, 0.6, -0.5])
+        return np.array([0.0, 0.0, 0.0, 4.0, -0.5])
 
     def bounds(self):
-        lo = [0.0, -1.0, -0.6, 0.02, -1.0]
-        hi = [360.0, 1.0, 1.6, 2.0, 1.0]
+        lo = [0.0, -1.0, -6.0, 0.5, -1.0]
+        hi = [360.0, 1.0, 8.0, 16.0, 1.0]
         return np.asarray(lo), np.asarray(hi)
 
     def apply(self, x, params):
@@ -310,7 +316,7 @@ class NeutralTintStage(Stage):
         reuleaux = rgb_to_reuleaux(x)
         hue, sat, val = reuleaux[..., 0], reuleaux[..., 1], reuleaux[..., 2]
 
-        r = ramp_window(val, MID_GREY + pivot, falloff)
+        r = ramp_window(val, MID_GREY + pivot * STOP, falloff * STOP)
         side = r if amount >= 0.0 else 1.0 - r
         m = side * modulation(val, sat, 0.0, 0.0, chroma)
 
@@ -351,8 +357,8 @@ class _SectorStage(Stage):
         return np.array([0.0, self._AMOUNT_ID, 60.0, 0.0, 0.0, 0.0])
 
     def bounds(self):
-        lo = [0.0, self._AMOUNT_LO, 5.0, -1.0, -0.5, -1.0]
-        hi = [360.0, self._AMOUNT_HI, 180.0, 1.0, 1.6, 1.0]
+        lo = [0.0, self._AMOUNT_LO, 5.0, -1.0, -6.0, -1.0]
+        hi = [360.0, self._AMOUNT_HI, 180.0, 1.0, 8.0, 1.0]
         return np.asarray(lo), np.asarray(hi)
 
     def _weight(self, hue, sat, val, params):

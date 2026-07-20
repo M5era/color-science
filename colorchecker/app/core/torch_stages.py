@@ -195,7 +195,7 @@ def _ramp(x, pivot, falloff):
 
 def _modulation(val, sat, zone, pivot, chroma):
     r = _ramp(val,
-              chromogen.MID_GREY + pivot,
+              chromogen.MID_GREY + pivot * chromogen.STOP,
               torch.as_tensor(chromogen.LUMA_FALLOFF, dtype=val.dtype))
     m_luma = 1.0 - torch.abs(zone) + torch.abs(zone) * torch.where(
         zone >= 0.0, r, 1.0 - r
@@ -257,8 +257,8 @@ def _contrast_curve(v, boost, pivot, highlight, width):
 
 def _contrast_boost_apply(stage, x, p):
     w = stage._SHOULDER
-    grey_abs = chromogen.MID_GREY + p[1]
-    highlight_abs = chromogen.MID_GREY + p[2]
+    grey_abs = chromogen.MID_GREY + p[1] * chromogen.STOP
+    highlight_abs = chromogen.MID_GREY + p[2] * chromogen.STOP
     hue, sat, val = _rgb_to_reuleaux(x)
     val_mode = _reuleaux_to_rgb(hue, sat,
                                 _contrast_curve(val, p[0], grey_abs, highlight_abs, w))
@@ -271,7 +271,7 @@ def _highlight_bleach_apply(stage, x, p):
     zero = p[6] * 0.0
     w = (
         _rygb_interp(hue, p[:4])
-        * _ramp(val, chromogen.MID_GREY + p[4], p[5])
+        * _ramp(val, chromogen.MID_GREY + p[4] * chromogen.STOP, p[5] * chromogen.STOP)
         * _modulation(val, sat, zero, zero, p[6])
     )
     return _reuleaux_to_rgb(hue, sat * (1.0 - w), val)
@@ -279,7 +279,7 @@ def _highlight_bleach_apply(stage, x, p):
 
 def _neutral_tint_apply(stage, x, p):
     hue, sat, val = _rgb_to_reuleaux(x)
-    r = _ramp(val, chromogen.MID_GREY + p[2], p[3])
+    r = _ramp(val, chromogen.MID_GREY + p[2] * chromogen.STOP, p[3] * chromogen.STOP)
     side = torch.where(p[1] >= 0.0, r, 1.0 - r)
     zero = p[4] * 0.0
     m = side * _modulation(val, sat, zero, zero, p[4])

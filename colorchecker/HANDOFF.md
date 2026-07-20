@@ -184,8 +184,9 @@ nodes are leftover pool junk — ignore.
   to identity, node labels set to short_label(), layer mixers dropped
   (generated grades are pure serial — Marc's directive), head prep +
   openDRT/3DCube tail kept. See ROADMAP "NODE-GRAPH SURGERY".
-  NOT YET VERIFIED IN RESOLVE — Marc must import a generated .drx
-  with duplicated/reordered nodes before this is trusted.
+  VERIFIED IN MARC'S RESOLVE 2026-07-20 ("it works!"): a generated
+  .drx with a duplicated NeutralTint, rewired serial chain, renamed
+  labels and identity-reset leftovers imported cleanly.
 
 ---
 
@@ -261,10 +262,8 @@ port module must carry the license; fine for private use).
 4. Sector Saturation linear range 0-2: Marc may want it tighter.
 5. Tone pre-curve option for LUT matching (bridging different
    renderings — roadmap).
-6. drx node-graph surgery: BUILT (drx_graph.py — add/duplicate/
-   reorder/relabel all work, tests green). Awaiting Marc's Resolve
-   import test of a generated .drx with duplicated nodes before we
-   trust it. Neutral Tint v2 also needs Marc's on-footage judgement
-   (dye convergence + focus pivot — reinstall dctl/NeutralTint.dctl).
+6. drx node-graph surgery: DONE + VERIFIED in Resolve (2026-07-20).
+   Neutral Tint v2 still needs Marc's on-footage judgement (dye
+   convergence + focus pivot — reinstall dctl/NeutralTint.dctl).
 7. Transfer-function dropdown for stops calibration (LogC3-only now).
 8. Curves-in-DRX experiment (old thread, still unrun).

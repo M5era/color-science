@@ -235,9 +235,10 @@ re-encode reproduces the input exactly):
   ColourSaturation, 2x NeutralTint) now materializes completely.
 - The DMC/SLog3 mini-grade in body 0 of liftgammagain_1.2.1.T.drx is
   untouched — surgery targets only the body holding our stage nodes.
-- VERIFICATION GATE OPEN: Resolve import of a generated
-  (duplicated/reordered) .drx not yet confirmed by Marc — that is the
-  remaining proof, same as the original slider-patch feasibility run.
+- VERIFIED IN RESOLVE (Marc, 2026-07-20): generated .drx with a
+  duplicated NeutralTint, full serial rewire, renamed labels and
+  identity-reset leftovers imported cleanly. Graph surgery is
+  trusted end-to-end.
 
 OPEN QUESTION — native custom curves in DRX (would let Stages 3/4
 ship as Resolve's own curve UI instead of 1D LUT/DCTL): Marc's K64

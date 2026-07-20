@@ -1,7 +1,7 @@
 """Generate a Resolve PowerGrade (.drx) with fitted stage parameters.
 
 Clones a template .drx whose node stack already contains our DCTL
-nodes (e.g. templates/example_powergrade_1.6.1.T.drx, built by Marc)
+nodes (e.g. templates/contrast_boost_1.6.4.T.drx, built by Marc)
 and writes slider values into them — nodes are matched to stages by
 DCTL filename, sliders by position (our param_names order == the
 DCTL's DEFINE_UI_PARAMS order). Patching is fixed-width, so nothing
@@ -9,7 +9,7 @@ shifts; bodies are re-zstd-compressed on save.
 
 Usage (from the colorchecker/ directory):
 
-  python3 -m tools.drx_export --template templates/example_powergrade_1.6.1.T.drx --list
+  python3 -m tools.drx_export --template templates/contrast_boost_1.6.4.T.drx --list
   python3 -m tools.drx_export --template ... --out fitted.drx \
       --set "ColourSaturation:R/G=1.15" --set "ColourSaturation:Y/B=1.45" \
       --set "NeutralTint:Amount=0.3" --set "NeutralTint:Hue=40"

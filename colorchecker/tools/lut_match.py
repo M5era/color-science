@@ -52,7 +52,7 @@ def main() -> None:
                         help="also write a PowerGrade with the fitted "
                              "values patched into the template's DCTL nodes")
     parser.add_argument("--drx-template",
-                        default="templates/example_powergrade_1.6.1.T.drx")
+                        default="templates/contrast_boost_1.6.4.T.drx")
     args = parser.parse_args()
 
     if args.list_presets or not args.lut:

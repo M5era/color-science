@@ -65,7 +65,9 @@ colorchecker/
     stages.py                  parametric stages (Matrix/Luma/RGB/Reuleaux) — ML-ready contract
     parametric.py              solve_parametric: stage chain fit + waterfall + paste-ready reports
   app/ui/                      PySide6; tabs/ = the three tabs
-  tools/reuleaux_bake.py       CLI: bake reuleaux params into a .cube for Resolve A/B
+  tools/reuleaux_bake.py       CLI: bake reuleaux (Broad) params into a .cube for Resolve A/B
+  tools/reuleaux_fine_bake.py  CLI: bake a Fine zone into a .cube (units = DCTL sliders)
+  dctl/ReuleauxFine.dctl       companion DCTL for the Fine stage — solver report pastes in 1:1
   tests/                       82 tests, all green, offscreen
   ROADMAP.md                   Plan B and future design (detailed)
   HANDOFF.md                   this file
@@ -247,7 +249,7 @@ now — everything stays in reuleaux space until Marc says otherwise.
   `python3 -m pip`, NOT `pip3`** (repo path has spaces, which breaks the
   pip script shim). `scipy` IS required (a missing entry once crashed
   the app on import — it's in requirements now).
-- **Tests:** `QT_QPA_PLATFORM=offscreen python3 -m pytest tests/` — 95
+- **Tests:** `QT_QPA_PLATFORM=offscreen python3 -m pytest tests/` — 97
   green, ~22–35s. Synthetic TIFFs generated at runtime; no footage
   committed (`*.tif` git-ignored). UI tests mock the file dialogs and
   fail fast on any unexpected modal (an unmocked modal hangs headless).
@@ -271,6 +273,15 @@ mask and luma mask** (`app/core/windows.py`), gating DCTL-style
 hue/sat/val moves, neutral-axis protected, chainable for several
 zones. New preset "Reuleaux Broad + Fine". This was Marc's explicit
 design: keep broad as-is, add fine — NOT masks bolted onto the fixed-6.
+
+**Fine now has its companion DCTL** (`dctl/ReuleauxFine.dctl`, 12
+sliders, hue values in degrees — the solver's stage report prints in
+exactly these units, paste 1:1; chain several nodes for several
+zones). `tools/reuleaux_fine_bake.py` bakes the same slider values
+into a .cube for the Resolve A/B — same validation flow that proved
+Broad. NOT yet pixel-verified in Resolve (needs Marc). The DCTL embeds
+the unlicensed reuleaux conversions: private use only, never
+redistribute.
 
 **Awaiting Marc:** real-footage validation of the full parametric
 pipeline (incl. Broad + Fine); report which stage earns its keep from

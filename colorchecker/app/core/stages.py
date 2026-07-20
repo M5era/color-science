@@ -279,7 +279,7 @@ class ReuleauxFineStage(Stage):
                     f"core ±{flat:.3f}  soft {soft:.3f}")
 
         return "\n".join([
-            "Reuleaux Fine zone:",
+            "Reuleaux Fine zone (paste into dctl/ReuleauxFine.dctl, degrees):",
             (f"  Hue center {deg(p[0] % 1.0):.1f}°  "
              f"core ±{deg(p[1]):.1f}°  soft {deg(p[2]):.1f}°"),
             (f"  Δhue {deg(p[3]):+.2f}°  Sat ×{p[4]:.3f}  "

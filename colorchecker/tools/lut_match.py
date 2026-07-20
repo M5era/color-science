@@ -115,34 +115,59 @@ def main() -> None:
 
     if args.drx_out:
         from app.core.drx import DrxTemplate
+        from app.core.drx_graph import (graph_bodies, rebuild_as_chain,
+                                        write_graph)
 
         drx = DrxTemplate(args.drx_template)
-        counters: dict = {}
-        unmatched = []
-        for stage, params, label in zip(result.model.stages,
-                                        result.model.params,
-                                        result.stage_labels):
-            name = stage.name.replace(" ", "")
-            matches = [n for n in drx.nodes if n.dctl_name == name]
-            k = counters.get(name, 0)
-            counters[name] = k + 1
-            if k >= len(matches):
-                unmatched.append(f"{stage.name} — {label}")
-                continue
-            node = matches[k]
-            for i, value in enumerate(params):
-                if i in node._offsets:
-                    drx.set_slider(node, i, float(value))
-            print(f"drx node {name}#{k} <- {label}  "
-                  f"[node name: {stage.short_label(params)}]")
+        stage_names = {s.name.replace(" ", "") for s in result.model.stages}
+        graphs = graph_bodies(drx)
+        candidates = {
+            bi: sum(1 for n in g.nodes if n.dctl_name in stage_names)
+            for bi, g in graphs.items()
+        }
+        body_index = max(candidates, key=candidates.get, default=None)
+        if body_index is None or candidates[body_index] == 0:
+            raise SystemExit(
+                f"template {args.drx_template} has no node graph with "
+                "our DCTL stage nodes — re-export it from Resolve")
+        graph = graphs[body_index]
+
+        want = [
+            (stage.name.replace(" ", ""), list(params),
+             stage.short_label(params))
+            for stage, params in zip(result.model.stages,
+                                     result.model.params)
+        ]
+        identity_lookup = {
+            stage.name.replace(" ", ""): list(stage.identity())
+            for stage in result.model.stages
+        }
+        reports = rebuild_as_chain(graph, want, stage_names,
+                                   identity_lookup)
+        write_graph(drx, body_index, graph)
         drx.write(args.drx_out)
-        print(f"wrote {args.drx_out} (template: {args.drx_template})")
-        if unmatched:
-            print("NO NODE IN TEMPLATE for these fitted stages — add the "
-                  "DCTL node to your powergrade and re-export it as the "
-                  "template, or paste the sliders by hand:")
-            for u in unmatched:
-                print(f"  {u}")
+
+        # reports[:len(want)] align 1:1 with the fitted stages; the
+        # identity resets for leftover template nodes follow
+        missing = []
+        for r, label in zip(reports[:len(want)], result.stage_labels):
+            if r.action == "missing":
+                missing.append(r)
+                continue
+            print(f"drx node {r.dctl_name} id={r.node_id} "
+                  f"[{r.action}] <- {label}  [node name: {r.label}]")
+        for r in reports[len(want):]:
+            print(f"drx node {r.dctl_name} id={r.node_id} "
+                  f"[left in chain, reset to identity]")
+        print(f"wrote {args.drx_out} (template: {args.drx_template}; "
+              "serial chain rebuilt in fitted order, layer mixers "
+              "dropped)")
+        if missing:
+            print("NO NODE OF THIS TYPE IN TEMPLATE — add the DCTL node "
+                  "to your powergrade and re-export it as the template, "
+                  "or paste the sliders by hand:")
+            for r in missing:
+                print(f"  {r.dctl_name} — {r.label}")
 
 
 if __name__ == "__main__":

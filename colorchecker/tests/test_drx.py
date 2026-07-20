@@ -124,8 +124,9 @@ def test_lut_match_to_drx_end_to_end(tmp_path, monkeypatch, capsys):
     ])
     cli.main()
     text = capsys.readouterr().out
-    assert "drx node ColourSaturation#0" in text
-    assert "NO NODE IN TEMPLATE" in text  # LGG/Contrast not in template
+    assert "drx node ColourSaturation" in text
+    # LGG/Contrast nodes don't exist in the example template at all
+    assert "NO NODE OF THIS TYPE IN TEMPLATE" in text
 
     fitted = DrxTemplate(out_drx)
     sat = next(n for n in fitted.nodes if n.dctl_name == "ColourSaturation")
@@ -157,10 +158,9 @@ def test_lut_match_full_template_maps_every_stage(tmp_path, monkeypatch,
     ])
     cli.main()
     text = capsys.readouterr().out
-    assert "NO NODE IN TEMPLATE" not in text
-    for node in ("LiftGammaGain#0", "ColourSaturation#0",
-                 "ColourCrosstalk#0", "ContrastBoost#0",
-                 "HighlightBleach#0", "NeutralTint#0"):
+    assert "NO NODE OF THIS TYPE IN TEMPLATE" not in text
+    for node in ("LiftGammaGain", "ColourSaturation", "ColourCrosstalk",
+                 "ContrastBoost", "HighlightBleach", "NeutralTint"):
         assert f"drx node {node}" in text
 
     fitted = DrxTemplate(out_drx)
@@ -168,3 +168,45 @@ def test_lut_match_full_template_maps_every_stage(tmp_path, monkeypatch,
     # template default was 0.516; the fitted (near-identity look on
     # this axis) must have overwritten it
     assert cb.sliders[0] != pytest.approx(0.516279, abs=1e-6)
+
+
+def test_lut_match_full_stack_preset_duplicates_nodes(tmp_path,
+                                                      monkeypatch,
+                                                      capsys):
+    """The 'Chromogen film look (full stack)' preset wants THREE
+    ColourSaturations and TWO NeutralTints — the graph rebuild must
+    materialize the extra instances by duplication and wire them in
+    chain order."""
+    import sys
+
+    from app.core.drx import DrxTemplate
+    from app.core.drx_graph import graph_bodies
+    from tests.test_lut_match import _chromogen_look_cube
+    from tools import lut_match as cli
+
+    _chromogen_look_cube(tmp_path)
+    out_drx = tmp_path / "fitted_stack.drx"
+    monkeypatch.setattr(sys, "argv", [
+        "lut_match", "--lut", str(tmp_path / "look.cube"),
+        "--samples", "400",
+        "--preset", "Chromogen film look (full stack)",
+        "--drx-out", str(out_drx), "--drx-template", str(FULL_TEMPLATE),
+    ])
+    cli.main()
+    text = capsys.readouterr().out
+    assert "NO NODE OF THIS TYPE IN TEMPLATE" not in text
+    assert "[duplicated]" in text
+
+    fitted = DrxTemplate(out_drx)
+    graphs = graph_bodies(fitted)
+    graph = max(graphs.values(),
+                key=lambda g: sum(1 for n in g.nodes if n.dctl_name))
+    main_names = [graph.node(nid).dctl_name for nid in graph.main_line()]
+    assert main_names.count("ColourSaturation") == 3
+    assert main_names.count("NeutralTint") == 2
+    # pure serial: chain covers every node, mixer gone
+    assert len(main_names) == len(graph.nodes)
+    assert not any(n.is_mixer for n in graph.nodes)
+    # fitted chain order: preset says LGG first, tail stays display-side
+    assert main_names[0] == "LiftGammaGain"
+    assert main_names[-2:] == ["OpenDRT", "MONO-3D-Cube-v1.1"]

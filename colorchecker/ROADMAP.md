@@ -210,25 +210,34 @@ Flow once Algorithm B exists: Marc saves a one-time template .drx
 containing our zone DCTL node(s) with defaults; the app clones it,
 writes fitted values into the sliders, outputs a ready PowerGrade.
 
-TEMPLATE LIMITS (state 2026-07-20, after Marc's full-stack template
-upload): patching can only FILL nodes that already exist in the
-template — it cannot ADD nodes, DUPLICATE them, or REWIRE the graph
-order. Node order/count/wiring are variable-length protobuf (adding a
-node shifts every offset; the graph edges reference node ids we don't
-re-serialize), so "different orders or more nodes automatically" needs
-a generic protobuf re-serializer — same blocker as node-label patching
-(handoff open thread). Practical path today: Marc keeps a small
-LIBRARY of templates (one per node stack/order he actually uses) and
-picks with --drx-template; a chain stage with no free node of its type
-is reported for manual pasting. Note byte order of nodes inside the
-body is STORAGE order (Resolve appends on creation), not necessarily
-graph processing order — matching by DCTL filename is unaffected, but
-don't infer wiring from --list order. liftgammagain_1.2.1.T.drx is
-the default template: all 9 Chromogen tools (incl. ContrastBoost) +
-LiftGammaGain + openDRT, so the default Chromogen-match chain maps
-with zero unmatched stages. If the full protobuf re-serializer ever
-lands, it unlocks: node add/remove/reorder, label patching, and
-duplicate-stage chains without pre-built duplicate nodes.
+NODE-GRAPH SURGERY — LANDED 2026-07-20 (app/core/drx_graph.py; was
+"TEMPLATE LIMITS"). The grade protobuf is now fully decoded and
+re-serializable (byte-identical round-trip gated on every template
+body in tests — Resolve writes minimal varints, so a faithful
+re-encode reproduces the input exactly):
+- grade msg: .7 repeated NODE {1 id, 2 serial badge, 4/5 x/y,
+  6 LABEL string, 8 kind (44 corrector / 90 layer mixer), 9 builtin
+  params raw, 10 OFX/DCTL payload with the fixed-width sliders},
+  .8 repeated EDGE {1 from, 3 to, [4 dest port], 7 link id},
+  .9 ENTRY (repeated connection — Marc's full template feeds two
+  branches into a layer mixer), .10 EXIT.
+- Capabilities: duplicate_node, serial_rebuild (rewire the whole
+  grade as one serial chain, drop mixers/orphans, renumber badges,
+  grid-layout x/y), node LABEL patching (old open thread — labels are
+  plain strings in the node record), slider patching inside the node's
+  own OFX bytes.
+- rebuild_as_chain materializes a fitted chain: assign nodes by DCTL
+  type, DUPLICATE when the chain wants more instances than the
+  template has, keep head prep + display tail (openDRT/3DCube) in
+  place, reset unfitted stage nodes to identity (kept for
+  hand-tweaking), drop layer mixers (Marc: generated grades are pure
+  serial). lut_match --drx-out uses this; the full-stack preset (3x
+  ColourSaturation, 2x NeutralTint) now materializes completely.
+- The DMC/SLog3 mini-grade in body 0 of liftgammagain_1.2.1.T.drx is
+  untouched — surgery targets only the body holding our stage nodes.
+- VERIFICATION GATE OPEN: Resolve import of a generated
+  (duplicated/reordered) .drx not yet confirmed by Marc — that is the
+  remaining proof, same as the original slider-patch feasibility run.
 
 OPEN QUESTION — native custom curves in DRX (would let Stages 3/4
 ship as Resolve's own curve UI instead of 1D LUT/DCTL): Marc's K64

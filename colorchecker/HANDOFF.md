@@ -243,6 +243,18 @@ tests: a Fine zone hidden in the greens that scipy provably cannot
 find (zero finite-diff gradient, no window overlap from the red start)
 is found and fit by the torch backend.
 
+**PowerGrade generation WORKS end-to-end** (`app/core/drx.py` +
+`tools/drx_export.py`): Marc's `templates/example_powergrade_1.6.1.T.drx`
+stacks our 8 Chromogen DCTL nodes + his genesis cube node; slider
+values live as fixed-width doubles after each `sliderFloatParamN`
+(protobuf `12 09 11 <double>` inside the zstd body), nodes are matched
+by DCTL filename and sliders by our param_names order. Patch → re-zstd
+→ valid .drx; roundtrip verified byte-exact. `--list` shows any
+template's nodes with named sliders. The .dpx that Resolve exports
+next to a .drx is only the gallery still preview — NOT needed, the
+drx embeds its own thumbnail. NOT yet import-verified in Marc's
+Resolve (a demo file was sent to him).
+
 **Latest (end of session):** Chromogen solve modes + LUT matching are
 BUILT. "Chromogen match" mode = Lift Gamma Gain prep (lift/gamma/
 per-channel gain; smooth+monotone; reg_scale=25 AND fitted last in the
@@ -291,7 +303,7 @@ in reuleaux space until Marc says otherwise.
   `python3 -m pip`, NOT `pip3`** (repo path has spaces, which breaks the
   pip script shim). `scipy` IS required (a missing entry once crashed
   the app on import — it's in requirements now).
-- **Tests:** `QT_QPA_PLATFORM=offscreen python3 -m pytest tests/` — 131
+- **Tests:** `QT_QPA_PLATFORM=offscreen python3 -m pytest tests/` — 134
   green, ~1–3 min (torch tests auto-skip if torch is not installed).
   The STAGE_POOL-looping tests (identity passthrough, torch-mirror
   parity) cover every registered stage automatically — new stages get

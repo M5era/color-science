@@ -1,0 +1,206 @@
+"""Parametric match stages: pure functions over flat parameter vectors.
+
+The contract every stage obeys — and the reason this is ready for
+gradient-based optimization later:
+
+- ALL state is a flat float vector `params` with box `bounds()`
+- `apply(x, params)` is pure and vectorized: no hidden state, no
+  side effects; swap numpy for torch and the architecture holds
+- `identity()` is the do-nothing parameter vector (also the
+  regularization anchor, so overlapping stages don't fight)
+
+Stages: LinearMatrixStage (9), LumaCurveStage (monotone shared 1D),
+RGBCurvesStage (3 monotone 1D), ReuleauxStage (the validated port).
+"""
+
+from abc import ABC, abstractmethod
+
+import numpy as np
+
+from app.core.reuleaux import ReuleauxUserParams, reuleaux_user
+
+
+class Stage(ABC):
+    name: str = "stage"
+
+    @abstractmethod
+    def identity(self) -> np.ndarray: ...
+
+    @abstractmethod
+    def bounds(self) -> tuple[np.ndarray, np.ndarray]: ...
+
+    @abstractmethod
+    def apply(self, x: np.ndarray, params: np.ndarray) -> np.ndarray: ...
+
+    def describe(self, params: np.ndarray) -> str:
+        return f"{self.name}: {np.round(params, 4).tolist()}"
+
+
+class LinearMatrixStage(Stage):
+    name = "Matrix"
+
+    def identity(self) -> np.ndarray:
+        return np.eye(3).ravel()
+
+    def bounds(self):
+        return np.full(9, -2.0), np.full(9, 3.0)
+
+    def apply(self, x, params):
+        return x @ params.reshape(3, 3).T
+
+    def describe(self, params):
+        rows = params.reshape(3, 3)
+        lines = [" ".join(f"{v: .5f}" for v in row) for row in rows]
+        return "Matrix (rows R,G,B):\n  " + "\n  ".join(lines)
+
+
+def _interp_extrap(x: np.ndarray, xs: np.ndarray, ys: np.ndarray) -> np.ndarray:
+    """Piecewise-linear with linear extrapolation past the end knots
+    (a clamped contrast curve would flatten scene values outside 0..1)."""
+    y = np.interp(x, xs, ys)
+    slope_lo = (ys[1] - ys[0]) / (xs[1] - xs[0])
+    slope_hi = (ys[-1] - ys[-2]) / (xs[-1] - xs[-2])
+    y = np.where(x < xs[0], ys[0] + (x - xs[0]) * slope_lo, y)
+    y = np.where(x > xs[-1], ys[-1] + (x - xs[-1]) * slope_hi, y)
+    return y
+
+
+class _MonotoneCurve:
+    """Shared machinery: n knots on a fixed x grid over [0, 1].
+
+    Params per curve: [y0, d1..d_{n-1}] with every delta bounded > 0 —
+    the fitted curve is monotone BY CONSTRUCTION, no solve can produce
+    tone reversal."""
+
+    def __init__(self, n_points: int):
+        self.n_points = n_points
+        self.xs = np.linspace(0.0, 1.0, n_points)
+
+    @property
+    def n_params(self) -> int:
+        return self.n_points
+
+    def identity_curve(self) -> np.ndarray:
+        spacing = 1.0 / (self.n_points - 1)
+        return np.concatenate([[0.0], np.full(self.n_points - 1, spacing)])
+
+    def curve_bounds(self):
+        lo = np.concatenate([[-1.0], np.full(self.n_points - 1, 1e-3)])
+        hi = np.concatenate([[1.0], np.full(self.n_points - 1, 1.0)])
+        return lo, hi
+
+    def ys(self, params: np.ndarray) -> np.ndarray:
+        return params[0] + np.concatenate([[0.0], np.cumsum(params[1:])])
+
+    def evaluate(self, x: np.ndarray, params: np.ndarray) -> np.ndarray:
+        return _interp_extrap(x, self.xs, self.ys(params))
+
+
+class LumaCurveStage(Stage):
+    """One monotone contrast curve applied identically to R, G and B."""
+
+    name = "Luma Curve"
+
+    def __init__(self, n_points: int = 6):
+        self._curve = _MonotoneCurve(n_points)
+
+    def identity(self):
+        return self._curve.identity_curve()
+
+    def bounds(self):
+        return self._curve.curve_bounds()
+
+    def apply(self, x, params):
+        return self._curve.evaluate(x, params)
+
+    def describe(self, params):
+        ys = self._curve.ys(params)
+        pairs = ", ".join(f"{x:.2f}->{y:.4f}" for x, y in zip(self._curve.xs, ys))
+        return f"Luma curve knots: {pairs}"
+
+
+class RGBCurvesStage(Stage):
+    """Three independent monotone curves (split-toning residual)."""
+
+    name = "RGB Curves"
+
+    def __init__(self, n_points: int = 6):
+        self._curve = _MonotoneCurve(n_points)
+
+    def identity(self):
+        return np.tile(self._curve.identity_curve(), 3)
+
+    def bounds(self):
+        lo, hi = self._curve.curve_bounds()
+        return np.tile(lo, 3), np.tile(hi, 3)
+
+    def apply(self, x, params):
+        n = self._curve.n_params
+        out = np.empty_like(x)
+        for channel in range(3):
+            block = params[channel * n : (channel + 1) * n]
+            out[..., channel] = self._curve.evaluate(x[..., channel], block)
+        return out
+
+    def describe(self, params):
+        n = self._curve.n_params
+        parts = []
+        for label, channel in (("R", 0), ("G", 1), ("B", 2)):
+            ys = self._curve.ys(params[channel * n : (channel + 1) * n])
+            pairs = ", ".join(f"{y:.4f}" for y in ys)
+            parts.append(f"  {label}: [{pairs}] at x={np.round(self._curve.xs, 2).tolist()}")
+        return "RGB curve knots:\n" + "\n".join(parts)
+
+
+class ReuleauxStage(Stage):
+    """The validated 1:1 reuleaux port; params in DCTL slider order:
+    [overall_sat, overall_val, then (hue, sat, val) per R,Y,G,C,B,M]."""
+
+    name = "Reuleaux"
+
+    _COLORS = ("red", "yellow", "green", "cyan", "blue", "magenta")
+
+    def identity(self):
+        return np.array([1.0, 0.0] + [0.0, 1.0, 0.0] * 6)
+
+    def bounds(self):
+        # DCTL slider ranges; sat floored above 0 (forward path divides by it).
+        lo = [0.05, -3.0] + [-0.166, 0.05, -3.0] * 6
+        hi = [2.0, 3.0] + [0.166, 2.0, 3.0] * 6
+        return np.asarray(lo), np.asarray(hi)
+
+    def _to_params(self, params: np.ndarray) -> ReuleauxUserParams:
+        vectors = {
+            color: tuple(params[2 + 3 * i : 5 + 3 * i])
+            for i, color in enumerate(self._COLORS)
+        }
+        return ReuleauxUserParams(
+            overall_sat=float(params[0]), overall_val=float(params[1]), **vectors
+        )
+
+    def apply(self, x, params):
+        return reuleaux_user(x, self._to_params(params))
+
+    def describe(self, params):
+        lines = [
+            f"Reuleaux sliders (paste into ReuleauxUserStandalone.dctl):",
+            f"  Overall Saturation: {params[0]:.3f}   Overall Value: {params[1]:.3f}",
+        ]
+        for i, color in enumerate(self._COLORS):
+            h, s, v = params[2 + 3 * i : 5 + 3 * i]
+            lines.append(f"  {color.capitalize():8s} Hue {h: .3f}  Sat {s:.3f}  Val {v: .3f}")
+        return "\n".join(lines)
+
+
+STAGE_POOL = {
+    "Matrix": LinearMatrixStage,
+    "Luma Curve": LumaCurveStage,
+    "RGB Curves": RGBCurvesStage,
+    "Reuleaux": ReuleauxStage,
+}
+
+CHAIN_PRESETS = {
+    "Full (Luma → RGB → Reuleaux)": ["Luma Curve", "RGB Curves", "Reuleaux"],
+    "Reuleaux only": ["Reuleaux"],
+    "Matrix + Reuleaux": ["Matrix", "Reuleaux"],
+}

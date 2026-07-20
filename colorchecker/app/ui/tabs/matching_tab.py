@@ -20,10 +20,12 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
     QLabel,
+    QListWidget,
     QMessageBox,
     QPushButton,
     QRadioButton,
     QSpinBox,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -36,6 +38,8 @@ from app.core.match import (
     solve_match,
     write_cube,
 )
+from app.core.parametric import solve_parametric
+from app.core.stages import CHAIN_PRESETS, STAGE_POOL, LumaCurveStage, RGBCurvesStage
 
 
 class _PatchSource(QGroupBox):
@@ -152,7 +156,28 @@ class MatchingTab(QWidget):
         right.addWidget(match_type)
 
         params = QGroupBox("Model")
-        grid = QGridLayout(params)
+        params_box = QVBoxLayout(params)
+
+        solver_row = QHBoxLayout()
+        solver_row.addWidget(QLabel("Solver:"))
+        self.solver_combo = QComboBox()
+        self.solver_combo.addItems(["RBF", "Parametric"])
+        self.solver_combo.setToolTip(
+            "RBF: best raw accuracy, exports a 3D cube.\n"
+            "Parametric: chain of interpretable stages (curves, matrix,\n"
+            "Reuleaux) — exports slider values and 1D curves you can\n"
+            "rebuild natively in Resolve."
+        )
+        solver_row.addWidget(self.solver_combo, stretch=1)
+        params_box.addLayout(solver_row)
+
+        self._solver_stack = QStackedWidget()
+        params_box.addWidget(self._solver_stack)
+
+        # -------- RBF page --------
+        rbf_page = QWidget()
+        grid = QGridLayout(rbf_page)
+        grid.setContentsMargins(0, 4, 0, 0)
         row = 0
 
         self.matrix_check = QCheckBox("3×3 matrix pre-fit")
@@ -181,14 +206,60 @@ class MatchingTab(QWidget):
         self.layers_spin.setValue(10)
         self.layers_spin.setToolTip("0 = matrix only; 10 = finest RBF detail")
         grid.addWidget(self.layers_spin, row, 1)
-        row += 1
+        self._solver_stack.addWidget(rbf_page)
 
-        grid.addWidget(QLabel("Strength (%)"), row, 0)
+        # -------- Parametric page --------
+        para_page = QWidget()
+        para_box = QVBoxLayout(para_page)
+        para_box.setContentsMargins(0, 4, 0, 0)
+
+        preset_row = QHBoxLayout()
+        preset_row.addWidget(QLabel("Chain:"))
+        self.chain_preset_combo = QComboBox()
+        self.chain_preset_combo.addItems(list(CHAIN_PRESETS) + ["Custom"])
+        self.chain_preset_combo.currentTextChanged.connect(self._apply_chain_preset)
+        preset_row.addWidget(self.chain_preset_combo, stretch=1)
+        para_box.addLayout(preset_row)
+
+        self.stage_list = QListWidget()
+        self.stage_list.setToolTip("Stages run top to bottom; only listed stages are solved")
+        para_box.addWidget(self.stage_list)
+
+        stage_buttons = QHBoxLayout()
+        self.add_stage_combo = QComboBox()
+        self.add_stage_combo.addItems(list(STAGE_POOL))
+        stage_buttons.addWidget(self.add_stage_combo)
+        for text, slot in (
+            ("Add", self._add_stage), ("Remove", self._remove_stage),
+            ("↑", lambda: self._move_stage(-1)), ("↓", lambda: self._move_stage(+1)),
+        ):
+            btn = QPushButton(text)
+            btn.clicked.connect(slot)
+            stage_buttons.addWidget(btn)
+        para_box.addLayout(stage_buttons)
+
+        points_row = QHBoxLayout()
+        points_row.addWidget(QLabel("Curve points"))
+        self.curve_points_spin = QSpinBox()
+        self.curve_points_spin.setRange(3, 12)
+        self.curve_points_spin.setValue(6)
+        points_row.addWidget(self.curve_points_spin)
+        points_row.addStretch(1)
+        para_box.addLayout(points_row)
+        self._solver_stack.addWidget(para_page)
+
+        self.solver_combo.currentIndexChanged.connect(self._solver_stack.setCurrentIndex)
+        self._apply_chain_preset(self.chain_preset_combo.currentText())
+
+        strength_row = QHBoxLayout()
+        strength_row.addWidget(QLabel("Strength (%)"))
         self.strength_spin = QSpinBox()
         self.strength_spin.setRange(0, 100)
         self.strength_spin.setValue(100)
         self.strength_spin.setToolTip("Blend the whole match against the original")
-        grid.addWidget(self.strength_spin, row, 1)
+        strength_row.addWidget(self.strength_spin)
+        strength_row.addStretch(1)
+        params_box.addLayout(strength_row)
         right.addWidget(params)
 
         export = QGroupBox("LUT export")
@@ -232,6 +303,50 @@ class MatchingTab(QWidget):
         right.addWidget(self.export_btn)
         right.addStretch(1)
         root.addLayout(right, stretch=1)
+
+    # ---------------------------------------------------- stage chain
+
+    def _apply_chain_preset(self, preset: str) -> None:
+        if preset in CHAIN_PRESETS:
+            self.stage_list.clear()
+            self.stage_list.addItems(CHAIN_PRESETS[preset])
+
+    def _mark_custom(self) -> None:
+        self.chain_preset_combo.blockSignals(True)
+        self.chain_preset_combo.setCurrentText("Custom")
+        self.chain_preset_combo.blockSignals(False)
+
+    def _add_stage(self) -> None:
+        self.stage_list.addItem(self.add_stage_combo.currentText())
+        self._mark_custom()
+
+    def _remove_stage(self) -> None:
+        row = self.stage_list.currentRow()
+        if row >= 0:
+            self.stage_list.takeItem(row)
+            self._mark_custom()
+
+    def _move_stage(self, delta: int) -> None:
+        row = self.stage_list.currentRow()
+        target = row + delta
+        if row < 0 or not (0 <= target < self.stage_list.count()):
+            return
+        item = self.stage_list.takeItem(row)
+        self.stage_list.insertItem(target, item)
+        self.stage_list.setCurrentRow(target)
+        self._mark_custom()
+
+    def _build_stages(self) -> list:
+        stages = []
+        points = self.curve_points_spin.value()
+        for i in range(self.stage_list.count()):
+            name = self.stage_list.item(i).text()
+            cls = STAGE_POOL[name]
+            if cls in (LumaCurveStage, RGBCurvesStage):
+                stages.append(cls(points))
+            else:
+                stages.append(cls())
+        return stages
 
     # ------------------------------------------------------------ actions
 
@@ -285,16 +400,26 @@ class MatchingTab(QWidget):
                 "Display-referred matching needs a DRT — click Load DRT…",
             )
             return
+        parametric = self.solver_combo.currentText() == "Parametric"
         try:
-            result = solve_match(
-                source,
-                target,
-                use_matrix=self.matrix_check.isChecked(),
-                layers=self.layers_spin.value(),
-                smoothing=self.smoothness_spin.value(),
-                strength=self.strength_spin.value() / 100.0,
-                output_transform=drt,
-            )
+            if parametric:
+                result = solve_parametric(
+                    source,
+                    target,
+                    stages=self._build_stages(),
+                    strength=self.strength_spin.value() / 100.0,
+                    output_transform=drt,
+                )
+            else:
+                result = solve_match(
+                    source,
+                    target,
+                    use_matrix=self.matrix_check.isChecked(),
+                    layers=self.layers_spin.value(),
+                    smoothing=self.smoothness_spin.value(),
+                    strength=self.strength_spin.value() / 100.0,
+                    output_transform=drt,
+                )
         except ValueError as exc:
             QMessageBox.critical(self, "Cannot solve", str(exc))
             return
@@ -313,13 +438,19 @@ class MatchingTab(QWidget):
         if result.display_referred:
             parts.append("Errors measured through the DRT (what you'd see):")
         parts.append(f"Error before: {result.error_before:.5f}")
-        if result.error_matrix is not None:
+        if parametric:
+            for stage_name, err in result.waterfall:
+                parts.append(f"  after {stage_name}: {err:.5f}")
+        elif result.error_matrix is not None:
             parts.append(f"After matrix: {result.error_matrix:.5f}")
         parts.append(
             f"After match: {result.error_after:.5f} (worst patch {result.error_after_max:.5f})"
         )
         if result.display_referred:
             parts.append("Export = correction cube; apply it BEFORE the DRT node.")
+        if parametric:
+            parts.append("")
+            parts.extend(result.stage_reports)
 
         valid_labels = [
             lbl for lbl, keep in zip(

@@ -388,6 +388,8 @@ def session_patch_rows(store) -> tuple[np.ndarray, list[str]]:
     kept — solve_match drops and counts them."""
     values: list[list[float]] = []
     labels: list[str] = []
+    if store is None:
+        return np.empty((0, 3)), labels
     for entry in store.images:
         if not entry.include or not entry.patch_results:
             continue

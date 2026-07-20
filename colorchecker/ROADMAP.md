@@ -464,3 +464,26 @@ amplification of a small perturbation, per stage at its real input
 distribution + whole chain, median/p95/max, reported next to the
 residual everywhere. ~1 = transparent, >>1 = noise amplifier (caught
 the sector-sat power-law bug class).
+
+## LUT matching under a DRT — first real run (2026-07-20)
+
+Genesis e100_base + openDRT test taught three things:
+1. genesis_e100_base is DISPLAY-referred (header + measured S-curve) —
+   the right composition is --target-is-display: solve
+   DRT(chain(x)) ~= lut(x), "rebuild the look as chain under openDRT".
+   Wrong composition (DRT after an already-rendered LUT) shows up as
+   stages pinned at their bounds — a useful smell.
+2. Result: display error 0.224 -> 0.109 mean (worst 0.53), 484/1395
+   samples unreachable through the DRT (mostly gamut-edge colors the
+   print rendering reaches but openDRT does not). The Chromogen chain
+   alone cannot fully bridge two DIFFERENT renderings (2383 print vs
+   openDRT) — the missing flexibility is mostly TONE. Option when
+   wanted: a monotone Luma Curve pre-stage variant of the match mode
+   (fit-only; no DCTL/drx node yet).
+3. DRT MATH > DRT CUBE (Marc asked): a .cube DRT costs us trilinear
+   plateaus + noisy numeric inversion (dropped patches) and blocks
+   display-domain torch losses. openDRT is open source (Jed Smith
+   DCTL) — porting Marc's exact config would give exact+cheap
+   inversion, differentiable display-domain optimization, fewer
+   drops. Candidate next step; cube path stays as the generic
+   fallback for arbitrary DRTs.

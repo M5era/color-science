@@ -45,11 +45,29 @@ def solve_lut_match(
     backend: str = "scipy",
     regularization: float = 1e-3,
     seed: int = 11,
+    drt: CubeLUT | None = None,
+    target_is_display: bool = False,
 ) -> ParametricResult:
+    """With `drt`, the match runs as the display-referred sandwich:
+    the chain approximates the LUT in the working (log) domain, but
+    targets the DRT inverts back from display, unreachable/clipped
+    patches are dropped, and errors are reported THROUGH the DRT —
+    what the eye sees. Stack the fitted chain BEFORE the DRT node."""
     if source_points is None:
         source_points = sample_lut_domain(lut, n=n_samples, seed=seed)
     source_points = np.asarray(source_points, dtype=np.float64)
     targets = apply_lut(lut, source_points)
+    if drt is not None:
+        # target_is_display: the LUT already renders to display (e.g. a
+        # print emulation) — rebuild it as [chain under the DRT], i.e.
+        # solve DRT(chain(x)) ~= lut(x). Otherwise the LUT is a log-
+        # domain look to be viewed through the DRT.
+        display_targets = targets if target_is_display else apply_lut(drt, targets)
+        return solve_parametric(
+            source_points, display_targets, stages,
+            backend=backend, regularization=regularization,
+            output_transform=drt,
+        )
     return solve_parametric(
         source_points, targets, stages,
         backend=backend, regularization=regularization,

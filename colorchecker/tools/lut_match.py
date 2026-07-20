@@ -35,6 +35,14 @@ def main() -> None:
     parser.add_argument("--backend", choices=["scipy", "torch"],
                         default="scipy")
     parser.add_argument("--samples", type=int, default=1500)
+    parser.add_argument("--drt",
+                        help="DRT .cube to work under (display-referred "
+                             "sandwich: fit in log, errors through the DRT; "
+                             "stack the result BEFORE the DRT node)")
+    parser.add_argument("--target-is-display", action="store_true",
+                        help="the LUT already outputs display (print "
+                             "emulation etc.) — rebuild it as chain+DRT: "
+                             "solve DRT(chain(x)) ~= lut(x)")
     parser.add_argument("--source-csv",
                         help="patch CSV to use as source points instead "
                              "of the lattice sample")
@@ -60,14 +68,19 @@ def main() -> None:
     if args.source_csv:
         source_points, _ = load_patch_csv(args.source_csv)
 
+    drt = parse_cube(args.drt) if args.drt else None
     result = solve_lut_match(
         lut, stages,
         source_points=source_points,
         n_samples=args.samples,
         backend=args.backend,
+        drt=drt,
+        target_is_display=args.target_is_display,
     )
 
-    print(f"Backend: {result.backend}   pairs: {result.pairs_used}")
+    print(f"Backend: {result.backend}   pairs: {result.pairs_used}"
+          + (f"   (dropped {result.pairs_unreachable} unreachable through DRT)"
+             if result.display_referred else ""))
     print(f"Error before: {result.error_before:.5f}")
     for (name, err), (_, gain), label in zip(result.waterfall,
                                              result.stage_noise_gain,

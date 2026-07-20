@@ -127,8 +127,13 @@ pair up by shared ordering.
 
 - **Solver = Parametric (newest):** an ordered chain of parametric
   stages — **Matrix (9), Luma Curve (monotone), RGB Curves (3×monotone,
-  split-tone), Reuleaux (20, the validated port)**. Chain presets:
-  *Full (Luma→RGB→Reuleaux)* / *Reuleaux only* / *Matrix + Reuleaux* /
+  split-tone), Reuleaux Broad (20, the validated fixed-6-anchor port),
+  Reuleaux Fine (12, one freely placed 360° hue zone with smooth hue
+  window + sat mask + luma mask — chain several for several zones;
+  masks are plateau windows with cos² shoulders, `app/core/windows.py`,
+  C¹-smooth by construction, wide-open = off at identity)**. Chain
+  presets: *Full (Luma→RGB→Reuleaux Broad)* / *Reuleaux Broad only* /
+  *Matrix + Reuleaux Broad* / *Reuleaux Broad + Fine* /
   Custom, with add/remove/reorder and a curve-point count. Solve =
   stagewise coordinate descent → joint bounded least-squares with
   identity regularization. Output shows a **per-stage error waterfall**
@@ -219,21 +224,30 @@ stock's published sensitometric curves before profiling. Works for
 negative and reversal.
 
 **Immediate next coding step when resuming:** backpropagation / gradient
-optimization for the parametric solver (the stage contract was built for
-it). Then Plan B stage 1 (OkLCh single-zone DCTL + Python fitter mirror).
+optimization for the parametric solver — agreed approach: **PyTorch as
+an optional dependency** (torch mirrors of the stages + autograd; scipy
+path stays as fallback when torch is absent). Backprop matters most for
+Reuleaux Fine: it can *place* zones (hue center + window widths are
+free, smooth parameters), which local least-squares can only do when
+the true zone overlaps the start window. Also agreed: a separate
+**HueSquash node** (compress nearby hues toward a chosen target;
+sat-gated; foldover-proof monotone parametrization) — designed in
+discussion, not yet built. OkLab/OkLCh is explicitly OFF the table for
+now — everything stays in reuleaux space until Marc says otherwise.
 
 ---
 
 ## 7. Dev workflow / gotchas
 
-- **Branch:** `claude/color-checker-reader-tool-z9q2ts`. **PR #1** is
-  open for it — push to the branch to update the PR; do not open a new one.
+- **Branch:** PRs #1/#2 (`claude/color-checker-reader-tool-z9q2ts`)
+  are MERGED into `main`. Current work happens on
+  `claude/color-checker-handoff-91whob` (branched from main).
 - **Run on Mac:** `python3 main.py` from `colorchecker/`. Install deps
   with `python3 -m pip install -r requirements.txt` — **use
   `python3 -m pip`, NOT `pip3`** (repo path has spaces, which breaks the
   pip script shim). `scipy` IS required (a missing entry once crashed
   the app on import — it's in requirements now).
-- **Tests:** `QT_QPA_PLATFORM=offscreen python3 -m pytest tests/` — 82
+- **Tests:** `QT_QPA_PLATFORM=offscreen python3 -m pytest tests/` — 95
   green, ~22–35s. Synthetic TIFFs generated at runtime; no footage
   committed (`*.tif` git-ignored). UI tests mock the file dialogs and
   fail fast on any unexpected modal (an unmocked modal hangs headless).
@@ -247,16 +261,21 @@ it). Then Plan B stage 1 (OkLCh single-zone DCTL + Python fitter mirror).
 
 ---
 
-## 8. Where we left off (2026-07-20)
+## 8. Where we left off (2026-07-20, second session)
 
-Parametric solver just finished, tested (82 green incl. 10 solver + 4
-offscreen UI tests), committed, and pushed (updates PR #1). This
-completes the "give me the option to not choose RBF but parametric… move
-the order around… solve only reuleaux and/or matrix now" request.
+**Reuleaux Broad / Fine split just landed** (95 tests green): the
+validated fixed-6 port is now the "Reuleaux Broad" stage (math
+untouched, renamed only), and the new "Reuleaux Fine" stage is one
+freely placed 360° hue zone — smooth plateau hue window plus **sat
+mask and luma mask** (`app/core/windows.py`), gating DCTL-style
+hue/sat/val moves, neutral-axis protected, chainable for several
+zones. New preset "Reuleaux Broad + Fine". This was Marc's explicit
+design: keep broad as-is, add fine — NOT masks bolted onto the fixed-6.
 
 **Awaiting Marc:** real-footage validation of the full parametric
-pipeline; report which stage earns its keep from the waterfall; try
-pasting the fitted Reuleaux sliders into the DCTL in Resolve.
+pipeline (incl. Broad + Fine); report which stage earns its keep from
+the waterfall; try pasting the fitted Reuleaux sliders into the DCTL
+in Resolve.
 
 **Open threads:** an earlier "also, none of thre…" message was never
 completed; the curves-in-DRX experiment is designed but not run.

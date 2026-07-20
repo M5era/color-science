@@ -10,14 +10,23 @@ gradient-based optimization later:
   regularization anchor, so overlapping stages don't fight)
 
 Stages: LinearMatrixStage (9), LumaCurveStage (monotone shared 1D),
-RGBCurvesStage (3 monotone 1D), ReuleauxStage (the validated port).
+RGBCurvesStage (3 monotone 1D), ReuleauxBroadStage (the validated
+fixed-6-anchor port), ReuleauxFineStage (one freely placed hue zone
+with smooth hue window + sat mask + luma mask).
 """
 
 from abc import ABC, abstractmethod
 
 import numpy as np
 
-from app.core.reuleaux import ReuleauxUserParams, reuleaux_user
+from app.core.reuleaux import (
+    ReuleauxUserParams,
+    _spow,
+    reuleaux_to_rgb,
+    reuleaux_user,
+    rgb_to_reuleaux,
+)
+from app.core.windows import plateau_window, wrapped_window
 
 
 class Stage(ABC):
@@ -152,11 +161,12 @@ class RGBCurvesStage(Stage):
         return "RGB curve knots:\n" + "\n".join(parts)
 
 
-class ReuleauxStage(Stage):
-    """The validated 1:1 reuleaux port; params in DCTL slider order:
+class ReuleauxBroadStage(Stage):
+    """The validated 1:1 reuleaux port (6 fixed hue anchors) — the
+    broad-strokes stage. Params in DCTL slider order:
     [overall_sat, overall_val, then (hue, sat, val) per R,Y,G,C,B,M]."""
 
-    name = "Reuleaux"
+    name = "Reuleaux Broad"
 
     _COLORS = ("red", "yellow", "green", "cyan", "blue", "magenta")
 
@@ -192,15 +202,104 @@ class ReuleauxStage(Stage):
         return "\n".join(lines)
 
 
+class ReuleauxFineStage(Stage):
+    """One freely placed hue zone in reuleaux space.
+
+    Unlike the broad stage's 6 fixed anchors, the hue center is a free
+    360-degree parameter, and the adjustment is additionally gated by a
+    smooth sat mask and luma mask (plateau windows, app.core.windows).
+    Chain several Fine stages for several zones.
+
+    Params (12):
+      [0] hue_center  (turns; wraps, bounds extend past 0..1 so the
+                       solver can cross the red seam continuously)
+      [1] hue_flat    full-strength half-width (turns)
+      [2] hue_soft    cos^2 falloff width (turns)
+      [3] hue_shift   gated delta hue (turns, DCTL-style +-0.166)
+      [4] sat_adj     gated sat factor (1 = neutral, DCTL convention)
+      [5] val_adj     gated val slider (0 = neutral, scales with sat
+                       like the DCTL, so the neutral axis is protected)
+      [6..8]  luma mask center/flat/soft over val (identity: wide open)
+      [9..11] sat  mask center/flat/soft over sat (identity: wide open)
+
+    All ops at identity => exact identity regardless of the windows,
+    and the identity anchor keeps both masks wide open, so the solver
+    only narrows a mask when doing so actually pays.
+    """
+
+    name = "Reuleaux Fine"
+
+    # flat cores that cover the whole working domain == mask off
+    _LUMA_OPEN = (0.5, 2.0, 0.25)
+    _SAT_OPEN = (0.5, 1.5, 0.25)
+
+    def identity(self):
+        return np.array(
+            [0.0, 0.04, 0.08, 0.0, 1.0, 0.0]
+            + list(self._LUMA_OPEN) + list(self._SAT_OPEN)
+        )
+
+    def bounds(self):
+        lo = [-0.25, 0.005, 0.01, -0.166, 0.05, -3.0,
+              -0.5, 0.0, 0.01,   -0.5, 0.0, 0.01]
+        hi = [1.25, 0.5, 0.5, 0.166, 2.0, 3.0,
+              2.0, 2.5, 1.0,   1.5, 2.0, 1.0]
+        return np.asarray(lo), np.asarray(hi)
+
+    def apply(self, x, params):
+        p = np.asarray(params, dtype=np.float64)
+        reuleaux = rgb_to_reuleaux(x)
+        hue, sat, val = reuleaux[..., 0], reuleaux[..., 1], reuleaux[..., 2]
+
+        w = (
+            wrapped_window(hue, p[0] % 1.0, p[1], p[2])
+            * plateau_window(val, p[6], p[7], p[8])
+            * plateau_window(sat, p[9], p[10], p[11])
+        )
+
+        hue_result = hue + w * p[3]
+        # gated versions of the DCTL forward ops: blend each factor
+        # toward neutral by the mask weight, then apply as the DCTL does
+        sat_factor = 1.0 + w * (p[4] - 1.0)
+        sat_result = _spow(sat, 1.0 / sat_factor)
+        val_result = val * np.maximum(1.0 + sat_result * (w * p[5]), 1e-6)
+
+        return reuleaux_to_rgb(
+            np.stack([hue_result, sat_result, val_result], axis=-1)
+        )
+
+    def describe(self, params):
+        p = np.asarray(params, dtype=np.float64)
+        deg = lambda t: t * 360.0
+
+        def mask_line(label, center, flat, soft, span):
+            if flat >= span:
+                return f"  {label} mask: wide open (off)"
+            return (f"  {label} mask: center {center:.3f}  "
+                    f"core ±{flat:.3f}  soft {soft:.3f}")
+
+        return "\n".join([
+            "Reuleaux Fine zone:",
+            (f"  Hue center {deg(p[0] % 1.0):.1f}°  "
+             f"core ±{deg(p[1]):.1f}°  soft {deg(p[2]):.1f}°"),
+            (f"  Δhue {deg(p[3]):+.2f}°  Sat ×{p[4]:.3f}  "
+             f"Val {p[5]:+.3f}"),
+            mask_line("Luma", p[6], p[7], p[8], span=1.5),
+            mask_line("Sat", p[9], p[10], p[11], span=1.0),
+        ])
+
+
 STAGE_POOL = {
     "Matrix": LinearMatrixStage,
     "Luma Curve": LumaCurveStage,
     "RGB Curves": RGBCurvesStage,
-    "Reuleaux": ReuleauxStage,
+    "Reuleaux Broad": ReuleauxBroadStage,
+    "Reuleaux Fine": ReuleauxFineStage,
 }
 
 CHAIN_PRESETS = {
-    "Full (Luma → RGB → Reuleaux)": ["Luma Curve", "RGB Curves", "Reuleaux"],
-    "Reuleaux only": ["Reuleaux"],
-    "Matrix + Reuleaux": ["Matrix", "Reuleaux"],
+    "Full (Luma → RGB → Reuleaux Broad)": ["Luma Curve", "RGB Curves", "Reuleaux Broad"],
+    "Reuleaux Broad only": ["Reuleaux Broad"],
+    "Matrix + Reuleaux Broad": ["Matrix", "Reuleaux Broad"],
+    "Reuleaux Broad + Fine": ["Reuleaux Broad", "Reuleaux Fine"],
 }

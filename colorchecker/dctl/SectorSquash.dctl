@@ -117,8 +117,8 @@ __DEVICE__ float softplusw(float x, float w) {
     return w * _logf(1.0f + _expf(_fminf(x / w, 60.0f)));
 }
 
-__DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y,
-                            float p_R, float p_G, float p_B) {
+__DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, float p_R, float p_G, float p_B)
+{
     float3 rl = rgb_to_reuleaux(make_float3(p_R, p_G, p_B));
     float target = hue / 360.0f;
     target -= _floorf(target);

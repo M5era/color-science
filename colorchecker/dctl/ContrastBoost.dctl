@@ -114,19 +114,22 @@ __DEVICE__ float softplusw(float x, float w) {
     return w * _logf(1.0f + _expf(_fminf(x / w, 60.0f)));
 }
 
-__DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y,
-                            float p_R, float p_G, float p_B) {
+__DEVICE__ float contrast_curve(float v, float boost, float pivot, float highlight) {
     const float w = 0.15f;
+    return v + boost * ((v - pivot) - softplusw(v - highlight, w) + softplusw(pivot - highlight, w));
+}
+
+__DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, float p_R, float p_G, float p_B)
+{
     float3 rgb = make_float3(p_R, p_G, p_B);
     float3 rl = rgb_to_reuleaux(rgb);
 
-    #define CURVE(v) ((v) + boost * (((v) - grey_pivot) \
-        - softplusw((v) - highlight_pivot, w) \
-        + softplusw(grey_pivot - highlight_pivot, w)))
-
-    float3 val_mode = reuleaux_to_rgb(make_float3(rl.x, rl.y, CURVE(rl.z)));
-    float3 rgb_mode = make_float3(CURVE(rgb.x), CURVE(rgb.y), CURVE(rgb.z));
-    #undef CURVE
+    float3 val_mode = reuleaux_to_rgb(make_float3(rl.x, rl.y,
+        contrast_curve(rl.z, boost, grey_pivot, highlight_pivot)));
+    float3 rgb_mode = make_float3(
+        contrast_curve(rgb.x, boost, grey_pivot, highlight_pivot),
+        contrast_curve(rgb.y, boost, grey_pivot, highlight_pivot),
+        contrast_curve(rgb.z, boost, grey_pivot, highlight_pivot));
 
     return make_float3(
         (1.0f - chroma) * val_mode.x + chroma * rgb_mode.x,

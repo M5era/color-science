@@ -102,8 +102,8 @@ __DEVICE__ float wrapped_window(float x, float center, float flat, float soft) {
 
 // ---------------------------------------------------------------------
 
-__DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y,
-                            float p_R, float p_G, float p_B) {
+__DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, float p_R, float p_G, float p_B)
+{
     float3 reuleaux = rgb_to_reuleaux(make_float3(p_R, p_G, p_B));
     float hue = reuleaux.x;
     float sat = reuleaux.y;

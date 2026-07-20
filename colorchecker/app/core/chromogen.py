@@ -26,7 +26,7 @@ import numpy as np
 
 from app.core.reuleaux import _spow, reuleaux_to_rgb, rgb_to_reuleaux
 from app.core.stage_base import Stage
-from app.core.windows import ramp_window, wrapped_window
+from app.core.windows import plateau_window, ramp_window, wrapped_window
 
 _TWO_PI = 2.0 * np.pi
 
@@ -363,27 +363,41 @@ class HighlightBleachStage(Stage):
 
 
 class NeutralTintStage(Stage):
-    """Chromogen Neutral Tint: tint toward a picked hue with a SIGNED
-    amount (+ = highlights, - = shadows) at constant val — contrast
-    untouched by construction. Pivot/Falloff are in stops; the
-    Chroma gate defaults protective (only-neutrals) so saturated colors
-    aren't pushed toward a gamut edge. Two instances = warm highs +
-    cold lows."""
+    """Neutral Tint, reworked 2026-07-20 (Marc's feedback on v1):
+
+    - Amount is UNSIGNED 0..1: 0 = nothing, 1 = a lot.
+    - Pivot is a FOCUS slider -1..+1 (not stops, not meaningful units):
+      leftmost concentrates the tint on the darkest section of the
+      image, rightmost on the brightest, 0 = midtones. The luma weight
+      is a smooth cos^2 bump centered there (v1's one-sided ramp had a
+      dead zone: pivot -6 with +amount masked nothing).
+    - Filmic response instead of v1's constant chroma offset (Marc:
+      "looks like linear gain, not natural"): chroma CONVERGES toward
+      a dye anchor (TINT_MAX_SAT at the picked hue) — lerp, so the
+      tint saturates like a dye bath instead of shifting everything by
+      a fixed amount, and blacks/whites outside the focus window stay
+      clean. Amount is eased (smoothstep) for fine control low.
+    Val untouched by construction (contrast safe). Chroma gate
+    unchanged, defaults protective (only-neutrals)."""
 
     name = "Neutral Tint"
     param_names = ["Hue", "Amount", "Pivot", "Falloff", "Chroma"]
 
-    # slider +-1.0 maps to +-TINT_SCALE in reuleaux sat units — a raw
-    # sat push of 0.5 was WAY too aggressive (Marc); mid-slider should
-    # be a subtle tint, full throw strong but usable
-    TINT_SCALE = 0.25
+    # dye anchor: full amount at the window center pulls chroma all
+    # the way to this reuleaux sat (v1's full-throw offset was 0.25
+    # and read "strong but usable" — this is deliberately "a lot")
+    TINT_MAX_SAT = 0.35
+    # pivot -1..+1 sweeps the window center MID_GREY +- this span:
+    # leftmost ~0.05 (deepest LogC3 shadows), rightmost ~0.73 (near
+    # clip). Slider units are intentionally not stops (Marc).
+    PIVOT_SPAN = 0.34
 
     def identity(self):
         return np.array([0.0, 0.0, 0.0, 4.0, -0.5])
 
     def bounds(self):
-        lo = [0.0, -1.0, -6.0, 0.5, -1.0]
-        hi = [360.0, 1.0, 8.0, 16.0, 1.0]
+        lo = [0.0, 0.0, -1.0, 0.5, -1.0]
+        hi = [360.0, 1.0, 1.0, 16.0, 1.0]
         return np.asarray(lo), np.asarray(hi)
 
     def apply(self, x, params):
@@ -391,21 +405,23 @@ class NeutralTintStage(Stage):
         reuleaux = rgb_to_reuleaux(x)
         hue, sat, val = reuleaux[..., 0], reuleaux[..., 1], reuleaux[..., 2]
 
-        r = ramp_window(val, MID_GREY + pivot * STOP, falloff * STOP)
-        side = r if amount >= 0.0 else 1.0 - r
-        m = side * modulation(val, sat, 0.0, 0.0, chroma)
+        center = MID_GREY + pivot * self.PIVOT_SPAN
+        w = plateau_window(val, center, 0.0, falloff * STOP)
+        m = w * modulation(val, sat, 0.0, 0.0, chroma)
 
-        strength = abs(amount) * self.TINT_SCALE
+        a = np.clip(amount, 0.0, 1.0)
+        eased = a * a * (3.0 - 2.0 * a)          # smoothstep ease-in
+        t = eased * m                             # 0..1 convergence
         d1, d2 = _axis_dir(hue_deg / 360.0)
         c1, c2 = to_chroma_vec(hue, sat)
-        c1 = c1 + strength * m * d1
-        c2 = c2 + strength * m * d2
+        c1 = c1 + t * (self.TINT_MAX_SAT * d1 - c1)
+        c2 = c2 + t * (self.TINT_MAX_SAT * d2 - c2)
         hue2, sat2 = from_chroma_vec(c1, c2)
         return reuleaux_to_rgb(np.stack([hue2, sat2, val], axis=-1))
 
     def label(self, params):
         hue_deg, amount, pivot, falloff, chroma = params
-        if abs(amount) < 0.03:
+        if amount < 0.03:
             return "tint (idle)"
         h = hue_deg % 360.0
         if h < 90.0 or h >= 330.0:
@@ -414,15 +430,21 @@ class NeutralTintStage(Stage):
             tone = "cool"
         else:
             tone = hue_word(h)
-        return f"{tone} {'highs' if amount >= 0 else 'lows'}"
+        if pivot > 0.25:
+            where = "highs"
+        elif pivot < -0.25:
+            where = "lows"
+        else:
+            where = "mids"
+        return f"{tone} {where}"
 
     def describe(self, params):
         hue_deg, amount, pivot, falloff, chroma = params
-        where = "highlights" if amount >= 0 else "shadows"
         return "\n".join([
             "Neutral Tint (paste into dctl/NeutralTint.dctl):",
-            f"  Hue {hue_deg:.1f}°  Amount {amount:+.3f} (tints {where})",
-            f"  Pivot {pivot:+.3f}  Falloff {falloff:.3f}  Chroma {chroma:+.3f}",
+            f"  Hue {hue_deg:.1f}°  Amount {amount:.3f}",
+            f"  Pivot {pivot:+.3f} (focus: -1 darkest .. +1 brightest)"
+            f"  Falloff {falloff:.3f}  Chroma {chroma:+.3f}",
         ])
 
 

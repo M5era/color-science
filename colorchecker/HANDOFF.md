@@ -115,8 +115,12 @@ emissive overlays, CSV export, project save/load.
   opponent axes; Y/B is a native reuleaux axis), Colour Crosstalk
   (inherent luminance-weighted tilt), Contrast Boost (grey/highlight
   pivots + chroma mix 0=val-only..1=per-RGB), Highlight Bleach (RYGB
-  sectors x highlight ramp), Neutral Tint (signed amount +-highs/lows,
-  val-preserving, x0.25 internal scale), Sector Skew/Brightness/
+  sectors x highlight ramp), Neutral Tint (REWORKED 2026-07-20:
+  Amount 0..1 unsigned; Pivot -1..+1 focus slider sweeping a cos^2
+  bump from darkest to brightest — no dead zones; dye-style chroma
+  CONVERGENCE toward TINT_MAX_SAT=0.35 anchor with smoothstep-eased
+  amount, replacing v1's constant-offset "linear gain" feel;
+  val-preserving; Marc must reinstall dctl/NeutralTint.dctl), Sector Skew/Brightness/
   Saturation/Squash (single picked hue; squash signed, foldover-proof;
   sector SATURATION IS LINEAR — the power law amplified noise).
 - **Modulation block everywhere:** Zone (signed, middle=all), Pivot

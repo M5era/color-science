@@ -164,11 +164,14 @@ def test_highlight_bleach_unganged_spares_a_sector():
 
 # -------------------------------------------------------- neutral tint
 
-def test_neutral_tint_signed_amount_picks_side_and_keeps_val():
+def test_neutral_tint_pivot_focuses_tonal_band_and_keeps_val():
+    """v2 semantics: Amount 0..1, Pivot -1..+1 sweeps the focus bump
+    from the darkest section to the brightest — no dead zones."""
     stage = NeutralTintStage()
     highs = np.array([[0.9, 0.9, 0.9]])
     lows = np.array([[0.12, 0.12, 0.12]])
-    warm_high = _with(stage, Hue=40.0, Amount=0.3)
+
+    warm_high = _with(stage, Hue=40.0, Amount=0.5, Pivot=1.0)
     for x in (highs, lows):
         out = stage.apply(x, warm_high)
         # val (contrast) untouched by construction
@@ -176,9 +179,28 @@ def test_neutral_tint_signed_amount_picks_side_and_keeps_val():
     assert _sat_of(stage.apply(highs, warm_high))[0] > 0.05   # tinted
     assert _sat_of(stage.apply(lows, warm_high))[0] < 0.02    # spared
 
-    cold_low = _with(stage, Hue=220.0, Amount=-0.3)
+    # leftmost pivot MUST grab the darkest section (v1's dead zone bug)
+    cold_low = _with(stage, Hue=220.0, Amount=0.5, Pivot=-1.0)
     assert _sat_of(stage.apply(lows, cold_low))[0] > 0.05
     assert _sat_of(stage.apply(highs, cold_low))[0] < 0.02
+
+
+def test_neutral_tint_amount_is_dye_convergence_not_gain():
+    """Full amount pulls a focused neutral all the way to the dye
+    anchor (sat = TINT_MAX_SAT) — bounded, saturating response."""
+    stage = NeutralTintStage()
+    # grey exactly at the default focus center (pivot 0 -> MID_GREY)
+    grey = np.full((1, 3), 0.391)
+
+    sats = []
+    for a in (0.0, 0.25, 0.5, 0.75, 1.0):
+        p = _with(stage, Hue=40.0, Amount=a)
+        sats.append(_sat_of(stage.apply(grey, p))[0])
+    assert sats[0] < 1e-12                       # 0 = nothing
+    assert all(b > a for a, b in zip(sats, sats[1:]))  # monotone
+    np.testing.assert_allclose(sats[-1], stage.TINT_MAX_SAT, atol=1e-6)
+    # eased start: quarter throw is well under a quarter of the range
+    assert sats[1] < 0.25 * sats[-1] * 0.8
 
 
 # ---------------------------------------------------- colour crosstalk

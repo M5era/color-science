@@ -285,16 +285,18 @@ def _highlight_bleach_apply(stage, x, p):
 
 def _neutral_tint_apply(stage, x, p):
     hue, sat, val = _rgb_to_reuleaux(x)
-    r = _ramp(val, chromogen.MID_GREY + p[2] * chromogen.STOP, p[3] * chromogen.STOP)
-    side = torch.where(p[1] >= 0.0, r, 1.0 - r)
+    center = chromogen.MID_GREY + p[2] * stage.PIVOT_SPAN
+    w = _plateau_window(val, center, p[3] * 0.0, p[3] * chromogen.STOP)
     zero = p[4] * 0.0
-    m = side * _modulation(val, sat, zero, zero, p[4])
+    m = w * _modulation(val, sat, zero, zero, p[4])
 
-    strength = torch.abs(p[1]) * stage.TINT_SCALE
+    a = torch.clamp(p[1], 0.0, 1.0)
+    eased = a * a * (3.0 - 2.0 * a)
+    t = eased * m
     ang = (p[0] / 360.0) * (2.0 * torch.pi)
     c1, c2 = _to_chroma_vec(hue, sat)
-    c1 = c1 + strength * m * torch.cos(ang)
-    c2 = c2 + strength * m * torch.sin(ang)
+    c1 = c1 + t * (stage.TINT_MAX_SAT * torch.cos(ang) - c1)
+    c2 = c2 + t * (stage.TINT_MAX_SAT * torch.sin(ang) - c2)
     hue2, sat2 = _from_chroma_vec(c1, c2)
     return _reuleaux_to_rgb(hue2, sat2, val)
 

@@ -115,10 +115,12 @@ def test_stage_labels_read_like_grading_notes():
                                     SectorSquashStage)
 
     tint = NeutralTintStage()
-    p = tint.identity(); p[0], p[1] = 220.0, -0.3
+    p = tint.identity(); p[0], p[1], p[2] = 220.0, 0.3, -1.0
     assert tint.label(p) == "cool lows"
-    p[0], p[1] = 40.0, 0.3
+    p[0], p[1], p[2] = 40.0, 0.3, 0.6
     assert tint.label(p) == "warm highs"
+    p[2] = 0.0
+    assert tint.label(p) == "warm mids"
 
     skew = SectorSkewStage()
     p = skew.identity(); p[0], p[1], p[3] = 120.0, 20.0, -0.5

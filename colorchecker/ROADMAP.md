@@ -487,3 +487,18 @@ Genesis e100_base + openDRT test taught three things:
    inversion, differentiable display-domain optimization, fewer
    drops. Candidate next step; cube path stays as the generic
    fallback for arbitrary DRTs.
+
+
+## drx node insertion / reordering (question from Marc, 2026-07-20)
+
+Template patching only FILLS existing nodes — it cannot add, remove or
+reorder them (node subtrees + graph edges are variable-length protobuf;
+splicing needs full re-serialization with corrected length prefixes).
+Practical answer today: ONE TEMPLATE PER LAYOUT — Marc builds the node
+stack in Resolve (any order/count, duplicates fine), exports once, the
+generator fills it (k-th stage of a type -> k-th node).
+UNLOCK EXPERIMENT (when wanted): Marc exports two grades differing by
+exactly one appended node; diff the decompressed protobufs to learn
+what an insertion touches (node subtree, graph edges, counts). A
+generic protobuf tree parser/re-serializer then enables node insert/
+reorder AND node-label patching (variable-length strings) in one go.

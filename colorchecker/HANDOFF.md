@@ -73,9 +73,10 @@ colorchecker/
   dctl/                        11 companion DCTLs (paste-parity with solver reports)
   tools/                       reuleaux_bake, reuleaux_fine_bake, stage_bake,
                                lut_match (CLI), drx_export
-  templates/                   Marc's powergrades: example_powergrade_1.6.1.T.drx
-                               (8 Chromogen DCTL nodes + genesis cube node),
-                               openDRT_powergrade_1.6.2.T.drx (same + openDRT node)
+  templates/                   Marc's powergrades: contrast_boost_1.6.4.T.drx
+                               (DEFAULT: 8 Chromogen nodes + ContrastBoost +
+                               openDRT + genesis cube node; only LiftGammaGain
+                               still missing), plus the older 1.6.1/1.6.2 ones
   reference/OpenDRT.dctl       openDRT source (Jed Smith, GPLv3) for the port
   tests/                       135 green offscreen (torch tests auto-skip w/o torch)
 ```

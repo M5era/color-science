@@ -225,17 +225,24 @@ Profile Journey #22 automated) — align measured grayscale to the
 stock's published sensitometric curves before profiling. Works for
 negative and reversal.
 
-**Immediate next coding step when resuming:** backpropagation / gradient
-optimization for the parametric solver — agreed approach: **PyTorch as
-an optional dependency** (torch mirrors of the stages + autograd; scipy
-path stays as fallback when torch is absent). Backprop matters most for
-Reuleaux Fine: it can *place* zones (hue center + window widths are
-free, smooth parameters), which local least-squares can only do when
-the true zone overlaps the start window. Also agreed: a separate
-**HueSquash node** (compress nearby hues toward a chosen target;
-sat-gated; foldover-proof monotone parametrization) — designed in
-discussion, not yet built. OkLab/OkLCh is explicitly OFF the table for
-now — everything stays in reuleaux space until Marc says otherwise.
+**Backprop is BUILT** (this session): `backend="torch"` on
+solve_parametric / "Backprop refine (PyTorch)" checkbox in the UI
+(disabled with an install hint if torch is missing — torch is an
+OPTIONAL dep, deliberately NOT in requirements.txt). Torch mirrors of
+all five stages (`app/core/torch_stages.py`, parity-tested to 1e-9
+against the numpy stages), Adam over a sigmoid box-bounds
+reparametrization, **multi-restart hue placement for Fine zones**
+(`app/core/backprop.py`), then the existing scipy joint refine
+polishes the winner — so torch can only improve on scipy. Proven in
+tests: a Fine zone hidden in the greens that scipy provably cannot
+find (zero finite-diff gradient, no window overlap from the red start)
+is found and fit by the torch backend.
+
+**Next up:** the separate **HueSquash node** (compress nearby hues
+toward a chosen target; sat-gated; foldover-proof monotone
+parametrization — design agreed with Marc, in chat). OkLab/OkLCh is
+explicitly OFF the table for now — everything stays in reuleaux space
+until Marc says otherwise.
 
 ---
 
@@ -249,8 +256,9 @@ now — everything stays in reuleaux space until Marc says otherwise.
   `python3 -m pip`, NOT `pip3`** (repo path has spaces, which breaks the
   pip script shim). `scipy` IS required (a missing entry once crashed
   the app on import — it's in requirements now).
-- **Tests:** `QT_QPA_PLATFORM=offscreen python3 -m pytest tests/` — 97
-  green, ~22–35s. Synthetic TIFFs generated at runtime; no footage
+- **Tests:** `QT_QPA_PLATFORM=offscreen python3 -m pytest tests/` — 104
+  green, ~22–35s (torch tests auto-skip if torch is not installed).
+  Synthetic TIFFs generated at runtime; no footage
   committed (`*.tif` git-ignored). UI tests mock the file dialogs and
   fail fast on any unexpected modal (an unmocked modal hangs headless).
 - **Detection:** the current detect flow is the one Marc blessed

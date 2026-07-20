@@ -45,6 +45,7 @@ class ParametricResult:
     per_patch_error: np.ndarray
     waterfall: list  # [(stage name, error after that stage)]
     stage_reports: list  # human-readable per-stage summaries
+    backend: str = "scipy"  # which optimizer produced the fit
 
 
 def _mean_dist(a, b):
@@ -59,7 +60,23 @@ def solve_parametric(
     output_transform: CubeLUT | None = None,
     regularization: float = 1e-3,
     sweeps: int = 2,
+    backend: str = "scipy",
 ) -> ParametricResult:
+    """backend='torch' inserts a gradient (backprop) refinement pass —
+    Adam over autograd mirrors of the stages, with multi-restart hue
+    placement for Reuleaux Fine zones — between the stagewise init and
+    the scipy joint refine. Requires the optional PyTorch dependency."""
+    if backend not in ("scipy", "torch"):
+        raise ValueError(f"Unknown backend {backend!r} — use 'scipy' or 'torch'")
+    if backend == "torch":
+        from app.core.backprop import torch_available
+
+        if not torch_available():
+            raise RuntimeError(
+                "backend='torch' needs PyTorch — install it with "
+                "python3 -m pip install torch (optional dependency), "
+                "or use backend='scipy'"
+            )
     source = np.asarray(source, dtype=np.float64)
     target = np.asarray(target, dtype=np.float64)
     if source.shape != target.shape or source.ndim != 2 or source.shape[1] != 3:
@@ -113,6 +130,15 @@ def solve_parametric(
             )
             params[i] = sol.x
 
+    # ---- pass 1.5 (torch backend): backprop refine + zone placement ---
+    if backend == "torch":
+        from app.core.backprop import refine_backprop
+
+        params = refine_backprop(
+            stages, params, source, fit_target,
+            regularization=regularization,
+        )
+
     # ---- pass 2: joint refine with identity regularization ------------
     sizes = [p.size for p in params]
     offsets = np.cumsum([0] + sizes)
@@ -162,4 +188,5 @@ def solve_parametric(
         per_patch_error=per_patch,
         waterfall=waterfall,
         stage_reports=[s.describe(p) for s, p in zip(stages, params)],
+        backend=backend,
     )

@@ -160,6 +160,23 @@ def test_parametric_solve_and_export(qapp, tmp_path, monkeypatch):
     assert np.isfinite(fitted).all()
 
 
+def test_backprop_checkbox_drives_torch_backend(qapp, tmp_path, monkeypatch):
+    pytest.importorskip("torch")
+    src, tgt = _write_pair_csvs(tmp_path)
+    tab = _fresh_tab()
+    _load_csv_into(tab.source_box, src, monkeypatch)
+    _load_csv_into(tab.target_box, tgt, monkeypatch)
+
+    tab.solver_combo.setCurrentText("Parametric")
+    tab.chain_preset_combo.setCurrentText("Reuleaux Broad only")
+    assert tab.backprop_check.isEnabled()
+    tab.backprop_check.setChecked(True)
+    tab.solve()
+
+    assert tab._result.backend == "torch"
+    assert tab.export_btn.isEnabled()
+
+
 def test_rbf_path_still_solves(qapp, tmp_path, monkeypatch):
     src, tgt = _write_pair_csvs(tmp_path)
     tab = _fresh_tab()

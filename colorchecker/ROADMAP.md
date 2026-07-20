@@ -246,3 +246,24 @@ table. Black-box paths instead:
   - MANDATORY gate before any fitting: identity-grade round trip —
     exported probe must equal the input bit-for-bit (16-bit), proving
     the still-export path is color-management-clean.
+
+## Chart-prep: datasheet alignment tool (idea, 2026-07-19)
+
+Nico's Film Profile Journey #22 workflow, automated: align measured
+grayscale patches to the stock's published D-logE sensitometric curves
+(digitized from the whitepaper) instead of just balancing mid-grey —
+corrects aged/faded stocks back to spec before profiling.
+
+Works for NEGATIVE and POSITIVE/REVERSAL stocks alike: the method
+lives in DENSITY (Cineon = 95 + 500*D), and reversal datasheets
+publish the same D-logE curves. Differences for reversal: curve is
+mirrored (D-min anchor at the high-exposure end), grayscale samples
+the steeper curve more sparsely (mitigate with gray patches across
+the EV sweep — data we already capture), and display-referred scans
+must be converted to density first (or rescanned in density mode).
+
+Tool shape: inputs = measured grayscale CSV (ours, across EVs) +
+digitized datasheet curve points CSV; anchor at base (Cineon 95),
+look up expected density per patch via known scene log exposures
+(BabelColor Y -> logE), fit per-channel correction curves, export as
+1D LUT/curve points. All measurement machinery exists in the app.

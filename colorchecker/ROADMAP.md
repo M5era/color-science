@@ -267,3 +267,30 @@ digitized datasheet curve points CSV; anchor at base (Cineon 95),
 look up expected density per patch via known scene log exposures
 (BabelColor Y -> logE), fit per-channel correction curves, export as
 1D LUT/curve points. All measurement machinery exists in the app.
+
+## Matching: Parametric solver (planned 2026-07-19, Marc-approved design)
+
+Alternative to RBF in the Matching tab: chain of parametric stages,
+each a PURE FUNCTION + FLAT PARAM VECTOR + BOUNDS (the ML-ready
+contract: swap numpy->torch and finite-diff->autograd later without
+touching the architecture; reuleaux's max/abs kinks are subgradient-OK).
+
+Stages v1: LumaCurve (monotone-by-construction: positive-increment
+parameterization over fixed x grid, ~6-8 params), RGBCurves (3x same,
+identity-initialized: residual split-tone), Reuleaux (validated port,
+20 params, DCTL slider bounds), LinearMatrix (9, pool only).
+DEFAULT CHAIN: Luma -> RGB curves -> Reuleaux. User can add/remove/
+reorder/disable stages (ordered list UI).
+
+Solve: stagewise init (coordinate descent vs residual in chain order)
+then joint least_squares over concatenated params (~60) with identity
+regularization against stage overlap. Shares the match-type prep
+(sandwich/DRT inversion, NaN/clip dropping, through-DRT errors) with
+the RBF path — refactor solve_match prep to be solver-agnostic.
+
+Outputs: per-stage error waterfall; exports per stage (matrix text,
+curves 1D cube + points, REULEAUX FITTED SLIDER VALUES to paste into
+ReuleauxUserStandalone.dctl — parity proven), plus combined 3D cube.
+
+UI: Solver selector RBF | Parametric in the Model box; Parametric
+panel = stage list w/ reorder + minimal per-stage settings.

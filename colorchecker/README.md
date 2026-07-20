@@ -38,5 +38,22 @@ committed to the repo (`*.tif` is git-ignored — keep real frames in
 
 ## Status
 
-Building the Processing (readout) tab first. Matching (RBF) and
-LUT Inspector tabs are placeholders wired into the tab router for later.
+All three tabs are built and working on real footage:
+
+- **Processing** — load TIFFs, auto-detect the chart, sample every
+  patch, multi-exposure sessions, emissive light overlays, batch
+  import / Process All, CSV export.
+- **Matching** — fit source→target and export a `.cube`, with two
+  solvers: **RBF** (hierarchical, optional matrix pre-fit) and
+  **Parametric** (an ordered chain of Matrix / Luma / RGB-curve /
+  Reuleaux stages, ML-ready, with a per-stage error waterfall and
+  paste-ready Reuleaux slider values). Scene-referred or
+  display-referred (sandwich fit under a fixed DRT).
+- **LUT Inspector** — load a `.cube` and inspect it: image preview,
+  RGB response curves, 3D lattice.
+
+Plus `tools/reuleaux_bake.py`, a CLI that bakes reuleaux parameters
+into a `.cube` for A/B against the real DCTL in Resolve.
+
+See `HANDOFF.md` for the full project map and `ROADMAP.md` for the
+planned zone-model / DCTL / PowerGrade work (Plan B).

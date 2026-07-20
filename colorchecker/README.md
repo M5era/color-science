@@ -46,8 +46,10 @@ All three tabs are built and working on real footage:
 - **Matching** — fit source→target and export a `.cube`, with two
   solvers: **RBF** (hierarchical, optional matrix pre-fit) and
   **Parametric** (an ordered chain of Matrix / Luma / RGB-curve /
-  Reuleaux stages, ML-ready, with a per-stage error waterfall and
-  paste-ready Reuleaux slider values). Scene-referred or
+  Reuleaux Broad (fixed 6 anchors) / Reuleaux Fine (free 360° hue zone
+  with smooth sat + luma masks) stages, ML-ready, with a per-stage
+  error waterfall and paste-ready Reuleaux slider values).
+  Scene-referred or
   display-referred (sandwich fit under a fixed DRT).
 - **LUT Inspector** — load a `.cube` and inspect it: image preview,
   RGB response curves, 3D lattice.

@@ -304,3 +304,186 @@ prep (re-render charts through the prep nodes), OR use the planned
 "fixed input transform" option (load the prep as a LUT, applied to
 source patches before fitting — mirror of the DRT sandwich on the
 input side; cheap addition, not in v1 unless requested).
+
+## Chromogen-style stage family (evaluated 2026-07-20, Marc-directed)
+
+Goal: replicate the BEHAVIOR of FilmLight's Chromogen (Baselight
+look-dev tool) with simple math in our reuleaux-space stage
+architecture. Sources: Marc's screenshots + the EnergaCAMERIMAGE 2023
+demo transcript (FilmLight). Chromogen internally = "Eab" opponent
+space, scene-referred, pure formulas, no LUTs, every stage smooth —
+"smooth onto smooth stays smooth; one non-smooth op breaks the look."
+That is exactly our stage contract, so the whole family fits the
+existing solver/backprop/DCTL pipeline. We stay in reuleaux space
+(Marc's rule: OkLab off the table); this is behavior replication, not
+a clone.
+
+VERDICT: all tools replicable with simple math. Two shared primitives
+to build first, then each tool is small.
+
+### Shared primitive 1: signed ramp masks ("pivot for our luma masks")
+windows.py gains a one-sided smooth ramp: 0 below pivot, 1 above,
+cos^2 transition over falloff width, signable (negative = ramp toward
+shadows). Chromogen's standard Modulation block on EVERY tool is:
+  Zone (signed, 0 = everywhere; + = highlights, - = shadows)
+  Pivot (where, relative to mid-gray) / Falloff (how smooth)
+  Chroma (SIGNED sat gate: + = only already-saturated colors,
+          - = only desaturated colors, 0 = uniform. The transcript's
+          "add saturation only to colors that aren't saturated".)
+Weight form: m = 1 - |zone| + |zone| * ramp(sign(zone)*(L - pivot),
+falloff), same shape on the sat axis for chroma. Identity at 0 by
+construction, smooth, differentiable, ~4 params. This block is
+appended to every Chromogen-style stage below.
+
+### Shared primitive 2: opponent-axis view of the reuleaux chroma plane
+Lucky geometry: in reuleaux, Yellow (60 deg) and Blue (240 deg) are
+exactly antipodal -> Y/B is a true axis. The orthogonal axis
+(330/150 deg, magenta-red vs green-cyan) plays Chromogen's
+"green-magenta" axis. Rotate chroma plane by -60 deg (+ optional user
+Rotate param like Chromogen's), operate on the two components,
+rotate back, reconstruct at chosen val.
+
+### The stages (order = suggested build order)
+1. COLOUR SATURATION (~7p): scale the two opponent axes independently
+   (unganged R-G vs Y-B sliders, ganged by default) + Rotate + the
+   modulation block. Reconstruct at constant val. Anisotropic scaling
+   bends hues toward the stronger axis = the observed behavior.
+   Typical uses from the demo: top-of-stack desat of only-saturated
+   colors ("sand off the spikes"), then add sat to shadows/desaturated.
+2. CONTRAST BOOST (~5p): analytic smooth contrast, grey pivot +
+   highlight pivot (soft shoulder = HDR-safe rolloff, midtone
+   steepening). Chroma slider 0..1 mixes two applications:
+   0 = val-only at constant sat ("base grade", chromaticity untouched)
+   1 = per-RGB-channel ("film grade", sat rises with contrast);
+   default 0.5 ("splitting the difference is the best solution").
+3. HIGHLIGHT BLEACH (~8p): 4 sector amounts (R/Y/G/B wrapped windows,
+   ganged by default; demo: relax blues to save skies, relax yellows
+   to save skin) x highlight ramp (pivot ~2 stops below mid-gray,
+   smooth early kick-in) x chroma gate; sat -> down at constant val.
+4. NEUTRAL TINT (~5p): target hue + SIGNED amount (+ = tint
+   highlights, - = tint shadows), pivot/falloff, chroma gate
+   protecting saturated colors from gamut overshoot. Add chroma
+   vector toward target hue, reconstruct at unchanged val (tint
+   without contrast change by construction). Two instances = the demo
+   "Warm Highs" + "Cold Lows" (overlapping pivots recommended).
+5. COLOUR CROSSTALK (~6p): the "twister". Per opponent direction, hue
+   displacement along the orthogonal axis, with LUMINANCE AS THE
+   WEIGHT (Marc + transcript: "stronger with the brighter signals"):
+   a smooth monotone luma ramp (pivot/falloff) scales the
+   displacement, so shadows barely move and highlights move fully =
+   the tilt/shift of the whole space. A signed tilt option displaces
+   shadows opposite to highlights — that full twist is where the
+   blue-goes-red-in-shadows/green-in-highlights S shape comes from.
+   4 amounts (R->Y/B, Y->R/G, G->Y/B, B->R/G), ganged by default,
+   sat-weighted (stronger where saturated). Honest approximation of
+   the most abstract tool; solver fits our version to targets.
+6. SECTOR family — single PICKED hue (0-360 + falloff), NOT fixed-6
+   (transcript + screenshots corrected the earlier fixed-6 guess).
+   Each ~4p + modulation block; all are thin variants of the
+   Reuleaux Fine machinery:
+   - SECTOR SKEW: delta-hue only (Fine minus sat/val)
+   - SECTOR BRIGHTNESS: val only
+   - SECTOR SATURATION: sat only
+   - SECTOR SQUASH: the HueSquash design (h' = T + delta*(1 - s*w)),
+     foldover-proof normalization; strength is SIGNED — negative =
+     SPREAD hues apart (demo: amplify makeup nuances). Squash toward
+     picked hue; chroma gate excludes near-neutrals (reuleaux hue
+     noise) AND can protect saturated objects (demo: red clothes).
+   Demo placement wisdom: sector tools upstream of bleach (while the
+   full scene-referred volume is available); bleach-then-tint shifts
+   bleached highlights globally, tint-then-bleach re-neutralizes.
+7. BRILLIANCE REDUCTION: SKIPPED for now (Marc). Darkens colors too
+   bright for their saturation; inactive when no such colors. Add
+   later if wanted.
+
+### Why it composes
+Every stage: pure function, flat bounded params, identity anchor ->
+scipy + torch backprop solvers work as-is, waterfall attribution per
+stage, paste-ready reports, companion DCTLs trivial (analytic, no
+LUTs). A "Chromogen-ish" chain preset in the demo's typical order:
+Sat(desat extremes) -> Sat(add) -> Crosstalk -> Contrast -> Sector* ->
+Bleach -> Tint(warm highs) -> Tint(cold lows) -> Sat(final shaping).
+Stage naming by job ("skin squash", "green-to-yellow") aligns with
+the auto-naming plan already in this roadmap.
+
+## PLAN C (Marc, 2026-07-20, for safekeeping)
+
+1. LUT MATCHING: upload a .cube and fit the parametric stage chain to
+   the LUT itself instead of measured patches. This works without any
+   footage: a LUT is a function, so sample source points, apply the
+   LUT (app.core.lut.apply_lut), and the input->output pairs ARE the
+   patch pairs — solve_parametric doesn't care where targets came
+   from. Design choices when built: sampling distribution (uniform
+   lattice vs footage-realistic distribution vs Marc's existing
+   1449-row LogC3 patch dataset — the dataset is attractive because it
+   weights the fit toward colors that actually occur on real charts),
+   domain coverage/weighting, and optionally reporting error through a
+   DRT. Output as usual: per-stage waterfall + paste-ready DCTL
+   sliders — i.e. "explain this LUT as Chromogen-style moves".
+2. TRANSFER-FUNCTION DROPDOWN: the stops calibration (MID_GREY 0.391,
+   STOP 0.0741 in app/core/chromogen.py) is hardcoded Arri LogC3
+   EI800 — Marc only shoots LogC3 today. Later: a dropdown selecting
+   the working transfer function (LogC3 / LogC4 / linear / ...) that
+   sets MID_GREY + STOP per curve, in the DCTLs likely as a
+   DCTLUI_COMBO_BOX. Keep slider VALUES in stops so looks stay
+   portable across transfer functions.
+
+## Chromogen solve modes + order preference (Marc, 2026-07-20)
+
+Solve modes for the parametric solver (chain presets double as modes):
+- "Reuleaux" mode = the existing Luma/RGB curves + Reuleaux Broad +
+  Fine presets.
+- "Chromogen match" mode (BUILT): Lift Gamma Gain prep -> Chromogen
+  chain. LGG = master lift + master gamma + PER-CHANNEL gain (ganged =
+  exposure, unganged = white balance) — smooth/monotone, cannot break
+  the image. reg_scale=25 + fitted LAST in the stagewise init: the
+  model assumes exposure/WB are fine and only moves prep when it makes
+  the fit a LOT easier (verified by tests both ways). Rejected as prep:
+  matrix (crosstalk is the look's job), free 1D curves (can kink/band).
+- "Chromogen film look (full stack)" preset (BUILT) = Marc's real
+  stack order: LGG -> Sat x2 -> Crosstalk -> Contrast -> sector tools
+  (Squash/Sat/Brightness/Skew) -> Highlight Bleach -> Tint x2 -> final
+  Sat. KEY ORDERING RULE from Marc + the demo: sector tools BEFORE
+  Highlight Bleach (they want the full scene-referred volume); tints
+  after bleach shift the bleached result. Contrast position is
+  flexible (Andy: before/after sectors makes little difference).
+ORDER PREFERENCE is soft: the presets encode the canonical order, but
+Marc explicitly does not want to over-constrain the model — FUTURE:
+an order-search option (solve a few candidate permutations, e.g.
+bleach-before/after-sectors, contrast late, keep the best error) so
+the solver can discover better orders than the prior.
+
+Auto-naming (BUILT): every stage has label(params) -> short grading
+note ("skew dark greens toward cyan", "cool lows", "bleach highlights
+(spare blues)", "white balance + exposure trim", "(idle)"), shown in
+the waterfall and CLI so a fitted chain reads top-level without
+opening sliders.
+
+Artifact KPI (BUILT): noise gain (app/core/diagnostics.py) — empirical
+amplification of a small perturbation, per stage at its real input
+distribution + whole chain, median/p95/max, reported next to the
+residual everywhere. ~1 = transparent, >>1 = noise amplifier (caught
+the sector-sat power-law bug class).
+
+## LUT matching under a DRT — first real run (2026-07-20)
+
+Genesis e100_base + openDRT test taught three things:
+1. genesis_e100_base is DISPLAY-referred (header + measured S-curve) —
+   the right composition is --target-is-display: solve
+   DRT(chain(x)) ~= lut(x), "rebuild the look as chain under openDRT".
+   Wrong composition (DRT after an already-rendered LUT) shows up as
+   stages pinned at their bounds — a useful smell.
+2. Result: display error 0.224 -> 0.109 mean (worst 0.53), 484/1395
+   samples unreachable through the DRT (mostly gamut-edge colors the
+   print rendering reaches but openDRT does not). The Chromogen chain
+   alone cannot fully bridge two DIFFERENT renderings (2383 print vs
+   openDRT) — the missing flexibility is mostly TONE. Option when
+   wanted: a monotone Luma Curve pre-stage variant of the match mode
+   (fit-only; no DCTL/drx node yet).
+3. DRT MATH > DRT CUBE (Marc asked): a .cube DRT costs us trilinear
+   plateaus + noisy numeric inversion (dropped patches) and blocks
+   display-domain torch losses. openDRT is open source (Jed Smith
+   DCTL) — porting Marc's exact config would give exact+cheap
+   inversion, differentiable display-domain optimization, fewer
+   drops. Candidate next step; cube path stays as the generic
+   fallback for arbitrary DRTs.

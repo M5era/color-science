@@ -1,0 +1,126 @@
+// ReuleauxFine.dctl — one freely placed hue zone in reuleaux space.
+//
+// Companion to the "Reuleaux Fine" stage in the colorchecker parametric
+// solver (app/core/stages.py: ReuleauxFineStage). The solver's stage
+// report prints values in EXACTLY these slider units — paste them
+// straight in. Chain several instances of this node for several zones.
+//
+// What it does: a smooth plateau window (full strength core, cos^2
+// shoulders) over hue, gated by an equally smooth luma mask and sat
+// mask, drives DCTL-style hue/sat/val adjustments. Masks with their
+// core covering the whole working range are OFF (weight 1 everywhere);
+// the defaults below are the identity: node does nothing until moved.
+// The neutral axis is protected by construction (sat 0 stays neutral,
+// val coupling scales with sat exactly like ReuleauxUserStandalone).
+//
+// A/B validation: bake the same values with
+//   python3 -m tools.reuleaux_fine_bake --out fine.cube ...
+// and compare this node against the cube in Resolve.
+//
+// The rgb<->reuleaux conversion functions are transcribed from
+// Reuleaux (hotgluebanjo & calvinsilly, github.com/hotgluebanjo/reuleaux),
+// which carries NO license file: private evaluation only — do NOT
+// redistribute this file. The windowing/masking is original to this
+// project.
+
+DEFINE_UI_PARAMS(hue_center, Hue Center, DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 360.0, 0.1)
+DEFINE_UI_PARAMS(hue_core, Hue Core Width, DCTLUI_SLIDER_FLOAT, 14.4, 0.0, 180.0, 0.1)
+DEFINE_UI_PARAMS(hue_soft, Hue Softness, DCTLUI_SLIDER_FLOAT, 28.8, 0.1, 180.0, 0.1)
+DEFINE_UI_PARAMS(hue_shift, Hue Shift, DCTLUI_SLIDER_FLOAT, 0.0, -60.0, 60.0, 0.1)
+DEFINE_UI_PARAMS(sat_adj, Saturation, DCTLUI_SLIDER_FLOAT, 1.0, 0.05, 2.0, 0.001)
+DEFINE_UI_PARAMS(val_adj, Value, DCTLUI_SLIDER_FLOAT, 0.0, -3.0, 3.0, 0.001)
+DEFINE_UI_PARAMS(luma_center, Luma Mask Center, DCTLUI_SLIDER_FLOAT, 0.5, -0.5, 2.0, 0.001)
+DEFINE_UI_PARAMS(luma_core, Luma Mask Core, DCTLUI_SLIDER_FLOAT, 2.0, 0.0, 2.5, 0.001)
+DEFINE_UI_PARAMS(luma_soft, Luma Mask Soft, DCTLUI_SLIDER_FLOAT, 0.25, 0.01, 1.0, 0.001)
+DEFINE_UI_PARAMS(sat_center, Sat Mask Center, DCTLUI_SLIDER_FLOAT, 0.5, -0.5, 1.5, 0.001)
+DEFINE_UI_PARAMS(sat_core, Sat Mask Core, DCTLUI_SLIDER_FLOAT, 1.5, 0.0, 2.0, 0.001)
+DEFINE_UI_PARAMS(sat_soft, Sat Mask Soft, DCTLUI_SLIDER_FLOAT, 0.25, 0.01, 1.0, 0.001)
+
+#define PI_LOCAL 3.141592653589f
+
+// ---- reuleaux conversions (1:1 with the validated port) -------------
+
+__DEVICE__ float3 rgb_to_reuleaux(float3 rgb) {
+    float rot_x = _sqrtf(2.0f) / 6.0f * (2.0f * rgb.x - rgb.y - rgb.z);
+    float rot_y = (rgb.y - rgb.z) / _sqrtf(6.0f);
+    float rot_z = (rgb.x + rgb.y + rgb.z) / 3.0f;
+
+    float hue = PI_LOCAL - _atan2f(rot_y, -rot_x);
+    float sat = rot_z == 0.0f ? 0.0f : _sqrtf(rot_x * rot_x + rot_y * rot_y) / rot_z;
+    float val = _fmaxf(rgb.x, _fmaxf(rgb.y, rgb.z));
+
+    return make_float3(hue / (2.0f * PI_LOCAL), sat / _sqrtf(2.0f), val);
+}
+
+__DEVICE__ float3 reuleaux_to_rgb(float3 reuleaux) {
+    float hue = reuleaux.x * 2.0f * PI_LOCAL;
+    float sat = reuleaux.y * _sqrtf(2.0f);
+    float val = reuleaux.z;
+
+    // sat == 0 -> 1/sat == inf -> ocs_x = ocs_y = 0 (neutral axis)
+    float m = _sqrtf(2.0f) * _fmaxf(_cosf(hue),
+                  _fmaxf(_cosf(hue + 2.0f * PI_LOCAL / 3.0f),
+                         _cosf(hue - 2.0f * PI_LOCAL / 3.0f))) + 1.0f / sat;
+
+    float ocs_x = val * _cosf(hue) / m;
+    float ocs_y = val * _sinf(hue) / m;
+    float ocs_z = val;
+    if (sat == 0.0f) { ocs_x = 0.0f; ocs_y = 0.0f; }
+
+    float s32 = _sqrtf(1.5f);
+    float s3 = _sqrtf(3.0f);
+    float r = ocs_z - s32 * _fmaxf(_fabs(ocs_y) - s3 * ocs_x, 0.0f);
+    float g = ocs_z - s32 * (_fmaxf(_fabs(ocs_y), s3 * ocs_x) - ocs_y);
+    float b = ocs_z - s32 * (_fmaxf(_fabs(ocs_y), s3 * ocs_x) + ocs_y);
+    return make_float3(r, g, b);
+}
+
+__DEVICE__ float spow(float x, float p) {
+    float mag = _powf(_fabs(x), p);
+    return x < 0.0f ? -mag : mag;
+}
+
+// ---- smooth windows (mirror of app/core/windows.py) -----------------
+
+__DEVICE__ float shoulder(float d, float flat, float soft) {
+    float t = _clampf((d - flat) / _fmaxf(soft, 1e-6f), 0.0f, 1.0f);
+    if (t <= 0.0f) return 1.0f;
+    if (t >= 1.0f) return 0.0f;
+    float c = _cosf(0.5f * PI_LOCAL * t);
+    return c * c;
+}
+
+__DEVICE__ float plateau_window(float x, float center, float flat, float soft) {
+    return shoulder(_fabs(x - center), flat, soft);
+}
+
+__DEVICE__ float wrapped_window(float x, float center, float flat, float soft) {
+    float d = x - center + 0.5f;
+    d = d - _floorf(d);
+    return shoulder(_fabs(d - 0.5f), flat, soft);
+}
+
+// ---------------------------------------------------------------------
+
+__DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, float p_R, float p_G, float p_B)
+{
+    float3 reuleaux = rgb_to_reuleaux(make_float3(p_R, p_G, p_B));
+    float hue = reuleaux.x;
+    float sat = reuleaux.y;
+    float val = reuleaux.z;
+
+    // sliders (degrees) -> turns, matching the solver's internal units
+    float center = hue_center / 360.0f;
+    center = center - _floorf(center);
+
+    float w = wrapped_window(hue, center, hue_core / 360.0f, hue_soft / 360.0f)
+            * plateau_window(val, luma_center, luma_core, luma_soft)
+            * plateau_window(sat, sat_center, sat_core, sat_soft);
+
+    float hue_result = hue + w * (hue_shift / 360.0f);
+    float sat_factor = 1.0f + w * (sat_adj - 1.0f);
+    float sat_result = spow(sat, 1.0f / sat_factor);
+    float val_result = val * _fmaxf(1.0f + sat_result * (w * val_adj), 1e-6f);
+
+    return reuleaux_to_rgb(make_float3(hue_result, sat_result, val_result));
+}

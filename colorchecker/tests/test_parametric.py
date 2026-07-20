@@ -10,7 +10,8 @@ from app.core.stages import (
     CHAIN_PRESETS,
     LinearMatrixStage,
     LumaCurveStage,
-    ReuleauxStage,
+    ReuleauxBroadStage,
+    ReuleauxFineStage,
     RGBCurvesStage,
     STAGE_POOL,
 )
@@ -45,7 +46,7 @@ def test_recovers_pure_reuleaux_transform():
     true = ReuleauxUserParams(overall_sat=1.15, red=(0.06, 1.25, 0.15),
                               blue=(-0.04, 0.85, 0.3))
     target = reuleaux_user(x, true)
-    result = solve_parametric(x, target, [ReuleauxStage()])
+    result = solve_parametric(x, target, [ReuleauxBroadStage()])
     assert result.error_after < 5e-4
     assert result.error_after < result.error_before / 20
 
@@ -56,7 +57,7 @@ def test_recovers_matrix_plus_reuleaux():
     true = ReuleauxUserParams(green=(0.05, 1.2, -0.2))
     target = reuleaux_user(x @ matrix.T, true)
     result = solve_parametric(
-        x, target, [LinearMatrixStage(), ReuleauxStage()]
+        x, target, [LinearMatrixStage(), ReuleauxBroadStage()]
     )
     assert result.error_after < 1e-3
     # waterfall exists for both stages and improves overall
@@ -71,7 +72,7 @@ def test_full_chain_on_film_like_target():
     toned = contrast + np.array([0.015, -0.005, -0.02]) * (1.0 - contrast)
     target = reuleaux_user(toned, ReuleauxUserParams(red=(0.03, 1.15, 0.1)))
 
-    stages = [LumaCurveStage(6), RGBCurvesStage(6), ReuleauxStage()]
+    stages = [LumaCurveStage(6), RGBCurvesStage(6), ReuleauxBroadStage()]
     result = solve_parametric(x, target, stages)
     assert result.error_after < 0.01
     assert result.error_after < result.error_before / 5
@@ -113,10 +114,30 @@ def test_parametric_sandwich_under_drt(tmp_path):
     true = ReuleauxUserParams(cyan=(-0.05, 1.3, 0.2))
     target = apply_lut(drt, reuleaux_user(x, true))
 
-    result = solve_parametric(x, target, [ReuleauxStage()], output_transform=drt)
+    result = solve_parametric(x, target, [ReuleauxBroadStage()], output_transform=drt)
     assert result.display_referred
     assert result.error_after < 0.01
     assert result.error_after < result.error_before
+
+
+def test_broad_plus_fine_recovers_local_zone():
+    """Broad handles the global move; a Fine zone near red (overlapping
+    the identity window, so the local solver can find it) mops up a
+    local push the 6 fixed anchors can't express as sharply."""
+    x = _source()
+    fine_true = ReuleauxFineStage()
+    p_true = fine_true.identity().copy()
+    p_true[[0, 1, 2, 3, 4]] = [0.05, 0.08, 0.12, 0.02, 1.4]
+    target = fine_true.apply(
+        reuleaux_user(x, ReuleauxUserParams(overall_sat=1.1)), p_true
+    )
+
+    result = solve_parametric(
+        x, target, [ReuleauxBroadStage(), ReuleauxFineStage()]
+    )
+    assert result.error_after < result.error_before / 10
+    assert len(result.stage_reports) == 2
+    assert "Reuleaux Fine zone" in result.stage_reports[1]
 
 
 def test_presets_reference_pool():

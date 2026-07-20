@@ -4,3 +4,4 @@ scipy>=1.11
 tifffile>=2024.2.12
 imageio>=2.34
 opencv-python-headless>=4.9
+zstandard>=0.22

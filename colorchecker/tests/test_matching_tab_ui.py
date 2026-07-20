@@ -84,43 +84,43 @@ def test_solver_switch_and_presets(qapp):
     # default preset populated the list
     assert tab.stage_list.count() > 0
 
-    tab.chain_preset_combo.setCurrentText("Reuleaux only")
+    tab.chain_preset_combo.setCurrentText("Reuleaux Broad only")
     assert [tab.stage_list.item(i).text() for i in range(tab.stage_list.count())] == [
-        "Reuleaux"
+        "Reuleaux Broad"
     ]
 
-    tab.chain_preset_combo.setCurrentText("Matrix + Reuleaux")
+    tab.chain_preset_combo.setCurrentText("Matrix + Reuleaux Broad")
     assert [tab.stage_list.item(i).text() for i in range(tab.stage_list.count())] == [
-        "Matrix", "Reuleaux"
+        "Matrix", "Reuleaux Broad"
     ]
 
 
 def test_stage_editing_marks_custom_and_reorders(qapp):
     tab = _fresh_tab()
     tab.solver_combo.setCurrentText("Parametric")
-    tab.chain_preset_combo.setCurrentText("Matrix + Reuleaux")
+    tab.chain_preset_combo.setCurrentText("Matrix + Reuleaux Broad")
 
     tab.add_stage_combo.setCurrentText("Luma Curve")
     tab._add_stage()
     assert tab.chain_preset_combo.currentText() == "Custom"
     names = [tab.stage_list.item(i).text() for i in range(tab.stage_list.count())]
-    assert names == ["Matrix", "Reuleaux", "Luma Curve"]
+    assert names == ["Matrix", "Reuleaux Broad", "Luma Curve"]
 
     # move Luma Curve to the front
     tab.stage_list.setCurrentRow(2)
     tab._move_stage(-1)
     tab._move_stage(-1)
     names = [tab.stage_list.item(i).text() for i in range(tab.stage_list.count())]
-    assert names == ["Luma Curve", "Matrix", "Reuleaux"]
+    assert names == ["Luma Curve", "Matrix", "Reuleaux Broad"]
 
     # remove the matrix
     tab.stage_list.setCurrentRow(1)
     tab._remove_stage()
     names = [tab.stage_list.item(i).text() for i in range(tab.stage_list.count())]
-    assert names == ["Luma Curve", "Reuleaux"]
+    assert names == ["Luma Curve", "Reuleaux Broad"]
 
     stages = tab._build_stages()
-    assert [s.name for s in stages] == ["Luma Curve", "Reuleaux"]
+    assert [s.name for s in stages] == ["Luma Curve", "Reuleaux Broad"]
     # curve stages pick up the point count from the spinbox
     tab.curve_points_spin.setValue(4)
     assert tab._build_stages()[0].identity().size == 4
@@ -133,11 +133,11 @@ def test_parametric_solve_and_export(qapp, tmp_path, monkeypatch):
     _load_csv_into(tab.target_box, tgt, monkeypatch)
 
     tab.solver_combo.setCurrentText("Parametric")
-    tab.chain_preset_combo.setCurrentText("Reuleaux only")
+    tab.chain_preset_combo.setCurrentText("Reuleaux Broad only")
     tab.solve()
 
     text = tab.result_label.text()
-    assert "after Reuleaux:" in text          # waterfall line
+    assert "after Reuleaux Broad:" in text          # waterfall line
     assert "paste into" in text               # reuleaux slider report
     assert tab.export_btn.isEnabled()
 
@@ -158,6 +158,23 @@ def test_parametric_solve_and_export(qapp, tmp_path, monkeypatch):
     probe = np.array([[0.4, 0.35, 0.3]])
     fitted = tab._result.model(probe)
     assert np.isfinite(fitted).all()
+
+
+def test_backprop_checkbox_drives_torch_backend(qapp, tmp_path, monkeypatch):
+    pytest.importorskip("torch")
+    src, tgt = _write_pair_csvs(tmp_path)
+    tab = _fresh_tab()
+    _load_csv_into(tab.source_box, src, monkeypatch)
+    _load_csv_into(tab.target_box, tgt, monkeypatch)
+
+    tab.solver_combo.setCurrentText("Parametric")
+    tab.chain_preset_combo.setCurrentText("Reuleaux Broad only")
+    assert tab.backprop_check.isEnabled()
+    tab.backprop_check.setChecked(True)
+    tab.solve()
+
+    assert tab._result.backend == "torch"
+    assert tab.export_btn.isEnabled()
 
 
 def test_rbf_path_still_solves(qapp, tmp_path, monkeypatch):

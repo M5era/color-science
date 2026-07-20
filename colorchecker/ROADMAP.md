@@ -294,3 +294,13 @@ ReuleauxUserStandalone.dctl — parity proven), plus combined 3D cube.
 
 UI: Solver selector RBF | Parametric in the Model box; Parametric
 panel = stage list w/ reorder + minimal per-stage settings.
+
+Parametric solver addendum (Marc, 2026-07-19): subset solving is a
+first-class requirement — chain presets in the UI: Full (Luma -> RGB
+-> Reuleaux) / Reuleaux only / Matrix + Reuleaux / Custom. Rationale:
+contrast/split may be hand-built in Resolve beforehand. Workflow note:
+in that case the SOURCE patches must be measured through the manual
+prep (re-render charts through the prep nodes), OR use the planned
+"fixed input transform" option (load the prep as a LUT, applied to
+source patches before fitting — mirror of the DRT sandwich on the
+input side; cheap addition, not in v1 unless requested).

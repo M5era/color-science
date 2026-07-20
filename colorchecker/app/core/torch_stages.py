@@ -29,6 +29,7 @@ from app.core.chromogen import (
     SectorSquashStage,
 )
 from app.core.stages import (
+    LiftGammaGainStage,
     LinearMatrixStage,
     LumaCurveStage,
     ReuleauxBroadStage,
@@ -125,6 +126,11 @@ def _wrapped_window(x, center, flat, soft):
 
 def _matrix_apply(stage, x, p):
     return x @ p.reshape(3, 3).T
+
+
+def _lgg_apply(stage, x, p):
+    y = p[2:5] * (x + p[0] * (1.0 - x))
+    return _spow(y, 1.0 / p[1])
 
 
 def _curve_ys(block):
@@ -333,7 +339,7 @@ def _sector_brightness_apply(stage, x, p):
 def _sector_saturation_apply(stage, x, p):
     hue, sat, val = _rgb_to_reuleaux(x)
     w = _sector_weight(hue, sat, val, p)
-    sat2 = _spow(sat, 1.0 / (1.0 + w * (p[1] - 1.0)))
+    sat2 = sat * (1.0 + w * (p[1] - 1.0))
     return _reuleaux_to_rgb(hue, sat2, val)
 
 
@@ -354,6 +360,7 @@ def _sector_squash_apply(stage, x, p):
 
 
 _APPLY = {
+    LiftGammaGainStage: _lgg_apply,
     LinearMatrixStage: _matrix_apply,
     LumaCurveStage: _luma_apply,
     RGBCurvesStage: _rgb_curves_apply,

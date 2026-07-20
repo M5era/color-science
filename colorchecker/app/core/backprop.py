@@ -72,9 +72,14 @@ def refine_backprop(
     if not fine_hue_indices:
         restarts = 1
 
+    reg_scale = np.concatenate([
+        np.full(s.identity().size, s.reg_scale) for s in stages
+    ])
+
     lo_t = torch.as_tensor(lo, dtype=torch.float64)
     scale_t = torch.as_tensor(scale, dtype=torch.float64)
     id_t = torch.as_tensor(identity, dtype=torch.float64)
+    reg_scale_t = torch.as_tensor(reg_scale, dtype=torch.float64)
     x_t = torch.as_tensor(source, dtype=torch.float64)
     y_t = torch.as_tensor(fit_target, dtype=torch.float64)
     reg = float(regularization)
@@ -109,7 +114,7 @@ def refine_backprop(
             p = lo_t + scale_t * torch.sigmoid(theta)
             out = torch_chain(stages, x_t, split(p))
             data = ((out - y_t) ** 2).mean()
-            penalty = reg * (((p - id_t) / scale_t) ** 2).mean()
+            penalty = reg * (reg_scale_t * ((p - id_t) / scale_t) ** 2).mean()
             (data + penalty).backward()
             optimizer.step()
 

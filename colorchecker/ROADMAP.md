@@ -427,3 +427,40 @@ the auto-naming plan already in this roadmap.
    sets MID_GREY + STOP per curve, in the DCTLs likely as a
    DCTLUI_COMBO_BOX. Keep slider VALUES in stops so looks stay
    portable across transfer functions.
+
+## Chromogen solve modes + order preference (Marc, 2026-07-20)
+
+Solve modes for the parametric solver (chain presets double as modes):
+- "Reuleaux" mode = the existing Luma/RGB curves + Reuleaux Broad +
+  Fine presets.
+- "Chromogen match" mode (BUILT): Lift Gamma Gain prep -> Chromogen
+  chain. LGG = master lift + master gamma + PER-CHANNEL gain (ganged =
+  exposure, unganged = white balance) — smooth/monotone, cannot break
+  the image. reg_scale=25 + fitted LAST in the stagewise init: the
+  model assumes exposure/WB are fine and only moves prep when it makes
+  the fit a LOT easier (verified by tests both ways). Rejected as prep:
+  matrix (crosstalk is the look's job), free 1D curves (can kink/band).
+- "Chromogen film look (full stack)" preset (BUILT) = Marc's real
+  stack order: LGG -> Sat x2 -> Crosstalk -> Contrast -> sector tools
+  (Squash/Sat/Brightness/Skew) -> Highlight Bleach -> Tint x2 -> final
+  Sat. KEY ORDERING RULE from Marc + the demo: sector tools BEFORE
+  Highlight Bleach (they want the full scene-referred volume); tints
+  after bleach shift the bleached result. Contrast position is
+  flexible (Andy: before/after sectors makes little difference).
+ORDER PREFERENCE is soft: the presets encode the canonical order, but
+Marc explicitly does not want to over-constrain the model — FUTURE:
+an order-search option (solve a few candidate permutations, e.g.
+bleach-before/after-sectors, contrast late, keep the best error) so
+the solver can discover better orders than the prior.
+
+Auto-naming (BUILT): every stage has label(params) -> short grading
+note ("skew dark greens toward cyan", "cool lows", "bleach highlights
+(spare blues)", "white balance + exposure trim", "(idle)"), shown in
+the waterfall and CLI so a fitted chain reads top-level without
+opening sliders.
+
+Artifact KPI (BUILT): noise gain (app/core/diagnostics.py) — empirical
+amplification of a small perturbation, per stage at its real input
+distribution + whole chain, median/p95/max, reported next to the
+residual everywhere. ~1 = transparent, >>1 = noise amplifier (caught
+the sector-sat power-law bug class).

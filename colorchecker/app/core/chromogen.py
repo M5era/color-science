@@ -94,6 +94,35 @@ def _softplus(x, width):
     return width * np.logaddexp(0.0, x / width)
 
 
+# ----------------------------------------------------- auto-naming
+# Human labels for fitted stages ("skew dark greens", "cool lows") so
+# a solve reads top-level without opening the sliders (Marc: hue
+# numbers in Resolve are a blind thing).
+
+_HUE_WORDS = ["red", "orange", "yellow", "lime", "green", "teal",
+              "cyan", "azure", "blue", "purple", "magenta", "pink"]
+
+
+def hue_word(deg: float) -> str:
+    return _HUE_WORDS[int(round((deg % 360.0) / 30.0)) % 12]
+
+
+def zone_word(zone: float) -> str:
+    if zone > 0.3:
+        return "bright "
+    if zone < -0.3:
+        return "dark "
+    return ""
+
+
+def _chroma_note(chroma: float) -> str:
+    if chroma > 0.3:
+        return " (saturated only)"
+    if chroma < -0.3:
+        return " (muted only)"
+    return ""
+
+
 # ------------------------------------------------------------- stages
 
 class ColourSaturationStage(Stage):
@@ -134,6 +163,17 @@ class ColourSaturationStage(Stage):
         c2 = sin_t * u + cos_t * v
         hue2, sat2 = from_chroma_vec(c1, c2)
         return reuleaux_to_rgb(np.stack([hue2, sat2, val], axis=-1))
+
+    def label(self, params):
+        s_rg, s_yb, zone, pivot, chroma = params
+        mean = (s_rg + s_yb) / 2.0
+        if abs(mean - 1.0) < 0.05 and abs(s_rg - s_yb) < 0.05:
+            return "saturation (idle)"
+        verb = "boost" if mean > 1.0 else "desat"
+        axis = ""
+        if abs(s_rg - s_yb) >= 0.15:
+            axis = " Y/B" if s_yb > s_rg else " G/M"
+        return f"{verb} {zone_word(zone)}colors{axis}{_chroma_note(chroma)}"
 
     def describe(self, params):
         s_rg, s_yb, zone, pivot, chroma = params
@@ -183,6 +223,20 @@ class ColourCrosstalkStage(Stage):
             c2 = c2 + w * d2
         hue2, sat2 = from_chroma_vec(c1, c2)
         return reuleaux_to_rgb(np.stack([hue2, sat2, val], axis=-1))
+
+    def label(self, params):
+        amounts = np.asarray(params[:4], dtype=np.float64)
+        if np.abs(amounts).max() < 0.05:
+            return "crosstalk (idle)"
+        if np.abs(amounts - amounts.mean()).max() < 0.05:
+            return ("global twist +" if amounts.mean() > 0
+                    else "global twist -")
+        i = int(np.abs(amounts).argmax())
+        src = ["reds", "yellows", "greens", "blues"][i]
+        toward = (["yellow", "blue"] if i in (0, 2)
+                  else ["green", "magenta"])
+        direction = toward[0] if amounts[i] > 0 else toward[1]
+        return f"tilt {src} toward {direction}"
 
     def describe(self, params):
         r, y, g, b, zone, pivot, chroma = params
@@ -236,6 +290,17 @@ class ContrastBoostStage(Stage):
         rgb_mode = self._curve(x, boost, grey_abs, highlight_abs)
         return (1.0 - mix) * val_mode + mix * rgb_mode
 
+    def label(self, params):
+        boost, grey, highlight, mix = params
+        if abs(boost) < 0.05:
+            return "contrast (idle)"
+        verb = "add contrast" if boost > 0 else "flatten contrast"
+        if mix < 0.25:
+            return f"{verb} (silvery)"
+        if mix > 0.75:
+            return f"{verb} (rich)"
+        return verb
+
     def describe(self, params):
         boost, grey, highlight, mix = params
         return "\n".join([
@@ -277,6 +342,16 @@ class HighlightBleachStage(Stage):
         )
         sat2 = sat * (1.0 - w)
         return reuleaux_to_rgb(np.stack([hue, sat2, val], axis=-1))
+
+    def label(self, params):
+        amounts = np.asarray(params[:4], dtype=np.float64)
+        if amounts.max() < 0.03:
+            return "bleach (idle)"
+        spared = [w for a, w in zip(amounts, ["reds", "yellows",
+                                              "greens", "blues"])
+                  if a < 0.4 * amounts.max()]
+        note = f" (spare {', '.join(spared)})" if spared else ""
+        return f"bleach highlights{note}"
 
     def describe(self, params):
         r, y, g, b, pivot, falloff, chroma = params
@@ -327,6 +402,19 @@ class NeutralTintStage(Stage):
         c2 = c2 + strength * m * d2
         hue2, sat2 = from_chroma_vec(c1, c2)
         return reuleaux_to_rgb(np.stack([hue2, sat2, val], axis=-1))
+
+    def label(self, params):
+        hue_deg, amount, pivot, falloff, chroma = params
+        if abs(amount) < 0.03:
+            return "tint (idle)"
+        h = hue_deg % 360.0
+        if h < 90.0 or h >= 330.0:
+            tone = "warm"
+        elif 150.0 <= h < 270.0:
+            tone = "cool"
+        else:
+            tone = hue_word(h)
+        return f"{tone} {'highs' if amount >= 0 else 'lows'}"
 
     def describe(self, params):
         hue_deg, amount, pivot, falloff, chroma = params
@@ -382,6 +470,14 @@ class SectorSkewStage(_SectorStage):
     """Shift the hues of one picked sector (Chromogen Sector Skew).
     Skew in degrees of hue shift at full window weight."""
 
+    def label(self, params):
+        hue, skew, falloff, zone = params[0], params[1], params[2], params[3]
+        if abs(skew) < 2.0:
+            return "skew (idle)"
+        toward = hue_word(hue + np.sign(skew) * 45.0)
+        return (f"skew {zone_word(zone)}{hue_word(hue)}s "
+                f"toward {toward}")
+
     name = "Sector Skew"
     param_names = ["Hue", "Skew", "Falloff", "Zone", "Pivot", "Chroma"]
     _AMOUNT_LO, _AMOUNT_HI = -60.0, 60.0
@@ -399,6 +495,12 @@ class SectorBrightnessStage(_SectorStage):
     Val effect scales with sat (reuleaux convention) so the neutral
     axis is untouched."""
 
+    def label(self, params):
+        if abs(params[1]) < 0.05:
+            return "brightness (idle)"
+        verb = "brighten" if params[1] > 0 else "darken"
+        return f"{verb} {zone_word(params[3])}{hue_word(params[0])}s"
+
     name = "Sector Brightness"
     param_names = ["Hue", "Brightness", "Falloff", "Zone", "Pivot", "Chroma"]
     _AMOUNT_LO, _AMOUNT_HI = -3.0, 3.0
@@ -413,18 +515,29 @@ class SectorBrightnessStage(_SectorStage):
 
 class SectorSaturationStage(_SectorStage):
     """Saturate/desaturate one picked sector (Chromogen Sector
-    Saturation). Amount is the DCTL-style sat factor (1 = neutral)."""
+    Saturation). LINEAR chroma scale (1 = neutral, 0 = full desat):
+    constant relative gain, so low-sat noise is
+    amplified no more than the colors are — the earlier power-law
+    version had unbounded relative gain near the neutral axis and
+    visibly amplified sensor noise (Marc, confirmed on footage)."""
 
     name = "Sector Saturation"
     param_names = ["Hue", "Saturation", "Falloff", "Zone", "Pivot", "Chroma"]
+
+    def label(self, params):
+        if abs(params[1] - 1.0) < 0.05:
+            return "sector sat (idle)"
+        verb = "boost" if params[1] > 1.0 else "desat"
+        return f"{verb} {zone_word(params[3])}{hue_word(params[0])}s"
+
     _AMOUNT_ID = 1.0
-    _AMOUNT_LO, _AMOUNT_HI = 0.05, 2.0
+    _AMOUNT_LO, _AMOUNT_HI = 0.0, 2.0
 
     def apply(self, x, params):
         reuleaux = rgb_to_reuleaux(x)
         hue, sat, val = reuleaux[..., 0], reuleaux[..., 1], reuleaux[..., 2]
         w = self._weight(hue, sat, val, params)
-        sat2 = _spow(sat, 1.0 / (1.0 + w * (params[1] - 1.0)))
+        sat2 = sat * (1.0 + w * (params[1] - 1.0))
         return reuleaux_to_rgb(np.stack([hue, sat2, val], axis=-1))
 
 
@@ -443,6 +556,13 @@ class SectorSquashStage(_SectorStage):
 
     name = "Sector Squash"
     param_names = ["Hue", "Squash", "Falloff", "Zone", "Pivot", "Chroma"]
+
+    def label(self, params):
+        if abs(params[1]) < 0.05:
+            return "squash (idle)"
+        verb = "squash" if params[1] > 0 else "spread"
+        return f"{verb} {zone_word(params[3])}{hue_word(params[0])}s"
+
     _AMOUNT_LO, _AMOUNT_HI = -1.0, 1.0
 
     def apply(self, x, params):

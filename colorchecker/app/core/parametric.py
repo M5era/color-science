@@ -11,6 +11,7 @@ from dataclasses import dataclass
 import numpy as np
 from scipy.optimize import least_squares
 
+from app.core.diagnostics import noise_gain
 from app.core.lut import CubeLUT, apply_lut
 from app.core.match import invert_lut_at
 from app.core.stages import Stage
@@ -46,6 +47,11 @@ class ParametricResult:
     waterfall: list  # [(stage name, error after that stage)]
     stage_reports: list  # human-readable per-stage summaries
     backend: str = "scipy"  # which optimizer produced the fit
+    # artifact KPI: empirical noise amplification (see diagnostics.py),
+    # per stage at its own input distribution + for the whole chain
+    stage_noise_gain: list = None  # [(stage name, stats dict)]
+    chain_noise_gain: dict = None
+    stage_labels: list = None  # short human names ("cool lows", ...)
 
 
 def _mean_dist(a, b):
@@ -115,14 +121,29 @@ def solve_parametric(
         return out
 
     # ---- pass 1: stagewise coordinate descent -------------------------
+    # Strongly anchored prep stages (high reg_scale) are fitted LAST in
+    # each sweep: the look stages get first claim on the residual, so
+    # prep only absorbs what the look genuinely cannot express (e.g. a
+    # real exposure/WB mismatch). Fitting chain-order instead lets a
+    # front prep stage greedily grab the look and park the solve in a
+    # bad valley. The identity reg below breaks remaining ties.
+    fit_order = sorted(range(len(stages)),
+                       key=lambda i: (stages[i].reg_scale, i))
     for _ in range(sweeps):
-        for i, stage in enumerate(stages):
+        for i in fit_order:
+            stage = stages[i]
             lo, hi = stage.bounds()
             x0 = np.clip(params[i], lo, hi)
+            stage_id = stage.identity()
+            stage_scale = np.maximum(hi - lo, 1e-6)
+            stage_reg = np.sqrt(regularization * stage.reg_scale)
 
-            def residual(p, i=i):
+            def residual(p, i=i, stage_id=stage_id,
+                         stage_scale=stage_scale, stage_reg=stage_reg):
                 trial = params[:i] + [p] + params[i + 1 :]
-                return (chain(source, trial) - fit_target).ravel()
+                fit = (chain(source, trial) - fit_target).ravel()
+                reg = stage_reg * (p - stage_id) / stage_scale
+                return np.concatenate([fit, reg])
 
             sol = least_squares(
                 residual, x0, bounds=(lo, hi), method="trf",
@@ -147,13 +168,18 @@ def solve_parametric(
     identity_all = np.concatenate([s.identity() for s in stages])
     scale_all = np.maximum(hi_all - lo_all, 1e-6)
     reg_weight = np.sqrt(regularization)
+    # per-stage anchoring: prep stages (high reg_scale) only move when
+    # it makes the fit a LOT easier
+    reg_scale_all = np.concatenate([
+        np.full(s.identity().size, np.sqrt(s.reg_scale)) for s in stages
+    ])
 
     def split(flat):
         return [flat[offsets[i] : offsets[i + 1]] for i in range(len(stages))]
 
     def joint_residual(flat):
         fit = chain(source, split(flat)) - fit_target
-        reg = reg_weight * (flat - identity_all) / scale_all
+        reg = reg_weight * reg_scale_all * (flat - identity_all) / scale_all
         return np.concatenate([fit.ravel(), reg])
 
     x0 = np.clip(np.concatenate(params), lo_all, hi_all)
@@ -168,8 +194,12 @@ def solve_parametric(
     error_before = _mean_dist(display(source), target)
 
     waterfall = []
+    stage_gains = []
     out = source
     for stage, p in zip(stages, params):
+        stage_gains.append(
+            (stage.name, noise_gain(lambda v: stage.apply(v, p), out))
+        )
         out = stage.apply(out, p)
         waterfall.append((stage.name, _mean_dist(display(out), target)))
 
@@ -189,4 +219,7 @@ def solve_parametric(
         waterfall=waterfall,
         stage_reports=[s.describe(p) for s, p in zip(stages, params)],
         backend=backend,
+        stage_noise_gain=stage_gains,
+        chain_noise_gain=noise_gain(model, source),
+        stage_labels=[s.label(p) for s, p in zip(stages, params)],
     )

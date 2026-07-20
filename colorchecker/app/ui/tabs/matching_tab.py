@@ -458,13 +458,26 @@ class MatchingTab(QWidget):
             parts.append("Errors measured through the DRT (what you'd see):")
         parts.append(f"Error before: {result.error_before:.5f}")
         if parametric:
-            for stage_name, err in result.waterfall:
-                parts.append(f"  after {stage_name}: {err:.5f}")
+            for (stage_name, err), (_, gain), label in zip(
+                result.waterfall, result.stage_noise_gain,
+                result.stage_labels,
+            ):
+                shown = stage_name if label == stage_name else f"{stage_name} — {label}"
+                parts.append(
+                    f"  after {shown}: {err:.5f}   "
+                    f"[noise gain ×{gain['median']:.2f}, max ×{gain['max']:.2f}]"
+                )
         elif result.error_matrix is not None:
             parts.append(f"After matrix: {result.error_matrix:.5f}")
         parts.append(
             f"After match: {result.error_after:.5f} (worst patch {result.error_after_max:.5f})"
         )
+        if parametric and result.chain_noise_gain is not None:
+            g = result.chain_noise_gain
+            parts.append(
+                f"Chain noise gain: ×{g['median']:.2f} median, "
+                f"×{g['max']:.2f} max (≈1 = transparent; ≫1 amplifies noise)"
+            )
         if result.display_referred:
             parts.append("Export = correction cube; apply it BEFORE the DRT node.")
         if parametric:

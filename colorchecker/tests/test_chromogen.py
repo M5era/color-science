@@ -224,7 +224,7 @@ def test_sector_brightness_and_saturation_local():
     np.testing.assert_allclose(b.apply(bluish, pb), bluish, atol=1e-9)
 
     s = SectorSaturationStage()
-    ps = _with(s, Hue=hue_r, Falloff=40.0, Saturation=1.8)
+    ps = _with(s, Hue=hue_r, Falloff=40.0, Saturation=1.4)
     assert _sat_of(s.apply(reddish, ps))[0] > _sat_of(reddish)[0] * 1.15
     np.testing.assert_allclose(s.apply(bluish, ps), bluish, atol=1e-9)
 

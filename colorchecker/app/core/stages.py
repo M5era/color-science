@@ -251,6 +251,21 @@ class ReuleauxFineStage(Stage):
             np.stack([hue_result, sat_result, val_result], axis=-1)
         )
 
+    def label(self, params):
+        from app.core.chromogen import hue_word
+        p = np.asarray(params, dtype=np.float64)
+        word = hue_word((p[0] % 1.0) * 360.0)
+        moves = []
+        if abs(p[3]) > 0.008:
+            moves.append("shift")
+        if abs(p[4] - 1.0) > 0.08:
+            moves.append("boost" if p[4] > 1.0 else "desat")
+        if abs(p[5]) > 0.08:
+            moves.append("brighten" if p[5] > 0 else "darken")
+        if not moves:
+            return f"zone {word}s (idle)"
+        return f"{'/'.join(moves)} {word}s"
+
     def describe(self, params):
         p = np.asarray(params, dtype=np.float64)
         deg = lambda t: t * 360.0
@@ -272,7 +287,58 @@ class ReuleauxFineStage(Stage):
         ])
 
 
+class LiftGammaGainStage(Stage):
+    """Exposure/white-balance prep: master Lift + master Gamma +
+    PER-CHANNEL Gain (ganged gains = exposure, unganged = white
+    balance). Smooth and monotone by construction — cannot band, fold
+    or clip — so it is safe to put in front of a look chain.
+
+        y_c = gain_c * (x_c + lift * (1 - x_c));  y = spow(y, 1/gamma)
+
+    reg_scale is high on purpose (Marc): the solver assumes exposure/WB
+    are already fine and only moves these when it makes the fit a LOT
+    easier."""
+
+    name = "Lift Gamma Gain"
+    param_names = ["Lift", "Gamma", "Gain R", "Gain G", "Gain B"]
+    reg_scale = 25.0
+
+    def identity(self):
+        return np.array([0.0, 1.0, 1.0, 1.0, 1.0])
+
+    def bounds(self):
+        return (np.asarray([-0.2, 0.6, 0.5, 0.5, 0.5]),
+                np.asarray([0.2, 1.6, 2.0, 2.0, 2.0]))
+
+    def apply(self, x, params):
+        lift, gamma = params[0], params[1]
+        gains = params[2:5]
+        y = gains * (x + lift * (1.0 - x))
+        return _spow(y, 1.0 / gamma)
+
+    def label(self, params):
+        lift, gamma, gr, gg, gb = params
+        gains = np.array([gr, gg, gb])
+        parts = []
+        if gains.max() - gains.min() > 0.05:
+            parts.append("white balance")
+        if abs(gains.mean() - 1.0) > 0.05 or abs(lift) > 0.03:
+            parts.append("exposure trim")
+        if abs(gamma - 1.0) > 0.05:
+            parts.append("gamma trim")
+        return " + ".join(parts) if parts else "prep (idle)"
+
+    def describe(self, params):
+        lift, gamma, gr, gg, gb = params
+        return "\n".join([
+            "Lift Gamma Gain (paste into dctl/LiftGammaGain.dctl):",
+            f"  Lift {lift:+.4f}   Gamma {gamma:.4f}   "
+            f"Gain R {gr:.4f}  G {gg:.4f}  B {gb:.4f}",
+        ])
+
+
 STAGE_POOL = {
+    "Lift Gamma Gain": LiftGammaGainStage,
     "Matrix": LinearMatrixStage,
     "Luma Curve": LumaCurveStage,
     "RGB Curves": RGBCurvesStage,
@@ -291,6 +357,27 @@ CHAIN_PRESETS = {
     "Chromogen broad (Sat → Crosstalk → Contrast → Bleach → Tint)": [
         "Colour Saturation", "Colour Crosstalk", "Contrast Boost",
         "Highlight Bleach", "Neutral Tint",
+    ],
+    # the solve MODE for matching: safe prep (strongly anchored at
+    # identity) in front of the chromogen look chain
+    "Chromogen match (LGG prep → Chromogen chain)": [
+        "Lift Gamma Gain", "Colour Saturation", "Colour Crosstalk",
+        "Contrast Boost", "Highlight Bleach", "Neutral Tint",
+    ],
+    # the canonical full stack, in the order of Marc's real Chromogen
+    # film look (and Andy's demo): broad first, sector tools BEFORE
+    # Highlight Bleach (order matters — sectors want the full scene-
+    # referred volume), tints after the bleach, final sat shaping.
+    # Duplicate stages are fine; fitted labels tell them apart.
+    "Chromogen film look (full stack)": [
+        "Lift Gamma Gain",
+        "Colour Saturation", "Colour Saturation",
+        "Colour Crosstalk", "Contrast Boost",
+        "Sector Squash", "Sector Saturation",
+        "Sector Brightness", "Sector Skew",
+        "Highlight Bleach",
+        "Neutral Tint", "Neutral Tint",
+        "Colour Saturation",
     ],
 }
 

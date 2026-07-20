@@ -15,6 +15,10 @@ import numpy as np
 
 class Stage(ABC):
     name: str = "stage"
+    # identity-regularization multiplier: >1 means the solver treats
+    # deviating from identity as expensive — used for prep stages that
+    # should only move when it makes the fit a LOT easier
+    reg_scale: float = 1.0
 
     @abstractmethod
     def identity(self) -> np.ndarray: ...
@@ -27,3 +31,8 @@ class Stage(ABC):
 
     def describe(self, params: np.ndarray) -> str:
         return f"{self.name}: {np.round(params, 4).tolist()}"
+
+    def label(self, params: np.ndarray) -> str:
+        """Short human name for what this fitted stage is doing
+        ("skew dark greens", "cool lows") — overridden per stage."""
+        return self.name

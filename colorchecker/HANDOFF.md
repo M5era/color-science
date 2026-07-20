@@ -243,6 +243,22 @@ tests: a Fine zone hidden in the greens that scipy provably cannot
 find (zero finite-diff gradient, no window overlap from the red start)
 is found and fit by the torch backend.
 
+**Latest (end of session):** Chromogen solve modes + LUT matching are
+BUILT. "Chromogen match" mode = Lift Gamma Gain prep (lift/gamma/
+per-channel gain; smooth+monotone; reg_scale=25 AND fitted last in the
+stagewise init, so it only moves when the look can't explain the
+residual — tested both ways) → Chromogen chain. "Chromogen film look
+(full stack)" preset = Marc's real stack order (sectors BEFORE bleach;
+duplicates allowed). LUT MATCHING (Plan C item 1): app/core/
+lut_match.py + tools/lut_match.py — sample a .cube's domain (or a
+patch CSV), fit any preset chain, scipy or torch backend; verified
+round-trip on a baked chromogen look through BOTH backends. ARTIFACT
+KPI: noise gain (app/core/diagnostics.py) per stage + chain, printed
+next to every residual (caught+fixed Sector Saturation's power-law
+noise amplification — it is now a linear chroma scale, range 0–2).
+AUTO-NAMING: stage.label(params) grading notes ("skew dark greens
+toward cyan", "cool lows", "(idle)") in waterfall/CLI output.
+
 **The Chromogen-style family is BUILT** (same session, Marc's pivot
 after watching the FilmLight demo — design in ROADMAP.md): 9 new
 stages in `app/core/chromogen.py` — Colour Saturation (2 opponent
@@ -275,8 +291,8 @@ in reuleaux space until Marc says otherwise.
   `python3 -m pip`, NOT `pip3`** (repo path has spaces, which breaks the
   pip script shim). `scipy` IS required (a missing entry once crashed
   the app on import — it's in requirements now).
-- **Tests:** `QT_QPA_PLATFORM=offscreen python3 -m pytest tests/` — 124
-  green, ~25–55s (torch tests auto-skip if torch is not installed).
+- **Tests:** `QT_QPA_PLATFORM=offscreen python3 -m pytest tests/` — 131
+  green, ~1–3 min (torch tests auto-skip if torch is not installed).
   The STAGE_POOL-looping tests (identity passthrough, torch-mirror
   parity) cover every registered stage automatically — new stages get
   those checks for free. Synthetic TIFFs generated at runtime; no footage

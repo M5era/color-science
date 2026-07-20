@@ -170,24 +170,23 @@ dropped patches) + display-domain backprop loss. Full plan in ROADMAP
 ("openDRT analytic port"). Source: `reference/OpenDRT.dctl` (GPLv3 —
 port module must carry the license; fine for private use).
 
-**Settings extraction from Marc's openDRT powergrade
-(templates/openDRT_powergrade_1.6.2.T.drx) — DONE but with one open
-question.** The node reads:
-- floats (define order tn_Lp, tn_gb, pt_hdr, tn_Lg, _cwp_lm) =
-  100 / 0.13 / 0.5 / 10 / 0.25 — ALL DEFAULTS. crv_enable = 0.
-- combos (define order in_gamut, in_oetf, look_preset,
-  tonescale_preset, _cwp, display_encoding) = **12, 8, 0, 2, 0, 2**.
-  Against the uploaded v1.1.0 lists that reads E-Gamut / Sony S-Log3 /
-  Standard / Medium Contrast / USE LOOK / Display P3 — which does NOT
-  fit a LogC3/AWG3 workflow. Likely explanation: the node was created
-  against a DIFFERENT OpenDRT.dctl version whose combo lists are
-  longer/ordered differently (index 12/8 might BE AWG3/LogC3 there).
-  **ASK MARC: open the openDRT node in Resolve and read the on-screen
-  settings** (Input Gamut, Input Transfer, Look Preset, Tonescale,
-  Creative White, Display Encoding), or confirm which OpenDRT.dctl
-  file version the node actually loads. Fallback: after the port,
-  grid-search preset combos against his baked cube
-  (openDRT_LogC3_srgb, re-upload needed — uploads don't persist).
+**openDRT settings: CONFIRMED by Marc (screenshot, 2026-07-20).**
+- Input Gamut **Arri Wide Gamut 3**, Input Transfer **Arri LogC3**,
+  Look Preset **Standard**, Tonescale Preset **Low Contrast**,
+  Creative White **USE LOOK PRESET**, Display Encoding **sRGB Display
+  (2.2 power / Rec.709)**. All float sliders at defaults (Lp 100,
+  grey boost 0.13, HDR purity 0.5, Lg 10, cwp limit 0.25), overlay off.
+- VERSION MISMATCH ESTABLISHED: the node's stored combo indices
+  [12, 8, 0, 2, 0, 2] put AWG3 at 12 and LogC3 at 8, but the uploaded
+  reference/OpenDRT.dctl has them at 6 and 4 — Marc's INSTALLED
+  OpenDRT.dctl (at ______DCTL______/DRTs/opendrt/OpenDRT.dctl) is a
+  different, likely newer version than the uploaded file. **ASK MARC
+  to upload that exact installed file** before transcribing; if only
+  the v1.1.0 file is available, port it and check the validation gate
+  against the baked cube first — if it passes within tolerance the
+  version difference doesn't matter for this config.
+- Also re-upload the baked openDRT_LogC3_srgb cube next session (the
+  validation target; uploads don't persist).
 - Port discipline = reuleaux port: 1:1 transcription, float64,
   vectorized, tests first, then the validation gate vs the baked cube,
   then wire as --drt-math in lut_match + Matching tab (analytic

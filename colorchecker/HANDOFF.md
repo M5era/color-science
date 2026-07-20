@@ -75,7 +75,13 @@ colorchecker/
                                lut_match (CLI), drx_export
   templates/                   Marc's powergrades: example_powergrade_1.6.1.T.drx
                                (8 Chromogen DCTL nodes + genesis cube node),
-                               openDRT_powergrade_1.6.2.T.drx (same + openDRT node)
+                               openDRT_powergrade_1.6.2.T.drx (same + openDRT node),
+                               contrast_boost_1.6.4.T.drx (adds ContrastBoost),
+                               liftgammagain_1.2.1.T.drx (FULL STACK: all 9
+                               Chromogen tools + LiftGammaGain + openDRT +
+                               MONO cube + 2 DMC nodes — the DEFAULT
+                               --drx-template; default chain maps with zero
+                               unmatched stages)
   reference/OpenDRT.dctl       openDRT source (Jed Smith, GPLv3) for the port
   tests/                       135 green offscreen (torch tests auto-skip w/o torch)
 ```
@@ -159,6 +165,17 @@ template (stage<->node by DCTL filename, k-th of a type; sliders by
 param_names order — proven correct by Marc's import). Template gaps
 are reported for manual pasting. sliderFloatParam6..11 on 6-slider
 nodes are leftover pool junk — ignore.
+- **2026-07-20: full-stack template landed.** Marc uploaded
+  contrast_boost_1.6.4.T.drx and liftgammagain_1.2.1.T.drx; the
+  latter (all 9 Chromogen tools incl. ContrastBoost + LiftGammaGain +
+  openDRT) is now the DEFAULT --drx-template — the default
+  Chromogen-match chain maps with zero unmatched stages (tested
+  end-to-end).
+- **Limits (answered for Marc 2026-07-20):** patching FILLS existing
+  nodes only — it cannot add/duplicate/reorder nodes (variable-length
+  protobuf; needs the generic re-serializer, see ROADMAP "TEMPLATE
+  LIMITS"). Different orders/stacks = more templates in the library.
+  Node byte order in the body is storage order, NOT graph order.
 
 ---
 
@@ -209,8 +226,9 @@ port module must carry the license; fine for private use).
 
 ## 7. Dev workflow / gotchas
 
-- **Branch:** `claude/color-checker-handoff-91whob` (PRs #1/#2 merged
-  long ago; this branch carries the whole Chromogen/backprop/drx era).
+- **Branch:** `claude/color-checker-lut-matcher-z7a1qm` (the
+  Chromogen/backprop/drx era branch was merged via PRs #3/#4;
+  main carries everything through the 2026-07-20 handoff).
 - **Run on Mac:** `python3 main.py` from `colorchecker/`; deps
   `python3 -m pip install -r requirements.txt` (NOT pip3 — path has
   spaces). torch is OPTIONAL (backprop); zstandard required (drx).
@@ -233,7 +251,9 @@ port module must carry the license; fine for private use).
 4. Sector Saturation linear range 0-2: Marc may want it tighter.
 5. Tone pre-curve option for LUT matching (bridging different
    renderings — roadmap).
-6. drx node LABEL patching (variable-length strings -> needs generic
-   protobuf re-serialize; short_label() names exist already).
+6. drx generic protobuf re-serializer: would unlock node LABEL
+   patching (short_label() names exist already) AND node add/remove/
+   reorder (Marc asked 2026-07-20; currently template-library only —
+   see ROADMAP "TEMPLATE LIMITS").
 7. Transfer-function dropdown for stops calibration (LogC3-only now).
 8. Curves-in-DRX experiment (old thread, still unrun).

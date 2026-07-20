@@ -210,6 +210,26 @@ Flow once Algorithm B exists: Marc saves a one-time template .drx
 containing our zone DCTL node(s) with defaults; the app clones it,
 writes fitted values into the sliders, outputs a ready PowerGrade.
 
+TEMPLATE LIMITS (state 2026-07-20, after Marc's full-stack template
+upload): patching can only FILL nodes that already exist in the
+template — it cannot ADD nodes, DUPLICATE them, or REWIRE the graph
+order. Node order/count/wiring are variable-length protobuf (adding a
+node shifts every offset; the graph edges reference node ids we don't
+re-serialize), so "different orders or more nodes automatically" needs
+a generic protobuf re-serializer — same blocker as node-label patching
+(handoff open thread). Practical path today: Marc keeps a small
+LIBRARY of templates (one per node stack/order he actually uses) and
+picks with --drx-template; a chain stage with no free node of its type
+is reported for manual pasting. Note byte order of nodes inside the
+body is STORAGE order (Resolve appends on creation), not necessarily
+graph processing order — matching by DCTL filename is unaffected, but
+don't infer wiring from --list order. liftgammagain_1.2.1.T.drx is
+the default template: all 9 Chromogen tools (incl. ContrastBoost) +
+LiftGammaGain + openDRT, so the default Chromogen-match chain maps
+with zero unmatched stages. If the full protobuf re-serializer ever
+lands, it unlocks: node add/remove/reorder, label patching, and
+duplicate-stage chains without pre-built duplicate nodes.
+
 OPEN QUESTION — native custom curves in DRX (would let Stages 3/4
 ship as Resolve's own curve UI instead of 1D LUT/DCTL): Marc's K64
 drx contains NO curve data (untouched tools are omitted), so encoding

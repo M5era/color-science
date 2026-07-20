@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Build artifacts (PyInstaller, later)
+build/
+dist/
+*.spec
+
+# Footage stays local — never in git
+*.tif
+*.tiff
+
+# macOS
+.DS_Store

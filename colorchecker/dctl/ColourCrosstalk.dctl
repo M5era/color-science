@@ -1,13 +1,14 @@
-// ColourCrosstalk.dctl — luminance-weighted opponent-axis crosstalk (the 'twister')
+// ColourCrosstalk.dctl — opponent-axis crosstalk (the 'twister'); brightness weights it inherently
 //
 // Companion to the "Colour Crosstalk" stage of the colorchecker parametric
 // solver (app/core/chromogen.py). The solver's stage report prints
 // values in EXACTLY these slider units — paste them straight in.
 // Defaults are the identity: the node does nothing until moved.
 //
-// Part of the Chromogen-style stage family (see ROADMAP.md): behavior
-// replication of FilmLight's look-dev tools in reuleaux space. Scene-
-// referred, pure formulas, smooth by construction.
+// Standard modulation (as in Chromogen): Zone 0 = everywhere, right =
+// highlights only, left = shadows only; Pivot = luma mask pivot,
+// 0 = mid-grey; Chroma 0 = everything, right = only saturated colors,
+// left = only neutrals.
 //
 // The rgb<->reuleaux conversion functions are transcribed from
 // Reuleaux (hotgluebanjo & calvinsilly, github.com/hotgluebanjo/reuleaux),
@@ -15,14 +16,17 @@
 // redistribute this file. Windowing/masking/tool math is original to
 // this project.
 
-DEFINE_UI_PARAMS(xt_r, Crosstalk R, DCTLUI_SLIDER_FLOAT, 0.0, -0.5, 0.5, 0.001)
-DEFINE_UI_PARAMS(xt_y, Crosstalk Y, DCTLUI_SLIDER_FLOAT, 0.0, -0.5, 0.5, 0.001)
-DEFINE_UI_PARAMS(xt_g, Crosstalk G, DCTLUI_SLIDER_FLOAT, 0.0, -0.5, 0.5, 0.001)
-DEFINE_UI_PARAMS(xt_b, Crosstalk B, DCTLUI_SLIDER_FLOAT, 0.0, -0.5, 0.5, 0.001)
-DEFINE_UI_PARAMS(pivot, Pivot, DCTLUI_SLIDER_FLOAT, 0.3, -0.5, 2.0, 0.001)
-DEFINE_UI_PARAMS(falloff, Falloff, DCTLUI_SLIDER_FLOAT, 0.8, 0.02, 2.0, 0.001)
+DEFINE_UI_PARAMS(xt_r, R -> Y/B, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 1.0, 0.001)
+DEFINE_UI_PARAMS(xt_y, Y -> R/G, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 1.0, 0.001)
+DEFINE_UI_PARAMS(xt_g, G -> Y/B, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 1.0, 0.001)
+DEFINE_UI_PARAMS(xt_b, B -> R/G, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 1.0, 0.001)
+DEFINE_UI_PARAMS(zone, Zone, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 1.0, 0.001)
+DEFINE_UI_PARAMS(pivot, Pivot, DCTLUI_SLIDER_FLOAT, 0.0, -0.5, 1.6, 0.001)
+DEFINE_UI_PARAMS(chroma, Chroma, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 1.0, 0.001)
 
 #define PI_LOCAL 3.141592653589f
+#define MID_GREY 0.4f
+#define LUMA_FALLOFF 0.5f
 #define SAT_GATE_PIVOT 0.25f
 #define SAT_GATE_FALLOFF 0.5f
 
@@ -86,9 +90,10 @@ __DEVICE__ float wrapped_bump(float x, float center, float soft) {
     return c * c;
 }
 
-__DEVICE__ float modulation(float val, float sat, float zone, float pivot,
-                            float falloff, float chroma) {
-    float r = ramp_window(val, pivot, falloff);
+// Zone / Pivot / Chroma — the standard Chromogen-style modulation.
+// pivot is an OFFSET from mid-grey.
+__DEVICE__ float modulation(float val, float sat, float zone, float pivot, float chroma) {
+    float r = ramp_window(val, MID_GREY + pivot, LUMA_FALLOFF);
     float m_luma = 1.0f - _fabs(zone)
                  + _fabs(zone) * (zone >= 0.0f ? r : 1.0f - r);
     float rs = ramp_window(sat, SAT_GATE_PIVOT, SAT_GATE_FALLOFF);
@@ -119,7 +124,7 @@ __DEVICE__ float softplusw(float x, float w) {
 __DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, float p_R, float p_G, float p_B)
 {
     float3 rl = rgb_to_reuleaux(make_float3(p_R, p_G, p_B));
-    float lum = ramp_window(rl.z, pivot, falloff);
+    float m = modulation(rl.z, rl.y, zone, pivot, chroma);
 
     float ang0 = rl.x * 2.0f * PI_LOCAL;
     float c1 = rl.y * _cosf(ang0);
@@ -134,8 +139,10 @@ __DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, float p
     for (int i = 0; i < 4; ++i) {
         float oh[4] = {0.0f, 0.0f, 0.0f, 0.0f};
         oh[i] = 1.0f;
+        // brightness itself weights the tilt: shadows barely move,
+        // highlights move fully; sat keeps neutrals untouched
         float w = rygb_interp(rl.x, oh[0], oh[1], oh[2], oh[3])
-                * lum * rl.y * amts[i];
+                * rl.y * rl.z * m * amts[i];
         c1 += w * axc[i];
         c2 += w * axs[i];
     }

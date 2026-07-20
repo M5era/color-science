@@ -1,13 +1,14 @@
-// ContrastBoost.dctl — smooth midtone contrast with HDR-safe highlight rolloff
+// ContrastBoost.dctl — smooth midtone contrast with a filmic highlight shoulder
 //
 // Companion to the "Contrast Boost" stage of the colorchecker parametric
 // solver (app/core/chromogen.py). The solver's stage report prints
 // values in EXACTLY these slider units — paste them straight in.
 // Defaults are the identity: the node does nothing until moved.
 //
-// Part of the Chromogen-style stage family (see ROADMAP.md): behavior
-// replication of FilmLight's look-dev tools in reuleaux space. Scene-
-// referred, pure formulas, smooth by construction.
+// Standard modulation (as in Chromogen): Zone 0 = everywhere, right =
+// highlights only, left = shadows only; Pivot = luma mask pivot,
+// 0 = mid-grey; Chroma 0 = everything, right = only saturated colors,
+// left = only neutrals.
 //
 // The rgb<->reuleaux conversion functions are transcribed from
 // Reuleaux (hotgluebanjo & calvinsilly, github.com/hotgluebanjo/reuleaux),
@@ -15,12 +16,14 @@
 // redistribute this file. Windowing/masking/tool math is original to
 // this project.
 
-DEFINE_UI_PARAMS(boost, Boost, DCTLUI_SLIDER_FLOAT, 0.0, -0.9, 2.0, 0.001)
-DEFINE_UI_PARAMS(grey_pivot, Grey Pivot, DCTLUI_SLIDER_FLOAT, 0.4, 0.0, 1.0, 0.001)
-DEFINE_UI_PARAMS(highlight_pivot, Highlight Pivot, DCTLUI_SLIDER_FLOAT, 0.9, 0.3, 3.0, 0.001)
+DEFINE_UI_PARAMS(boost, Contrast Boost, DCTLUI_SLIDER_FLOAT, 0.0, -0.9, 2.0, 0.001)
+DEFINE_UI_PARAMS(grey_pivot, Grey Pivot, DCTLUI_SLIDER_FLOAT, 0.0, -0.4, 0.6, 0.001)
+DEFINE_UI_PARAMS(highlight_pivot, Highlight Pivot, DCTLUI_SLIDER_FLOAT, 0.5, 0.05, 2.6, 0.001)
 DEFINE_UI_PARAMS(chroma, Chroma, DCTLUI_SLIDER_FLOAT, 0.5, 0.0, 1.0, 0.001)
 
 #define PI_LOCAL 3.141592653589f
+#define MID_GREY 0.4f
+#define LUMA_FALLOFF 0.5f
 #define SAT_GATE_PIVOT 0.25f
 #define SAT_GATE_FALLOFF 0.5f
 
@@ -84,9 +87,10 @@ __DEVICE__ float wrapped_bump(float x, float center, float soft) {
     return c * c;
 }
 
-__DEVICE__ float modulation(float val, float sat, float zone, float pivot,
-                            float falloff, float chroma) {
-    float r = ramp_window(val, pivot, falloff);
+// Zone / Pivot / Chroma — the standard Chromogen-style modulation.
+// pivot is an OFFSET from mid-grey.
+__DEVICE__ float modulation(float val, float sat, float zone, float pivot, float chroma) {
+    float r = ramp_window(val, MID_GREY + pivot, LUMA_FALLOFF);
     float m_luma = 1.0f - _fabs(zone)
                  + _fabs(zone) * (zone >= 0.0f ? r : 1.0f - r);
     float rs = ramp_window(sat, SAT_GATE_PIVOT, SAT_GATE_FALLOFF);
@@ -114,22 +118,24 @@ __DEVICE__ float softplusw(float x, float w) {
     return w * _logf(1.0f + _expf(_fminf(x / w, 60.0f)));
 }
 
-__DEVICE__ float contrast_curve(float v, float boost, float pivot, float highlight) {
+__DEVICE__ float contrast_curve(float v, float boost, float grey_abs, float highlight_abs) {
     const float w = 0.15f;
-    return v + boost * ((v - pivot) - softplusw(v - highlight, w) + softplusw(pivot - highlight, w));
+    return v + boost * ((v - grey_abs) - softplusw(v - highlight_abs, w) + softplusw(grey_abs - highlight_abs, w));
 }
 
 __DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, float p_R, float p_G, float p_B)
 {
+    float grey_abs = MID_GREY + grey_pivot;
+    float highlight_abs = MID_GREY + highlight_pivot;
     float3 rgb = make_float3(p_R, p_G, p_B);
     float3 rl = rgb_to_reuleaux(rgb);
 
     float3 val_mode = reuleaux_to_rgb(make_float3(rl.x, rl.y,
-        contrast_curve(rl.z, boost, grey_pivot, highlight_pivot)));
+        contrast_curve(rl.z, boost, grey_abs, highlight_abs)));
     float3 rgb_mode = make_float3(
-        contrast_curve(rgb.x, boost, grey_pivot, highlight_pivot),
-        contrast_curve(rgb.y, boost, grey_pivot, highlight_pivot),
-        contrast_curve(rgb.z, boost, grey_pivot, highlight_pivot));
+        contrast_curve(rgb.x, boost, grey_abs, highlight_abs),
+        contrast_curve(rgb.y, boost, grey_abs, highlight_abs),
+        contrast_curve(rgb.z, boost, grey_abs, highlight_abs));
 
     return make_float3(
         (1.0f - chroma) * val_mode.x + chroma * rgb_mode.x,

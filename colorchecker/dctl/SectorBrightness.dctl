@@ -5,9 +5,10 @@
 // values in EXACTLY these slider units — paste them straight in.
 // Defaults are the identity: the node does nothing until moved.
 //
-// Part of the Chromogen-style stage family (see ROADMAP.md): behavior
-// replication of FilmLight's look-dev tools in reuleaux space. Scene-
-// referred, pure formulas, smooth by construction.
+// Standard modulation (as in Chromogen): Zone 0 = everywhere, right =
+// highlights only, left = shadows only; Pivot = luma mask pivot,
+// 0 = mid-grey; Chroma 0 = everything, right = only saturated colors,
+// left = only neutrals.
 //
 // The rgb<->reuleaux conversion functions are transcribed from
 // Reuleaux (hotgluebanjo & calvinsilly, github.com/hotgluebanjo/reuleaux),
@@ -16,14 +17,15 @@
 // this project.
 
 DEFINE_UI_PARAMS(hue, Hue, DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 360.0, 0.1)
-DEFINE_UI_PARAMS(falloff, Falloff, DCTLUI_SLIDER_FLOAT, 60.0, 5.0, 180.0, 0.1)
 DEFINE_UI_PARAMS(brightness, Brightness, DCTLUI_SLIDER_FLOAT, 0.0, -3.0, 3.0, 0.001)
+DEFINE_UI_PARAMS(falloff, Falloff, DCTLUI_SLIDER_FLOAT, 60.0, 5.0, 180.0, 0.1)
 DEFINE_UI_PARAMS(zone, Zone, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 1.0, 0.001)
-DEFINE_UI_PARAMS(pivot, Pivot, DCTLUI_SLIDER_FLOAT, 0.4, -0.5, 2.0, 0.001)
-DEFINE_UI_PARAMS(luma_falloff, Luma Falloff, DCTLUI_SLIDER_FLOAT, 0.6, 0.02, 2.0, 0.001)
+DEFINE_UI_PARAMS(pivot, Pivot, DCTLUI_SLIDER_FLOAT, 0.0, -0.5, 1.6, 0.001)
 DEFINE_UI_PARAMS(chroma, Chroma, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 1.0, 0.001)
 
 #define PI_LOCAL 3.141592653589f
+#define MID_GREY 0.4f
+#define LUMA_FALLOFF 0.5f
 #define SAT_GATE_PIVOT 0.25f
 #define SAT_GATE_FALLOFF 0.5f
 
@@ -87,9 +89,10 @@ __DEVICE__ float wrapped_bump(float x, float center, float soft) {
     return c * c;
 }
 
-__DEVICE__ float modulation(float val, float sat, float zone, float pivot,
-                            float falloff, float chroma) {
-    float r = ramp_window(val, pivot, falloff);
+// Zone / Pivot / Chroma — the standard Chromogen-style modulation.
+// pivot is an OFFSET from mid-grey.
+__DEVICE__ float modulation(float val, float sat, float zone, float pivot, float chroma) {
+    float r = ramp_window(val, MID_GREY + pivot, LUMA_FALLOFF);
     float m_luma = 1.0f - _fabs(zone)
                  + _fabs(zone) * (zone >= 0.0f ? r : 1.0f - r);
     float rs = ramp_window(sat, SAT_GATE_PIVOT, SAT_GATE_FALLOFF);
@@ -123,7 +126,7 @@ __DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, float p
     float center = hue / 360.0f;
     center -= _floorf(center);
     float w = wrapped_bump(rl.x, center, falloff / 360.0f)
-            * modulation(rl.z, rl.y, zone, pivot, luma_falloff, chroma);
+            * modulation(rl.z, rl.y, zone, pivot, chroma);
 
     float val2 = rl.z * _fmaxf(1.0f + rl.y * (w * brightness), 1e-6f);
     return reuleaux_to_rgb(make_float3(rl.x, rl.y, val2));

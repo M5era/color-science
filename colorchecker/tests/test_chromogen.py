@@ -55,10 +55,10 @@ def test_modulation_identity_and_zone_sign():
     val = np.linspace(0.0, 1.5, 200)
     sat = np.full_like(val, 0.5)
     np.testing.assert_array_equal(
-        modulation(val, sat, 0.0, 0.4, 0.5, 0.0), 1.0
+        modulation(val, sat, 0.0, 0.0, 0.0), 1.0
     )
-    hi = modulation(val, sat, 1.0, 0.5, 0.2, 0.0)   # highlights only
-    lo = modulation(val, sat, -1.0, 0.5, 0.2, 0.0)  # shadows only
+    hi = modulation(val, sat, 1.0, 0.1, 0.0)   # highlights only
+    lo = modulation(val, sat, -1.0, 0.1, 0.0)  # shadows only
     assert hi[0] == 0.0 and hi[-1] == 1.0
     assert lo[0] == 1.0 and lo[-1] == 0.0
 
@@ -66,8 +66,8 @@ def test_modulation_identity_and_zone_sign():
 def test_modulation_chroma_sign_targets_saturation():
     val = np.full(2, 0.5)
     sat = np.array([0.05, 0.8])  # muted, saturated
-    only_saturated = modulation(val, sat, 0.0, 0.4, 0.5, 1.0)
-    only_muted = modulation(val, sat, 0.0, 0.4, 0.5, -1.0)
+    only_saturated = modulation(val, sat, 0.0, 0.0, 1.0)
+    only_muted = modulation(val, sat, 0.0, 0.0, -1.0)
     assert only_saturated[1] > 0.9 and only_saturated[0] < 0.1
     assert only_muted[0] > 0.9 and only_muted[1] < 0.1
 
@@ -77,7 +77,7 @@ def test_modulation_chroma_sign_targets_saturation():
 def test_colour_saturation_ganged_scales_sat():
     stage = ColourSaturationStage()
     x = np.array([[0.6, 0.3, 0.2], [0.2, 0.5, 0.3]])
-    p = _with(stage, **{"RG Saturation": 1.5, "YB Saturation": 1.5})
+    p = _with(stage, **{"R/G": 1.5, "Y/B": 1.5})
     out = stage.apply(x, p)
     assert (_sat_of(out) > _sat_of(x) * 1.2).all()
     grays = np.array([[0.4, 0.4, 0.4]])
@@ -88,7 +88,7 @@ def test_colour_saturation_unganged_axes_differ():
     stage = ColourSaturationStage()
     yellowish = np.array([[0.7, 0.6, 0.2]])
     greenish = np.array([[0.35, 0.6, 0.35]])
-    p = _with(stage, **{"YB Saturation": 1.8})  # RG stays 1.0
+    p = _with(stage, **{"Y/B": 1.8})  # R/G stays 1.0
     gain_y = _sat_of(stage.apply(yellowish, p)) / _sat_of(yellowish)
     gain_g = _sat_of(stage.apply(greenish, p)) / _sat_of(greenish)
     assert gain_y[0] > gain_g[0] + 0.15
@@ -99,7 +99,7 @@ def test_colour_saturation_chroma_gate_desats_only_extremes():
     stage = ColourSaturationStage()
     extreme = np.array([[0.9, 0.05, 0.05]])
     muted = np.array([[0.5, 0.42, 0.4]])
-    p = _with(stage, **{"RG Saturation": 0.2, "YB Saturation": 0.2,
+    p = _with(stage, **{"R/G": 0.2, "Y/B": 0.2,
                         "Chroma": 1.0})
     extreme_loss = 1.0 - _sat_of(stage.apply(extreme, p))[0] / _sat_of(extreme)[0]
     muted_loss = 1.0 - _sat_of(stage.apply(muted, p))[0] / _sat_of(muted)[0]
@@ -112,7 +112,7 @@ def test_colour_saturation_chroma_gate_desats_only_extremes():
 
 def test_contrast_boost_steepens_mids_rolls_highlights():
     stage = ContrastBoostStage()
-    p = _with(stage, Boost=0.8)
+    p = _with(stage, **{"Contrast Boost": 0.8})
     ramp = np.linspace(0.05, 2.5, 800)[:, None].repeat(3, axis=1)
     out = stage.apply(ramp, p)[:, 0]
     slope = np.gradient(out, ramp[:, 0])
@@ -125,8 +125,8 @@ def test_contrast_boost_steepens_mids_rolls_highlights():
 def test_contrast_boost_chroma_modes():
     stage = ContrastBoostStage()
     x = np.array([[0.55, 0.35, 0.25]])
-    keep = stage.apply(x, _with(stage, Boost=0.8, Chroma=0.0))
-    film = stage.apply(x, _with(stage, Boost=0.8, Chroma=1.0))
+    keep = stage.apply(x, _with(stage, **{"Contrast Boost": 0.8, "Chroma": 0.0}))
+    film = stage.apply(x, _with(stage, **{"Contrast Boost": 0.8, "Chroma": 1.0}))
     # chroma 0: chromaticity untouched (reuleaux sat constant)
     np.testing.assert_allclose(_sat_of(keep), _sat_of(x), atol=1e-6)
     # chroma 1: exactly the per-channel curve -> sat rises here
@@ -139,8 +139,8 @@ def test_contrast_boost_chroma_modes():
 
 def test_highlight_bleach_desats_highlights_only():
     stage = HighlightBleachStage()
-    p = _with(stage, **{"Bleach R": 0.9, "Bleach Y": 0.9, "Bleach G": 0.9,
-                        "Bleach B": 0.9, "Pivot": 0.5, "Falloff": 0.3})
+    p = _with(stage, **{"R": 0.9, "Y": 0.9, "G": 0.9,
+                        "B": 0.9, "Pivot": 0.1, "Falloff": 0.3})
     bright = np.array([[0.95, 0.55, 0.45]])
     dark = np.array([[0.25, 0.12, 0.1]])
     assert _sat_of(stage.apply(bright, p))[0] < _sat_of(bright)[0] * 0.5
@@ -150,8 +150,8 @@ def test_highlight_bleach_desats_highlights_only():
 def test_highlight_bleach_unganged_spares_a_sector():
     """The save-the-blue-skies move: relax the blue slider."""
     stage = HighlightBleachStage()
-    p = _with(stage, **{"Bleach R": 0.9, "Bleach Y": 0.9, "Bleach G": 0.9,
-                        "Bleach B": 0.0, "Pivot": 0.4, "Falloff": 0.3})
+    p = _with(stage, **{"R": 0.9, "Y": 0.9, "G": 0.9,
+                        "B": 0.0, "Pivot": 0.0, "Falloff": 0.3})
     sky = np.array([[0.55, 0.7, 0.95]])
     warm = np.array([[0.95, 0.7, 0.5]])
     sky_loss = 1.0 - _sat_of(stage.apply(sky, p))[0] / _sat_of(sky)[0]
@@ -183,9 +183,8 @@ def test_neutral_tint_signed_amount_picks_side_and_keeps_val():
 
 def test_crosstalk_luminance_weighted_and_neutral_safe():
     stage = ColourCrosstalkStage()
-    p = _with(stage, **{"Crosstalk R": 0.3, "Crosstalk Y": 0.3,
-                        "Crosstalk G": 0.3, "Crosstalk B": 0.3,
-                        "Pivot": 0.3, "Falloff": 0.4})
+    p = _with(stage, **{"R -> Y/B": 0.5, "Y -> R/G": 0.5,
+                        "G -> Y/B": 0.5, "B -> R/G": 0.5})
     bright_red = np.array([[0.9, 0.35, 0.3]])
     dark_red = np.array([[0.18, 0.07, 0.06]])
     move_bright = np.abs(stage.apply(bright_red, p) - bright_red).max()
@@ -292,14 +291,14 @@ def test_stage_bake_cli(tmp_path, monkeypatch):
     out = tmp_path / "sat.cube"
     monkeypatch.setattr(sys, "argv", [
         "stage_bake", "--stage", "Colour Saturation",
-        "--set", "RG Saturation=1.4", "--set", "YB Saturation=1.8",
+        "--set", "R/G=1.4", "--set", "Y/B=1.8",
         "--out", str(out), "--size", "9",
     ])
     stage_bake.main()
 
     lut = parse_cube(out)
     stage = ColourSaturationStage()
-    p = _with(stage, **{"RG Saturation": 1.4, "YB Saturation": 1.8})
+    p = _with(stage, **{"R/G": 1.4, "Y/B": 1.8})
     grid = np.linspace(0.0, 1.0, 9)
     pts = np.stack(np.meshgrid(grid, grid, grid, indexing="ij"),
                    axis=-1).reshape(-1, 3)

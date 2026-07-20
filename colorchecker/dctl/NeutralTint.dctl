@@ -5,9 +5,10 @@
 // values in EXACTLY these slider units — paste them straight in.
 // Defaults are the identity: the node does nothing until moved.
 //
-// Part of the Chromogen-style stage family (see ROADMAP.md): behavior
-// replication of FilmLight's look-dev tools in reuleaux space. Scene-
-// referred, pure formulas, smooth by construction.
+// Standard modulation (as in Chromogen): Zone 0 = everywhere, right =
+// highlights only, left = shadows only; Pivot = luma mask pivot,
+// 0 = mid-grey; Chroma 0 = everything, right = only saturated colors,
+// left = only neutrals.
 //
 // The rgb<->reuleaux conversion functions are transcribed from
 // Reuleaux (hotgluebanjo & calvinsilly, github.com/hotgluebanjo/reuleaux),
@@ -16,12 +17,14 @@
 // this project.
 
 DEFINE_UI_PARAMS(hue, Hue, DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 360.0, 0.1)
-DEFINE_UI_PARAMS(amount, Amount, DCTLUI_SLIDER_FLOAT, 0.0, -0.5, 0.5, 0.001)
-DEFINE_UI_PARAMS(pivot, Pivot, DCTLUI_SLIDER_FLOAT, 0.4, -0.5, 2.0, 0.001)
+DEFINE_UI_PARAMS(amount, Amount, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 1.0, 0.001)
+DEFINE_UI_PARAMS(pivot, Pivot, DCTLUI_SLIDER_FLOAT, 0.0, -0.6, 1.6, 0.001)
 DEFINE_UI_PARAMS(falloff, Falloff, DCTLUI_SLIDER_FLOAT, 0.6, 0.02, 2.0, 0.001)
 DEFINE_UI_PARAMS(chroma, Chroma, DCTLUI_SLIDER_FLOAT, -0.5, -1.0, 1.0, 0.001)
 
 #define PI_LOCAL 3.141592653589f
+#define MID_GREY 0.4f
+#define LUMA_FALLOFF 0.5f
 #define SAT_GATE_PIVOT 0.25f
 #define SAT_GATE_FALLOFF 0.5f
 
@@ -85,9 +88,10 @@ __DEVICE__ float wrapped_bump(float x, float center, float soft) {
     return c * c;
 }
 
-__DEVICE__ float modulation(float val, float sat, float zone, float pivot,
-                            float falloff, float chroma) {
-    float r = ramp_window(val, pivot, falloff);
+// Zone / Pivot / Chroma — the standard Chromogen-style modulation.
+// pivot is an OFFSET from mid-grey.
+__DEVICE__ float modulation(float val, float sat, float zone, float pivot, float chroma) {
+    float r = ramp_window(val, MID_GREY + pivot, LUMA_FALLOFF);
     float m_luma = 1.0f - _fabs(zone)
                  + _fabs(zone) * (zone >= 0.0f ? r : 1.0f - r);
     float rs = ramp_window(sat, SAT_GATE_PIVOT, SAT_GATE_FALLOFF);
@@ -117,17 +121,19 @@ __DEVICE__ float softplusw(float x, float w) {
 
 __DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, float p_R, float p_G, float p_B)
 {
+    const float TINT_SCALE = 0.25f;
     float3 rl = rgb_to_reuleaux(make_float3(p_R, p_G, p_B));
-    float r = ramp_window(rl.z, pivot, falloff);
+    float r = ramp_window(rl.z, MID_GREY + pivot, falloff);
     float side = amount >= 0.0f ? r : 1.0f - r;
-    float m = side * modulation(rl.z, rl.y, 0.0f, pivot, falloff, chroma);
+    float m = side * modulation(rl.z, rl.y, 0.0f, 0.0f, chroma);
 
     float ang0 = rl.x * 2.0f * PI_LOCAL;
     float c1 = rl.y * _cosf(ang0);
     float c2 = rl.y * _sinf(ang0);
+    float strength = _fabs(amount) * TINT_SCALE;
     float angT = hue / 360.0f * 2.0f * PI_LOCAL;
-    c1 += _fabs(amount) * m * _cosf(angT);
-    c2 += _fabs(amount) * m * _sinf(angT);
+    c1 += strength * m * _cosf(angT);
+    c2 += strength * m * _sinf(angT);
 
     float sat2 = _sqrtf(c1 * c1 + c2 * c2);
     float hue2 = _atan2f(c2, c1) / (2.0f * PI_LOCAL);

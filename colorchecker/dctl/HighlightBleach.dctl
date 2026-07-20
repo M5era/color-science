@@ -5,9 +5,10 @@
 // values in EXACTLY these slider units — paste them straight in.
 // Defaults are the identity: the node does nothing until moved.
 //
-// Part of the Chromogen-style stage family (see ROADMAP.md): behavior
-// replication of FilmLight's look-dev tools in reuleaux space. Scene-
-// referred, pure formulas, smooth by construction.
+// Standard modulation (as in Chromogen): Zone 0 = everywhere, right =
+// highlights only, left = shadows only; Pivot = luma mask pivot,
+// 0 = mid-grey; Chroma 0 = everything, right = only saturated colors,
+// left = only neutrals.
 //
 // The rgb<->reuleaux conversion functions are transcribed from
 // Reuleaux (hotgluebanjo & calvinsilly, github.com/hotgluebanjo/reuleaux),
@@ -15,15 +16,17 @@
 // redistribute this file. Windowing/masking/tool math is original to
 // this project.
 
-DEFINE_UI_PARAMS(bleach_r, Bleach R, DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 1.0, 0.001)
-DEFINE_UI_PARAMS(bleach_y, Bleach Y, DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 1.0, 0.001)
-DEFINE_UI_PARAMS(bleach_g, Bleach G, DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 1.0, 0.001)
-DEFINE_UI_PARAMS(bleach_b, Bleach B, DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 1.0, 0.001)
-DEFINE_UI_PARAMS(pivot, Pivot, DCTLUI_SLIDER_FLOAT, 0.5, -0.5, 2.0, 0.001)
+DEFINE_UI_PARAMS(bleach_r, R, DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 1.0, 0.001)
+DEFINE_UI_PARAMS(bleach_y, Y, DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 1.0, 0.001)
+DEFINE_UI_PARAMS(bleach_g, G, DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 1.0, 0.001)
+DEFINE_UI_PARAMS(bleach_b, B, DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 1.0, 0.001)
+DEFINE_UI_PARAMS(pivot, Pivot, DCTLUI_SLIDER_FLOAT, -0.15, -0.6, 1.6, 0.001)
 DEFINE_UI_PARAMS(falloff, Falloff, DCTLUI_SLIDER_FLOAT, 0.6, 0.02, 2.0, 0.001)
 DEFINE_UI_PARAMS(chroma, Chroma, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 1.0, 0.001)
 
 #define PI_LOCAL 3.141592653589f
+#define MID_GREY 0.4f
+#define LUMA_FALLOFF 0.5f
 #define SAT_GATE_PIVOT 0.25f
 #define SAT_GATE_FALLOFF 0.5f
 
@@ -87,9 +90,10 @@ __DEVICE__ float wrapped_bump(float x, float center, float soft) {
     return c * c;
 }
 
-__DEVICE__ float modulation(float val, float sat, float zone, float pivot,
-                            float falloff, float chroma) {
-    float r = ramp_window(val, pivot, falloff);
+// Zone / Pivot / Chroma — the standard Chromogen-style modulation.
+// pivot is an OFFSET from mid-grey.
+__DEVICE__ float modulation(float val, float sat, float zone, float pivot, float chroma) {
+    float r = ramp_window(val, MID_GREY + pivot, LUMA_FALLOFF);
     float m_luma = 1.0f - _fabs(zone)
                  + _fabs(zone) * (zone >= 0.0f ? r : 1.0f - r);
     float rs = ramp_window(sat, SAT_GATE_PIVOT, SAT_GATE_FALLOFF);
@@ -121,7 +125,7 @@ __DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, float p
 {
     float3 rl = rgb_to_reuleaux(make_float3(p_R, p_G, p_B));
     float w = rygb_interp(rl.x, bleach_r, bleach_y, bleach_g, bleach_b)
-            * ramp_window(rl.z, pivot, falloff)
-            * modulation(rl.z, rl.y, 0.0f, pivot, falloff, chroma);
+            * ramp_window(rl.z, MID_GREY + pivot, falloff)
+            * modulation(rl.z, rl.y, 0.0f, 0.0f, chroma);
     return reuleaux_to_rgb(make_float3(rl.x, rl.y * (1.0f - w), rl.z));
 }

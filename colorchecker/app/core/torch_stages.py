@@ -193,8 +193,10 @@ def _ramp(x, pivot, falloff):
     return torch.sin(0.5 * torch.pi * t) ** 2
 
 
-def _modulation(val, sat, zone, pivot, falloff, chroma):
-    r = _ramp(val, pivot, falloff)
+def _modulation(val, sat, zone, pivot, chroma):
+    r = _ramp(val,
+              chromogen.MID_GREY + pivot,
+              torch.as_tensor(chromogen.LUMA_FALLOFF, dtype=val.dtype))
     m_luma = 1.0 - torch.abs(zone) + torch.abs(zone) * torch.where(
         zone >= 0.0, r, 1.0 - r
     )
@@ -230,10 +232,10 @@ def _softplus_t(x, width):
 
 def _colour_saturation_apply(stage, x, p):
     hue, sat, val = _rgb_to_reuleaux(x)
-    m = _modulation(val, sat, p[3], p[4], p[5], p[6])
+    m = _modulation(val, sat, p[2], p[3], p[4])
     c1, c2 = _to_chroma_vec(hue, sat)
 
-    theta = (chromogen.YB_AXIS_TURNS + p[2] / 360.0) * (2.0 * torch.pi)
+    theta = torch.as_tensor(chromogen.YB_AXIS_TURNS * 2.0 * np.pi, dtype=x.dtype)
     cos_t, sin_t = torch.cos(theta), torch.sin(theta)
     u = cos_t * c1 + sin_t * c2
     v = -sin_t * c1 + cos_t * c2
@@ -255,9 +257,12 @@ def _contrast_curve(v, boost, pivot, highlight, width):
 
 def _contrast_boost_apply(stage, x, p):
     w = stage._SHOULDER
+    grey_abs = chromogen.MID_GREY + p[1]
+    highlight_abs = chromogen.MID_GREY + p[2]
     hue, sat, val = _rgb_to_reuleaux(x)
-    val_mode = _reuleaux_to_rgb(hue, sat, _contrast_curve(val, p[0], p[1], p[2], w))
-    rgb_mode = _contrast_curve(x, p[0], p[1], p[2], w)
+    val_mode = _reuleaux_to_rgb(hue, sat,
+                                _contrast_curve(val, p[0], grey_abs, highlight_abs, w))
+    rgb_mode = _contrast_curve(x, p[0], grey_abs, highlight_abs, w)
     return (1.0 - p[3]) * val_mode + p[3] * rgb_mode
 
 
@@ -266,34 +271,35 @@ def _highlight_bleach_apply(stage, x, p):
     zero = p[6] * 0.0
     w = (
         _rygb_interp(hue, p[:4])
-        * _ramp(val, p[4], p[5])
-        * _modulation(val, sat, zero, p[4], p[5], p[6])
+        * _ramp(val, chromogen.MID_GREY + p[4], p[5])
+        * _modulation(val, sat, zero, zero, p[6])
     )
     return _reuleaux_to_rgb(hue, sat * (1.0 - w), val)
 
 
 def _neutral_tint_apply(stage, x, p):
     hue, sat, val = _rgb_to_reuleaux(x)
-    r = _ramp(val, p[2], p[3])
+    r = _ramp(val, chromogen.MID_GREY + p[2], p[3])
     side = torch.where(p[1] >= 0.0, r, 1.0 - r)
     zero = p[4] * 0.0
-    m = side * _modulation(val, sat, zero, p[2], p[3], p[4])
+    m = side * _modulation(val, sat, zero, zero, p[4])
 
+    strength = torch.abs(p[1]) * stage.TINT_SCALE
     ang = (p[0] / 360.0) * (2.0 * torch.pi)
     c1, c2 = _to_chroma_vec(hue, sat)
-    c1 = c1 + torch.abs(p[1]) * m * torch.cos(ang)
-    c2 = c2 + torch.abs(p[1]) * m * torch.sin(ang)
+    c1 = c1 + strength * m * torch.cos(ang)
+    c2 = c2 + strength * m * torch.sin(ang)
     hue2, sat2 = _from_chroma_vec(c1, c2)
     return _reuleaux_to_rgb(hue2, sat2, val)
 
 
 def _colour_crosstalk_apply(stage, x, p):
     hue, sat, val = _rgb_to_reuleaux(x)
-    lum = _ramp(val, p[4], p[5])
+    m = _modulation(val, sat, p[4], p[5], p[6])
     c1, c2 = _to_chroma_vec(hue, sat)
     eye = torch.eye(4, dtype=x.dtype)
     for i in range(4):
-        w = _rygb_interp(hue, eye[i]) * lum * sat * p[i]
+        w = _rygb_interp(hue, eye[i]) * sat * val * m * p[i]
         ang = stage._AXES[i] * 2.0 * np.pi
         c1 = c1 + w * float(np.cos(ang))
         c2 = c2 + w * float(np.sin(ang))
@@ -304,30 +310,30 @@ def _colour_crosstalk_apply(stage, x, p):
 def _sector_weight(hue, sat, val, p):
     center = (p[0] / 360.0)
     center = center - torch.floor(center)
-    zero_flat = p[1] * 0.0
+    zero_flat = p[2] * 0.0
     return (
-        _wrapped_window(hue, center, zero_flat, p[1] / 360.0)
-        * _modulation(val, sat, p[3], p[4], p[5], p[6])
+        _wrapped_window(hue, center, zero_flat, p[2] / 360.0)
+        * _modulation(val, sat, p[3], p[4], p[5])
     )
 
 
 def _sector_skew_apply(stage, x, p):
     hue, sat, val = _rgb_to_reuleaux(x)
     w = _sector_weight(hue, sat, val, p)
-    return _reuleaux_to_rgb(hue + w * (p[2] / 360.0), sat, val)
+    return _reuleaux_to_rgb(hue + w * (p[1] / 360.0), sat, val)
 
 
 def _sector_brightness_apply(stage, x, p):
     hue, sat, val = _rgb_to_reuleaux(x)
     w = _sector_weight(hue, sat, val, p)
-    val2 = val * torch.clamp(1.0 + sat * (w * p[2]), min=1e-6)
+    val2 = val * torch.clamp(1.0 + sat * (w * p[1]), min=1e-6)
     return _reuleaux_to_rgb(hue, sat, val2)
 
 
 def _sector_saturation_apply(stage, x, p):
     hue, sat, val = _rgb_to_reuleaux(x)
     w = _sector_weight(hue, sat, val, p)
-    sat2 = _spow(sat, 1.0 / (1.0 + w * (p[2] - 1.0)))
+    sat2 = _spow(sat, 1.0 / (1.0 + w * (p[1] - 1.0)))
     return _reuleaux_to_rgb(hue, sat2, val)
 
 
@@ -335,15 +341,15 @@ def _sector_squash_apply(stage, x, p):
     hue, sat, val = _rgb_to_reuleaux(x)
     target = p[0] / 360.0
     target = target - torch.floor(target)
-    width = torch.clamp(p[1] / 360.0, min=1e-6)
+    width = torch.clamp(p[2] / 360.0, min=1e-6)
 
     v = hue - target + 0.5
     delta = v - torch.floor(v) - 0.5
     t = (torch.abs(delta) / width).clamp(0.0, 1.0)
     w = torch.cos(0.5 * torch.pi * t) ** 2
 
-    m = _modulation(val, sat, p[3], p[4], p[5], p[6])
-    hue2 = target + delta * (1.0 - (p[2] * m) * w)
+    m = _modulation(val, sat, p[3], p[4], p[5])
+    hue2 = target + delta * (1.0 - (p[1] * m) * w)
     return _reuleaux_to_rgb(hue2, sat, val)
 
 

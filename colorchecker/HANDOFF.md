@@ -3,30 +3,26 @@
 Read this first in a new session. It is the map: what the tool is, what
 is built, the non-negotiable decisions, the resources, and where we
 left off. Deep design lives in `ROADMAP.md`; this is the orientation
-layer.
+layer. (Refreshed 2026-07-20 end-of-session; supersedes prior handoff.)
 
 ---
 
 ## 1. What this is
 
 A macOS (Apple Silicon), Python/PySide6 clone-and-extension of Nico
-Fink's (Demystify-Color) chart-readout tool, built for **film-stock
-profiling**. Marc shoots reference charts under controlled variations,
-reads the patch values here, and fits transforms that emulate a film
-stock (log → negative/Cineon, or log → display-referred reversal like
-E100 slide film).
+Fink's (Demystify-Color) chart-readout tool, grown into a **film-look
+engineering toolkit**: read chart patches from footage, fit
+interpretable parametric look chains (Chromogen-style tools, Reuleaux),
+match LUTs, and export the result as DCTL slider values, .cube files,
+and ready-to-import Resolve PowerGrades (.drx).
 
-**Capture pack** Marc profiles against:
-- Alexa Mini LF, LogC3 (AWG / EI800) footage, float/16-bit TIFF
-- ColorChecker Digital SG charts (the 96-patch layout)
-- EV sweeps (±5), Kelvin sweeps (2700K–6000K), full hue swings (Hue 0–300)
-- Some frames contain an Aputure light **in frame** — an emissive
-  source sampled alongside the reflective chart
+**Marc's pipeline:** Alexa Mini LF, LogC3 (AWG3 / EI800), float/16-bit
+TIFF; ColorChecker Digital SG; EV/Kelvin/Hue sweeps; sometimes an
+emissive Aputure panel in frame. Monitoring through openDRT.
 
 **Dev model:** development happens in the cloud (Linux, headless Qt via
-`QT_QPA_PLATFORM=offscreen`). Marc pulls the branch and runs it on his
-Mac. So: everything must be testable offscreen, and the core is kept
-UI-free so it can be exercised without a display.
+`QT_QPA_PLATFORM=offscreen`). Marc pulls the branch and runs on his
+Mac. Everything must be testable offscreen; core stays UI-free.
 
 ---
 
@@ -34,15 +30,11 @@ UI-free so it can be exercised without a display.
 
 **Zero color management in the measurement path. Input = output.**
 No ICC, no gamma, no clamp, no normalization anywhere between the TIFF
-pixels and the CSV. What is in the file is what lands in the export.
-Emissive values >1.0 pass through raw. This was stated by Marc in the
-strongest possible terms ("do NOT change any of the displayed RGB
-values, that is the whole point!!!!"). The on-screen preview is the
-ONLY place pixels are transformed, it is strictly one-way and display-
-only (`app/core/preview.py`), and it never touches measured values.
-
-Bit-exactness of the TIFF decode was proved first, as Phase 0 risk
-retirement (`test_image_io.py`).
+pixels and the CSV. Emissive values >1.0 pass through raw. Marc:
+"do NOT change any of the displayed RGB values, that is the whole
+point!!!!". The on-screen preview (`app/core/preview.py`) is the ONLY
+place pixels are transformed — display-only, one-way. Bit-exact TIFF
+decode proved in `test_image_io.py`.
 
 ---
 
@@ -53,297 +45,196 @@ colorchecker/
   main.py                      launch
   app/core/                    UI-FREE logic (all headless-testable)
     image_io.py                bit-exact TIFF load; EV/Kelvin/Hue filename parsing
-    project.py                 ProjectStore + ImageEntry (the "database"); schema_version=1, unknown keys preserved
-    overlay.py                 Overlay model (uid-keyed!), presets incl. Light Source 1x1 emissive
-    detect.py / refine.py      chart auto-detect (patch-mosaic blobs) + margin refinement
-    homography.py / sampler.py DLT unit-square->quad; pixel-center-in-quad sampling (pure numpy)
-    csv_export.py              deterministic export (auto-sorted); header below
-    preview.py                 display-only one-way transform (NOT measurement)
-    lut.py                     CubeLUT parse/apply (trilinear, domain clamp), gradients, lattice
-    match.py                   HierarchicalRBF + solve_match; sandwich DRT inversion; CSV/session loaders
-    reuleaux.py                1:1 port of the reuleaux DCTL math (validated in Resolve)
-    stages.py                  parametric stages (Matrix/Luma/RGB/Reuleaux) — ML-ready contract
-    parametric.py              solve_parametric: stage chain fit + waterfall + paste-ready reports
-  app/ui/                      PySide6; tabs/ = the three tabs
-  app/core/stage_base.py       the Stage ABC (own module: no import cycles)
-    chromogen.py               Chromogen-style family: 9 stages + modulation block
-    windows.py                 plateau/wrapped windows + signed ramp_window (pivot/falloff)
-  tools/reuleaux_bake.py       CLI: bake reuleaux (Broad) params into a .cube for Resolve A/B
-  tools/reuleaux_fine_bake.py  CLI: bake a Fine zone into a .cube (units = DCTL sliders)
-  tools/stage_bake.py          CLI: bake ANY param_names stage by slider name (--list)
-  dctl/                        10 companion DCTLs — solver reports paste in 1:1
-                               (ReuleauxFine + the 9 Chromogen-style tools)
-  tests/                       82 tests, all green, offscreen
-  ROADMAP.md                   Plan B and future design (detailed)
-  HANDOFF.md                   this file
+    project.py                 ProjectStore + ImageEntry; schema_version=1
+    overlay.py                 Overlay model (uid-keyed!), incl. emissive Light Source
+    detect.py / refine.py      chart auto-detect + margin refinement (Marc-blessed, don't touch)
+    homography.py / sampler.py DLT unit-square->quad; pixel-center sampling
+    csv_export.py              deterministic export
+    preview.py                 display-only transform (NOT measurement)
+    lut.py                     CubeLUT parse/apply (trilinear), gradients, lattice
+    match.py                   HierarchicalRBF solve_match; invert_lut_at (DRT sandwich);
+                               write_cube; load_patch_csv
+    reuleaux.py                1:1 reuleaux port (validated in Resolve)
+    stage_base.py              Stage ABC + reg_scale + label()/short_label()
+    stages.py                  Matrix/LumaCurve/RGBCurves/ReuleauxBroad/ReuleauxFine/
+                               LiftGammaGain + STAGE_POOL + CHAIN_PRESETS
+    chromogen.py               the 9 Chromogen-style stages + modulation block + hue_word
+    windows.py                 plateau/wrapped windows + signed ramp_window
+    parametric.py              solve_parametric: stagewise init (prep stages LAST) ->
+                               optional torch refine -> joint least-squares; waterfall,
+                               noise-gain KPI, labels, reports
+    torch_stages.py            differentiable mirrors of ALL stages (parity 1e-9)
+    backprop.py                Adam + sigmoid box bounds + Fine-zone restarts
+    diagnostics.py             noise_gain artifact KPI
+    lut_match.py               fit chain to a LUT; --drt sandwich; sample_lut_domain
+    drx.py                     .drx parse/patch: zstd bodies, DCTL nodes, slider doubles
+                               (fixed-width patch), combo/checkbox READ
+  app/ui/                      PySide6; three tabs (Processing/Matching/LUT Inspector)
+  dctl/                        11 companion DCTLs (paste-parity with solver reports)
+  tools/                       reuleaux_bake, reuleaux_fine_bake, stage_bake,
+                               lut_match (CLI), drx_export
+  templates/                   Marc's powergrades: example_powergrade_1.6.1.T.drx
+                               (8 Chromogen DCTL nodes + genesis cube node),
+                               openDRT_powergrade_1.6.2.T.drx (same + openDRT node)
+  reference/OpenDRT.dctl       openDRT source (Jed Smith, GPLv3) for the port
+  tests/                       135 green offscreen (torch tests auto-skip w/o torch)
 ```
 
-**CSV header:** `label,ev,group,overlay,kind,patch_row,patch_col,R,G,B`
-Export order is deterministic: session order (auto-sorted by EV then
-label) → overlay order → row-major. Project JSON is the source of
-truth; CSV is a view.
-
-**Why this shape:** UI-free core means (a) headless cloud testing and
-(b) the toolkit could be swapped without rewriting the logic. Tests
-drive REAL interaction paths (canvas signals, mocked file dialogs), not
-just direct field-setting — a lesson learned after early offscreen
-tests missed real click-path bugs.
+Tests drive REAL interaction paths (canvas signals, mocked dialogs).
+STAGE_POOL-looping tests give every registered stage identity +
+torch-parity coverage automatically.
 
 ---
 
-## 4. What is built (all three tabs + solvers)
+## 4. What is built
 
-### Processing (readout) tab — DONE
-- Load float/16-bit TIFF (÷65535 for 16-bit), broad rubber-band rectangle
-  → auto-detect chart → refine → sample every patch.
-- Multi-exposure **session list**: many frames in one project,
-  non-destructive. Auto-sorted always (`(ev is None, ev, label.lower())`).
-- Filename parsing: EV (`+1_EV`, `EV-1`, etc.), Kelvin (`5600K`), Hue
-  (`hue120`). Defaults for unmarked files: **EV 0**, **group 5600K**.
-- **Batch import** (Load Folder), **Process All** (one click, all frames),
-  preview updates on frame switch, **arrow-key** navigation.
-- **Overlays**: multiple per frame. Presets incl. an **emissive Light
-  Source (1×1)** for the Aputure panel (portrait 1×1, `kind="emissive"`,
-  tagged in CSV). Every overlay carries a `uid`.
-- **Per-frame overlay control (uid-keyed, v2):** enable/disable an
-  overlay on a given frame ("Use on this frame"), and override its
-  position for one frame only ("Position for this frame only") — for
-  frames that shifted slightly. Keyed by overlay `uid`, NOT name (name
-  collisions after add/remove were the v1 bug).
-- **Multi-row batch edit** in the table (apply a change to all selected).
-- Results panel shows **all active overlays side by side**.
-- CSV export + preview; project save/load.
+### Processing tab — DONE (unchanged this session)
+TIFF load -> auto-detect -> refine -> sample; multi-exposure sessions,
+batch import/Process All, uid-keyed per-frame overlay overrides,
+emissive overlays, CSV export, project save/load.
 
-### Matching tab — DONE (two solvers)
-Fit source patches (footage) to target patches (reference), export a
-.cube. Both sides come from the current session or a loaded CSV; rows
-pair up by shared ordering.
+### Stage system + solvers — DONE
+- **Stage contract:** flat param vector, box bounds, identity anchor,
+  pure vectorized apply, `param_names` (DCTL slider order),
+  `label(params)` (grading note: "skew dark greens toward cyan",
+  "cool lows", "(idle)"), `short_label` (<=9 chars for Resolve node
+  labels: "SkwDkGrn", "CoolLo"), `reg_scale` (identity-anchoring
+  multiplier; prep stages high).
+- **Stages:** Matrix, Luma Curve, RGB Curves (monotone), Reuleaux
+  Broad (validated fixed-6 port, untouched), Reuleaux Fine (free
+  360-degree zone + sat/luma masks), Lift Gamma Gain (prep: master
+  lift+gamma, per-channel gain; reg_scale=25, fitted LAST in stagewise
+  init — only moves if it makes the fit a LOT easier; verified both
+  ways), and the **Chromogen family**: Colour Saturation (R/G+Y/B
+  opponent axes; Y/B is a native reuleaux axis), Colour Crosstalk
+  (inherent luminance-weighted tilt), Contrast Boost (grey/highlight
+  pivots + chroma mix 0=val-only..1=per-RGB), Highlight Bleach (RYGB
+  sectors x highlight ramp), Neutral Tint (signed amount +-highs/lows,
+  val-preserving, x0.25 internal scale), Sector Skew/Brightness/
+  Saturation/Squash (single picked hue; squash signed, foldover-proof;
+  sector SATURATION IS LINEAR — the power law amplified noise).
+- **Modulation block everywhere:** Zone (signed, middle=all), Pivot
+  (IN STOPS from mid-grey; LogC3 calibration MID_GREY=0.391,
+  STOP=0.0741), Chroma (signed: right=saturated, left=neutrals).
+  Falloff (stops) only where Chromogen exposes it.
+- **Solvers:** RBF (unchanged) and Parametric — stagewise coordinate
+  descent (prep stages last, per-stage identity reg) -> optional
+  **backprop** (torch optional dep; Adam over sigmoid-bounded params;
+  multi-restart hue placement for Fine zones) -> scipy joint refine.
+  Output: error waterfall + **noise-gain KPI** per stage/chain +
+  labels + paste-ready reports.
+- **Chain presets** incl. "Chromogen match (LGG prep -> Chromogen
+  chain)" and "Chromogen film look (full stack)" (Marc's canonical
+  order: sectors BEFORE Highlight Bleach; duplicates allowed).
 
-- **Match type:** Scene-referred (log→log) OR **Display-referred through
-  a fixed DRT**. Display-referred = the "sandwich": invert the DRT
-  numerically at the target patch values, solve underneath it, export a
-  cube you stack BEFORE the DRT node. Patches clipped by the stock
-  (D-max/D-min plateaus) are dropped + counted. Errors reported THROUGH
-  the DRT (what the eye sees). Validated on Marc's real ODTs (openDRT:
-  1435/1449 invertible; referent hard-toe: 1294/1449).
+### DCTLs — 11 files, sliders EXACTLY = solver report units
+ReuleauxFine + 9 Chromogen tools + LiftGammaGain. Resolve quirk:
+transform() signature must be ONE LINE. Chromogen-family DCTLs carry
+the reuleaux no-license warning (private use only). Marc: "it fucking
+works". NOT yet formally A/B-verified vs Python (tools/stage_bake
+bakes any stage by slider name for that).
 
-- **Solver = RBF:** vendored, improved HierarchicalRBF (from Marc's
-  camera-match fork), ~60× faster than the fork (~0.7s vs 43s), with
-  optional 3×3 matrix pre-fit, smoothness/detail-layer/strength knobs,
-  out-of-domain extrapolation via direct model eval.
+### LUT matching (Plan C) — WORKS
+`python3 -m tools.lut_match --lut look.cube [--backend torch]
+[--drt drt.cube] [--target-is-display] [--out fitted.cube]
+[--drx-out fitted.drx] [--source-csv patches.csv]`
+- --drt = display-referred sandwich (fit in log under the DRT, errors
+  through it, unreachable targets dropped).
+- --target-is-display = the look LUT already renders to display
+  (genesis!): solve DRT(chain(x)) ~= lut(x).
+- Real-world result (genesis e100 under openDRT): display error
+  0.224 -> 0.109 mean; residual is mostly TONE (two different
+  renderings); 484/1395 unreachable (cube inversion + gamut). See
+  ROADMAP "first real run" section. Bound-pinned params = wrong
+  composition smell.
 
-- **Solver = Parametric (newest):** an ordered chain of parametric
-  stages — **Matrix (9), Luma Curve (monotone), RGB Curves (3×monotone,
-  split-tone), Reuleaux Broad (20, the validated fixed-6-anchor port),
-  Reuleaux Fine (12, one freely placed 360° hue zone with smooth hue
-  window + sat mask + luma mask — chain several for several zones;
-  masks are plateau windows with cos² shoulders, `app/core/windows.py`,
-  C¹-smooth by construction, wide-open = off at identity)**. Chain
-  presets: *Full (Luma→RGB→Reuleaux Broad)* / *Reuleaux Broad only* /
-  *Matrix + Reuleaux Broad* / *Reuleaux Broad + Fine* /
-  Custom, with add/remove/reorder and a curve-point count. Solve =
-  stagewise coordinate descent → joint bounded least-squares with
-  identity regularization. Output shows a **per-stage error waterfall**
-  and paste-ready stage reports — including the **Reuleaux fitted slider
-  values formatted for `ReuleauxUserStandalone.dctl`**, so the match can
-  be rebuilt parametrically in Resolve. Every stage is a pure function
-  over a flat param vector with box bounds + identity anchor — the
-  **ML-ready contract**: swap numpy→torch / finite-diff→autograd later
-  and the architecture holds (backprop is the planned next step).
-
-- Export .cube with size + domain min/max controls (guard rejects
-  domain width <0.05 — a zero-width domain once produced an all-white
-  cube).
-
-### LUT Inspector tab — DONE
-Load a .cube and *see what it does* (explicitly NOT smoothing it yet):
-image preview (default hue/value gradient or a loaded TIFF), per-channel
-RGB response curves, and a rotatable/auto-fit 3D lattice view.
-
-### Reuleaux port + bake CLI — DONE, validated in Resolve
-`app/core/reuleaux.py` is a 1:1 port of the reuleaux DCTL math
-(RGB→(hue,sat,val) spherical-ish model, 6 hue anchors × hue/sat/val +
-overall sat/val). `tools/reuleaux_bake.py` bakes chosen params into a
-.cube for A/B against the real DCTL. Marc confirmed: **"sick! it
-works."**
+### PowerGrade (.drx) — GENERATION WORKS, VERIFIED IN MARC'S RESOLVE
+`app/core/drx.py`: XML wrapper -> prefix byte + zstd protobuf bodies;
+DCTL nodes found by path; sliders = fixed-width doubles after
+`sliderFloatParamN\x12\x09\x11` (patch never shifts bytes); combos/
+checkboxes/int-sliders now READ (varints — do NOT patch, would shift).
+`tools/drx_export.py --list / --set "Node:Slider=v" / --out`;
+`lut_match --drx-out` patches a fitted chain straight into the
+template (stage<->node by DCTL filename, k-th of a type; sliders by
+param_names order — proven correct by Marc's import). Template gaps
+are reported for manual pasting. sliderFloatParam6..11 on 6-slider
+nodes are leftover pool junk — ignore.
 
 ---
 
-## 5. Resources
+## 5. IMMEDIATE NEXT TASK: the openDRT port
 
-**Reference repos (cloned in earlier sessions under `/workspace/`):**
-- `camera-match` — Marc's fork; source of the RBF (now vendored/improved).
-- `Demystify-Color-DCTLs` (M5era fork, MIT, Nico Fink) — **the Plan B
-  blueprint.** Ships `OKLAB.dctl` (AWG↔Oklab with signed cbrt + gamut
-  guard), `LCHab.dctl` (MISNAMED — it's OkLCh), Log-C↔Linear (Arri LogC3
-  EI800 constants), `DMC_3x3Matrix` v1–v3 (**v3 "Preserve Neutrals" is
-  sequential, not a true matrix — porting hazard**). Encrypted .dctle
-  (PiecewisePower, etc.) = black-box only.
-- `reuleaux` (hotgluebanjo) — **NO LICENSE.** The port is for Marc's
-  private evaluation only and must NOT be redistributed. `resolve/
-  Reuleaux.dctl`, `extra/ReuleauxUserStandalone.dctl`.
+Goal: replace the baked openDRT cube with exact math
+(`app/core/opendrt.py` + torch mirror) -> exact/cheap inversion (fewer
+dropped patches) + display-domain backprop loss. Full plan in ROADMAP
+("openDRT analytic port"). Source: `reference/OpenDRT.dctl` (GPLv3 —
+port module must carry the license; fine for private use).
 
-**Marc's uploads** (`/root/.claude/uploads/<session>/`, may not persist):
-- `all_EV0.csv` — 1449 rows, 15 frames (measured reference set).
-- `referent_LOGC3_to_sRGB.cube` — a DRT (hard toe).
-- `openDRT_LogC3_srgb_3...cube` — a more neutral DRT.
-- `K64_1.0_1.5.2.drx` — a PowerGrade; DRX format reverse-engineered from it.
-
-**Licensing rules:** Demystify DCTLs MIT (credit). reuleaux no-license
-(private eval, never redistribute). Commercial .dctle encrypted
-(black-box, never decrypt).
-
----
-
-## 6. Future plans (see ROADMAP.md for full design)
-
-**Plan B — parametric zone model (planned, not started; do after the
-current toolchain is proven on real footage):**
-- Up to ~20 SIMPLE single-zone nodes in **OkLCh** (chosen for hue
-  linearity; blueprint = Nico's OKLAB.dctl, adopt constants verbatim
-  with credit). Each node ~7 sliders (hue anchor+width, lum center+width,
-  Δhue/Δchroma/Δlightness, Gaussian falloff). Solver grows the chain
-  greedily and **auto-names** nodes by their job ("light green desat",
-  "bleach highlights"). Fixed-6 "reuleaux mode" (cos² partition-of-unity
-  weights) + free-anchor solver mode.
-- **Prismatic saturation** (Hart 2015 prismatic color space) — the open
-  equivalent of Nico's Advanced Natural Saturation (subtractive,
-  film-like, no garish high-sat highlights). Plus an **OkLab saturation**
-  alternative (6 fixed hue-vector sliders). Same fitter slot; keep the
-  lower-error one.
-- **Own companion DCTLs with parameter parity** — fitted numbers paste
-  straight into Resolve; mandatory Resolve pixel-match verification gate.
-
-**PowerGrade (.drx) generation — feasibility PROVEN & verified in
-Resolve:** XML wrapper + zstd-compressed protobuf body; slider doubles
-are fixed-width so **template patching** (clone a template .drx, write
-fitted values, recompress) changes no lengths. Open question: native
-custom-curve encoding in DRX (K64 file has no curve data) — experiment
-defined (diff a default vs single-known-point drx).
-
-**Backup plan only** (Marc's call): black-box fitting of encrypted
-commercial .dctle via Resolve scripting API (patch drx → grab still →
-measure → optimize). Only if the own-DCTL path proves insufficient.
-
-**Chart-prep idea:** datasheet D-logE alignment tool (Nico's Film
-Profile Journey #22 automated) — align measured grayscale to the
-stock's published sensitometric curves before profiling. Works for
-negative and reversal.
-
-**Backprop is BUILT** (this session): `backend="torch"` on
-solve_parametric / "Backprop refine (PyTorch)" checkbox in the UI
-(disabled with an install hint if torch is missing — torch is an
-OPTIONAL dep, deliberately NOT in requirements.txt). Torch mirrors of
-all five stages (`app/core/torch_stages.py`, parity-tested to 1e-9
-against the numpy stages), Adam over a sigmoid box-bounds
-reparametrization, **multi-restart hue placement for Fine zones**
-(`app/core/backprop.py`), then the existing scipy joint refine
-polishes the winner — so torch can only improve on scipy. Proven in
-tests: a Fine zone hidden in the greens that scipy provably cannot
-find (zero finite-diff gradient, no window overlap from the red start)
-is found and fit by the torch backend.
-
-**PowerGrade generation WORKS end-to-end** (`app/core/drx.py` +
-`tools/drx_export.py`): Marc's `templates/example_powergrade_1.6.1.T.drx`
-stacks our 8 Chromogen DCTL nodes + his genesis cube node; slider
-values live as fixed-width doubles after each `sliderFloatParamN`
-(protobuf `12 09 11 <double>` inside the zstd body), nodes are matched
-by DCTL filename and sliders by our param_names order. Patch → re-zstd
-→ valid .drx; roundtrip verified byte-exact. `--list` shows any
-template's nodes with named sliders. The .dpx that Resolve exports
-next to a .drx is only the gallery still preview — NOT needed, the
-drx embeds its own thumbnail. NOT yet import-verified in Marc's
-Resolve (a demo file was sent to him).
-
-**Latest (end of session):** Chromogen solve modes + LUT matching are
-BUILT. "Chromogen match" mode = Lift Gamma Gain prep (lift/gamma/
-per-channel gain; smooth+monotone; reg_scale=25 AND fitted last in the
-stagewise init, so it only moves when the look can't explain the
-residual — tested both ways) → Chromogen chain. "Chromogen film look
-(full stack)" preset = Marc's real stack order (sectors BEFORE bleach;
-duplicates allowed). LUT MATCHING (Plan C item 1): app/core/
-lut_match.py + tools/lut_match.py — sample a .cube's domain (or a
-patch CSV), fit any preset chain, scipy or torch backend; verified
-round-trip on a baked chromogen look through BOTH backends. ARTIFACT
-KPI: noise gain (app/core/diagnostics.py) per stage + chain, printed
-next to every residual (caught+fixed Sector Saturation's power-law
-noise amplification — it is now a linear chroma scale, range 0–2).
-AUTO-NAMING: stage.label(params) grading notes ("skew dark greens
-toward cyan", "cool lows", "(idle)") in waterfall/CLI output.
-
-**The Chromogen-style family is BUILT** (same session, Marc's pivot
-after watching the FilmLight demo — design in ROADMAP.md): 9 new
-stages in `app/core/chromogen.py` — Colour Saturation (2 opponent
-axes + rotate), Contrast Boost (chroma mix: constant-chromaticity ↔
-per-RGB), Highlight Bleach (4 sectors × highlight ramp), Neutral Tint
-(signed amount: + highs / − lows, val-preserving), Colour Crosstalk
-(luminance-weighted opponent displacement), and the single-picked-hue
-Sector tools (Skew / Brightness / Saturation / Squash — squash signed,
-negative = spread, foldover-proof for the whole ±1 range). All share
-the modulation block (Zone/Pivot/Falloff + SIGNED Chroma gate) built
-on the new `ramp_window`. **Every stage has a companion DCTL in
-dctl/** (sliders = exactly the solver-report units) so Marc can play
-by hand first, plus torch mirrors (backprop works on all 14 stages)
-and `tools/stage_bake.py` for cube A/B. Chain preset "Chromogen broad
-(Sat → Crosstalk → Contrast → Bleach → Tint)" added. NONE of the new
-DCTLs are pixel-verified in Resolve yet (needs Marc; bake + A/B flow
-as with Broad). The Sector Squash covers the earlier planned
-"HueSquash node". OkLab/OkLCh remains OFF the table — everything is
-in reuleaux space until Marc says otherwise.
+**Settings extraction from Marc's openDRT powergrade
+(templates/openDRT_powergrade_1.6.2.T.drx) — DONE but with one open
+question.** The node reads:
+- floats (define order tn_Lp, tn_gb, pt_hdr, tn_Lg, _cwp_lm) =
+  100 / 0.13 / 0.5 / 10 / 0.25 — ALL DEFAULTS. crv_enable = 0.
+- combos (define order in_gamut, in_oetf, look_preset,
+  tonescale_preset, _cwp, display_encoding) = **12, 8, 0, 2, 0, 2**.
+  Against the uploaded v1.1.0 lists that reads E-Gamut / Sony S-Log3 /
+  Standard / Medium Contrast / USE LOOK / Display P3 — which does NOT
+  fit a LogC3/AWG3 workflow. Likely explanation: the node was created
+  against a DIFFERENT OpenDRT.dctl version whose combo lists are
+  longer/ordered differently (index 12/8 might BE AWG3/LogC3 there).
+  **ASK MARC: open the openDRT node in Resolve and read the on-screen
+  settings** (Input Gamut, Input Transfer, Look Preset, Tonescale,
+  Creative White, Display Encoding), or confirm which OpenDRT.dctl
+  file version the node actually loads. Fallback: after the port,
+  grid-search preset combos against his baked cube
+  (openDRT_LogC3_srgb, re-upload needed — uploads don't persist).
+- Port discipline = reuleaux port: 1:1 transcription, float64,
+  vectorized, tests first, then the validation gate vs the baked cube,
+  then wire as --drt-math in lut_match + Matching tab (analytic
+  inversion replacing invert_lut_at).
 
 ---
+
+## 6. Resources & licensing
+
+- `reference/OpenDRT.dctl` — Jed Smith, **GPLv3** (port carries license).
+- reuleaux (hotgluebanjo) — **NO LICENSE**: port + derived DCTLs are
+  for Marc's private use only, never redistribute.
+- Demystify-Color-DCTLs (M5era fork) — MIT (credit Nico Fink); the
+  OkLab/LogC constants blueprint for Plan B (OkLab currently OFF the
+  table per Marc — everything stays in reuleaux space).
+- Marc's uploads do NOT persist between sessions. Currently in-repo:
+  the two powergrade templates. NOT in repo (re-upload when needed):
+  genesis_e100_base.cube, openDRT_LogC3_srgb cube, all_EV0.csv.
+- Marc's Resolve DCTL folder is `0_MS` (paths inside the powergrades).
 
 ## 7. Dev workflow / gotchas
 
-- **Branch:** PRs #1/#2 (`claude/color-checker-reader-tool-z9q2ts`)
-  are MERGED into `main`. Current work happens on
-  `claude/color-checker-handoff-91whob` (branched from main).
-- **Run on Mac:** `python3 main.py` from `colorchecker/`. Install deps
-  with `python3 -m pip install -r requirements.txt` — **use
-  `python3 -m pip`, NOT `pip3`** (repo path has spaces, which breaks the
-  pip script shim). `scipy` IS required (a missing entry once crashed
-  the app on import — it's in requirements now).
-- **Tests:** `QT_QPA_PLATFORM=offscreen python3 -m pytest tests/` — 134
-  green, ~1–3 min (torch tests auto-skip if torch is not installed).
-  The STAGE_POOL-looping tests (identity passthrough, torch-mirror
-  parity) cover every registered stage automatically — new stages get
-  those checks for free. Synthetic TIFFs generated at runtime; no footage
-  committed (`*.tif` git-ignored). UI tests mock the file dialogs and
-  fail fast on any unexpected modal (an unmocked modal hangs headless).
-- **Detection:** the current detect flow is the one Marc blessed
-  ("perfect") — detected corners + `refine_margins`. `align_grid` exists
-  in refine.py but is UNUSED; earlier attempts to change detection "made
-  things worse" and were reverted. Don't touch detection without cause.
-- **Commit trailers used this project:**
-  `Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>` and a
-  `Claude-Session:` line. (Do not put the model identifier in commits.)
+- **Branch:** `claude/color-checker-handoff-91whob` (PRs #1/#2 merged
+  long ago; this branch carries the whole Chromogen/backprop/drx era).
+- **Run on Mac:** `python3 main.py` from `colorchecker/`; deps
+  `python3 -m pip install -r requirements.txt` (NOT pip3 — path has
+  spaces). torch is OPTIONAL (backprop); zstandard required (drx).
+- **Tests:** `QT_QPA_PLATFORM=offscreen python3 -m pytest tests/` —
+  135 green, ~2-3 min. Cloud container may need
+  `apt-get install libegl1 libgl1 libxkbcommon0` for Qt.
+- **Detection code is Marc-blessed** — don't touch without cause.
+- **Commit trailers:** Co-Authored-By + Claude-Session lines; never
+  put the model identifier in commits.
+- Marc communicates mid-turn; slider/design decisions come from HIS
+  Chromogen screenshots — copy tool designs literally when in doubt.
 
----
+## 8. Open threads
 
-## 8. Where we left off (2026-07-20, second session)
-
-**Reuleaux Broad / Fine split just landed** (95 tests green): the
-validated fixed-6 port is now the "Reuleaux Broad" stage (math
-untouched, renamed only), and the new "Reuleaux Fine" stage is one
-freely placed 360° hue zone — smooth plateau hue window plus **sat
-mask and luma mask** (`app/core/windows.py`), gating DCTL-style
-hue/sat/val moves, neutral-axis protected, chainable for several
-zones. New preset "Reuleaux Broad + Fine". This was Marc's explicit
-design: keep broad as-is, add fine — NOT masks bolted onto the fixed-6.
-
-**Fine now has its companion DCTL** (`dctl/ReuleauxFine.dctl`, 12
-sliders, hue values in degrees — the solver's stage report prints in
-exactly these units, paste 1:1; chain several nodes for several
-zones). `tools/reuleaux_fine_bake.py` bakes the same slider values
-into a .cube for the Resolve A/B — same validation flow that proved
-Broad. NOT yet pixel-verified in Resolve (needs Marc). The DCTL embeds
-the unlicensed reuleaux conversions: private use only, never
-redistribute.
-
-**Awaiting Marc:** real-footage validation of the full parametric
-pipeline (incl. Broad + Fine); report which stage earns its keep from
-the waterfall; try pasting the fitted Reuleaux sliders into the DCTL
-in Resolve.
-
-**Open threads:** an earlier "also, none of thre…" message was never
-completed; the curves-in-DRX experiment is designed but not run.
+1. **openDRT port** (section 5) — the next session's task; blocked
+   only on the settings question above.
+2. Marc's real-footage validation: Fine-zone DCTL pixel A/B, the
+   fitted genesis .drx on footage, stops-calibrated pivots feel.
+3. Order-search option for chain order (roadmap, soft preference).
+4. Sector Saturation linear range 0-2: Marc may want it tighter.
+5. Tone pre-curve option for LUT matching (bridging different
+   renderings — roadmap).
+6. drx node LABEL patching (variable-length strings -> needs generic
+   protobuf re-serialize; short_label() names exist already).
+7. Transfer-function dropdown for stops calibration (LogC3-only now).
+8. Curves-in-DRX experiment (old thread, still unrun).

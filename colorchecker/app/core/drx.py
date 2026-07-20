@@ -26,6 +26,18 @@ from pathlib import Path
 _BODY_RE = re.compile(r"<Body>([0-9a-fA-F]+)</Body>")
 _DCTL_RE = re.compile(rb"______DCTL______/[ -~]+?\.dctl")
 _SLIDER_RE = re.compile(rb"sliderFloatParam(\d+)\x12\x09\x11")
+_ENUM_RE = re.compile(rb"(comboBoxParam|checkBoxParam|sliderIntParam)(\d+)\x12")
+
+
+def _read_varint(buf: bytes, i: int) -> int:
+    val, shift = 0, 0
+    while True:
+        b = buf[i]
+        val |= (b & 0x7F) << shift
+        i += 1
+        if not b & 0x80:
+            return val
+        shift += 7
 
 
 @dataclass
@@ -34,6 +46,9 @@ class DrxNode:
     dctl_name: str        # basename without extension, e.g. SectorSkew
     body_index: int
     sliders: dict = field(default_factory=dict)   # index -> value
+    combos: dict = field(default_factory=dict)    # comboBoxParamN -> int
+    checkboxes: dict = field(default_factory=dict)
+    int_sliders: dict = field(default_factory=dict)
     _offsets: dict = field(default_factory=dict)  # index -> byte offset
 
 
@@ -72,6 +87,25 @@ class DrxTemplate:
                         "<d", payload[off:off + 8]
                     )[0]
                     node._offsets[idx] = off
+                # combo boxes / checkboxes / int sliders (read-only —
+                # varints are variable-width, patching would shift bytes)
+                for m in _ENUM_RE.finditer(payload, pos, end):
+                    kind = m.group(1).decode()
+                    idx = int(m.group(2))
+                    j = m.end()
+                    ln = payload[j]
+                    sub = payload[j + 1:j + 1 + ln]
+                    value = 0
+                    if len(sub) >= 2 and sub[0] == 0x22:
+                        inner = sub[2:2 + sub[1]]
+                        if len(inner) >= 2 and inner[0] == 0x08:
+                            value = _read_varint(inner, 1)
+                    elif sub and sub[0] in (0x08, 0x18):
+                        value = _read_varint(sub, 1)
+                    target = {"comboBoxParam": node.combos,
+                              "checkBoxParam": node.checkboxes,
+                              "sliderIntParam": node.int_sliders}[kind]
+                    target[idx] = value
                 nodes.append(node)
         return nodes
 

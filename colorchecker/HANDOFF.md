@@ -81,8 +81,11 @@ colorchecker/
                                stored double for Pivot (slider 2) — Marc must
                                wiggle it once + re-save to make it patchable.
                                Older: contrast_boost_1.6.4.T.drx + 1.6.1/1.6.2
-  reference/OpenDRT.dctl       openDRT source (Jed Smith, GPLv3) for the port
-  tests/                       146 green offscreen (torch tests auto-skip w/o torch)
+  app/core/opendrt.py          openDRT v1.1.0b50 port (DONE; GPLv3), Marc's config
+  reference/OpenDRT_installed.dctl  the EXACT file Marc runs (port source, GPLv3)
+  reference/Film_Curve_1.dctl  design input for Contrast Boost v2 (next task)
+  test_luts/                   genesis_e100_base.cube + openDRT baked cube (committed)
+  tests/                       153 green offscreen (torch tests auto-skip w/o torch)
 ```
 
 Tests drive REAL interaction paths (canvas signals, mocked dialogs).
@@ -285,49 +288,40 @@ sector params, worst patch 0.335.
 4. Matching-tab UI hookup for the chain search + drt-math + the new
    toggles (broad-bias, grey-locked tone).
 
-## 5b. (historical) the original port plan
+## 5b. openDRT config (now baked into the port, for reference)
 
-Goal: replace the baked openDRT cube with exact math
-(`app/core/opendrt.py` + torch mirror) -> exact/cheap inversion (fewer
-dropped patches) + display-domain backprop loss. Full plan in ROADMAP
-("openDRT analytic port"). Source: `reference/OpenDRT.dctl` (GPLv3 —
-port module must carry the license; fine for private use).
-
-**openDRT settings: CONFIRMED by Marc (screenshot, 2026-07-20).**
+Marc's confirmed Resolve settings, transcribed into
+`opendrt.OpenDRTConfig` defaults (`MARC_CONFIG`):
 - Input Gamut **Arri Wide Gamut 3**, Input Transfer **Arri LogC3**,
   Look Preset **Standard**, Tonescale Preset **Low Contrast**,
-  Creative White **USE LOOK PRESET**, Display Encoding **sRGB Display
-  (2.2 power / Rec.709)**. All float sliders at defaults (Lp 100,
-  grey boost 0.13, HDR purity 0.5, Lg 10, cwp limit 0.25), overlay off.
-- VERSION MISMATCH ESTABLISHED: the node's stored combo indices
-  [12, 8, 0, 2, 0, 2] put AWG3 at 12 and LogC3 at 8, but the uploaded
-  reference/OpenDRT.dctl has them at 6 and 4 — Marc's INSTALLED
-  OpenDRT.dctl (at ______DCTL______/DRTs/opendrt/OpenDRT.dctl) is a
-  different, likely newer version than the uploaded file. **ASK MARC
-  to upload that exact installed file** before transcribing; if only
-  the v1.1.0 file is available, port it and check the validation gate
-  against the baked cube first — if it passes within tolerance the
-  version difference doesn't matter for this config.
-- Also re-upload the baked openDRT_LogC3_srgb cube next session (the
-  validation target; uploads don't persist).
-- Port discipline = reuleaux port: 1:1 transcription, float64,
-  vectorized, tests first, then the validation gate vs the baked cube,
-  then wire as --drt-math in lut_match + Matching tab (analytic
-  inversion replacing invert_lut_at).
+  Creative White **USE LOOK PRESET** (-> D65), Display Encoding
+  **sRGB Display (2.2 power / Rec.709)**. Float sliders at defaults
+  (Lp 100, grey boost 0.13, HDR purity 0.5, Lg 10, cwp limit 0.25),
+  overlay off, clamp on.
+- Config is resolved from the DCTL's Standard-look + Low-Contrast-
+  tonescale preset tables (see opendrt.py docstring). Paths needing
+  matrices not transcribed (other input gamuts, non-D65 creative
+  whites, HDR eotfs) raise NotImplementedError rather than silently
+  doing the wrong thing.
+- The old version-mismatch worry is MOOT: Marc confirmed
+  reference/OpenDRT_installed.dctl is his exact in-Resolve file, and
+  the port matched his baked 65^3 cube to 7e-6 mean / 6e-5 max.
 
 ---
 
 ## 6. Resources & licensing
 
-- `reference/OpenDRT.dctl` — Jed Smith, **GPLv3** (port carries license).
+- `reference/OpenDRT_installed.dctl` — Jed Smith, **GPLv3**; the
+  app/core/opendrt.py port is a derivative work and carries GPLv3 too.
 - reuleaux (hotgluebanjo) — **NO LICENSE**: port + derived DCTLs are
   for Marc's private use only, never redistribute.
 - Demystify-Color-DCTLs (M5era fork) — MIT (credit Nico Fink); the
   OkLab/LogC constants blueprint for Plan B (OkLab currently OFF the
   table per Marc — everything stays in reuleaux space).
-- Marc's uploads do NOT persist between sessions. Currently in-repo:
-  the two powergrade templates. NOT in repo (re-upload when needed):
-  genesis_e100_base.cube, openDRT_LogC3_srgb cube, all_EV0.csv.
+- Marc's uploads do NOT persist between sessions. Now IN-REPO: the
+  powergrade templates AND (committed this session) test_luts/
+  genesis_e100_base.cube + the baked openDRT cube. NOT in repo
+  (re-upload when needed): all_EV0.csv.
 - Marc's Resolve DCTL folder is `0_MS` (paths inside the powergrades).
 
 ## 7. Dev workflow / gotchas
@@ -340,7 +334,7 @@ port module must carry the license; fine for private use).
   `python3 -m pip install -r requirements.txt` (NOT pip3 — path has
   spaces). torch is OPTIONAL (backprop); zstandard required (drx).
 - **Tests:** `QT_QPA_PLATFORM=offscreen python3 -m pytest tests/` —
-  146 green, ~2-3 min. Cloud container may need
+  153 green, ~2-3 min. Cloud container may need
   `apt-get install libegl1 libgl1 libxkbcommon0` for Qt.
 - **Detection code is Marc-blessed** — don't touch without cause.
 - **Commit trailers:** Co-Authored-By + Claude-Session lines; never
@@ -350,11 +344,14 @@ port module must carry the license; fine for private use).
 
 ## 8. Open threads
 
-1. **openDRT port** (section 5) — the next session's task; blocked
-   only on the settings question above.
+1. ~~openDRT port~~ DONE 2026-07-21 (section 5). Follow-ups now live
+   in section 5's "Next steps": Contrast Boost v2 (#1 priority), torch
+   mirror of the port, noise-gain-aware search, Matching-tab hookup.
 2. Marc's real-footage validation: Fine-zone DCTL pixel A/B, the
    fitted genesis .drx on footage, stops-calibrated pivots feel.
-3. Order-search option for chain order (roadmap, soft preference).
+3. ~~Order-search for chain order~~ DONE: the free-order chain search
+   (section 4) discovers order + repetition freely, with broad_bias +
+   grey-locked tone.
 4. ~~Sector Saturation linear range 0-2~~ RESOLVED 2026-07-21: the
    Baselight panel shows 1.00 dead-centre of 0..2 — our range is right.
 5. Tone pre-curve option for LUT matching (bridging different

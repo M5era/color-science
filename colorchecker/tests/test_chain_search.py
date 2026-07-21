@@ -127,6 +127,49 @@ def test_grey_locked_tone_matches_neutrals_exactly():
     np.testing.assert_allclose(fitted_display, target[mask], atol=5e-3)
 
 
+def test_local_search_drops_redundant_node():
+    """A one-tool look with a permissive min_gain tempts the greedy build
+    to bolt on marginal extra nodes; local_search's prune pass drops them
+    back out (never lengthening the chain) while still explaining it."""
+    x = _source()
+    sat = ColourSaturationStage()
+    target = sat.apply(x, _with(sat, **{"R/G": 1.4, "Y/B": 1.4}))
+    greedy = search_chain(x, target, max_nodes=3, min_gain=1e-4,
+                          neutral_tone=False)
+    local = search_chain(x, target, max_nodes=3, min_gain=1e-4,
+                         neutral_tone=False, local_search=True)
+    assert len(local.model.stages) <= len(greedy.model.stages)
+    assert local.error_after < local.error_before / 5
+
+
+def test_local_search_unfreezes_tone_and_prunes_on_tint():
+    """A look whose NEUTRALS are tinted (crossover): the frozen tone can't
+    tint, so local_search must un-freeze it to co-adapt with the Neutral
+    Tint, and its noise-gain-aware prune should trim redundant nodes."""
+    from app.core.opendrt import OpenDRTModel
+
+    drt = OpenDRTModel()
+    neutrals = np.linspace(0.05, 0.95, 40)[:, None].repeat(3, axis=1)
+    x = np.concatenate([_source(200), neutrals])
+    con = ContrastCurveStage()
+    tint = NeutralTintStage()
+    y = con.apply(x, _with(con, Contrast=1.6))
+    y = tint.apply(y, _with(tint, Hue=40.0, Amount=0.6, Chroma=1.2))
+    target = drt(y)
+
+    greedy = search_chain(x, target, max_nodes=4, min_gain=0.005,
+                          display_transform=drt)
+    local = search_chain(x, target, max_nodes=4, min_gain=0.005,
+                         display_transform=drt, local_search=True)
+    # prune never lengthens the chain
+    assert len(local.model.stages) <= len(greedy.model.stages)
+    # the frozen tone node co-adapted with the tint (moved off its grey fit)
+    assert not np.allclose(greedy.model.params[0], local.model.params[0],
+                           atol=1e-4)
+    # and the joint result is no worse than the locked-then-disturbed one
+    assert local.error_after <= greedy.error_after * 1.2 + 1e-4
+
+
 def test_search_refuses_identity_target():
     x = _source()
     with pytest.raises(ValueError, match="nothing worth adding"):

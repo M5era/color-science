@@ -60,9 +60,15 @@ def main() -> None:
     parser.add_argument("--free-tone", action="store_true",
                         help="search mode: DISABLE the grey-scale-"
                              "locked tone (by default one Contrast "
-                             "Boost is fitted on the neutral ramp "
+                             "Curve is fitted on the neutral ramp "
                              "only, frozen as node 1, and removed "
                              "from the audition pool)")
+    parser.add_argument("--local-search", action="store_true",
+                        help="search mode: light local search — un-"
+                             "freeze the tone node to co-adapt with a "
+                             "Neutral Tint (tinted neutrals / crossover), "
+                             "and prune redundant nodes after building "
+                             "(noise-gain-aware). Off by default")
     parser.add_argument("--deliver", action="store_true",
                         help="write the fitted .cube and .drx into "
                              "~/Downloads (implies --out/--drx-out)")
@@ -143,6 +149,7 @@ def main() -> None:
             min_gain=args.min_gain,
             broad_bias=args.broad_bias,
             neutral_tone=not args.free_tone,
+            local_search=args.local_search,
             source_points=source_points,
             n_samples=args.samples,
             backend=args.backend,

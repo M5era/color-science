@@ -29,7 +29,12 @@ node was chosen because it reduced the residual best at its position.
 import numpy as np
 from scipy.optimize import least_squares
 
-from app.core.chromogen import CHROMOGEN_STAGES, ContrastCurveStage
+from app.core.chromogen import (
+    CHROMOGEN_STAGES,
+    ContrastCurveStage,
+    NeutralTintStage,
+)
+from app.core.diagnostics import noise_gain
 from app.core.lut import CubeLUT
 from app.core.match import invert_lut_at
 from app.core.parametric import (
@@ -41,6 +46,10 @@ from app.core.stages import Stage
 
 # hue seeds for auditioning stages that have a "Hue" slider (degrees)
 _HUE_SEEDS = (0.0, 60.0, 120.0, 180.0, 240.0, 300.0)
+
+# how hard the un-frozen tone node is anchored to its grey-scale fit when
+# a tint co-adapts with it (high = "move only as much as the tint needs")
+_TONE_ANCHOR_REG = 40.0
 
 
 def default_pool() -> list[type]:
@@ -90,17 +99,29 @@ def _fit_candidate(stage: Stage, cur: np.ndarray, fit_target: np.ndarray,
 
 
 def _joint_refine(stages, params, source, fit_target, regularization, fwd,
-                  max_nfev: int = 150):
+                  max_nfev: int = 150, anchors=None, reg_scales=None):
     """Bounded joint least-squares over every parameter of the chain
-    (same identity regularization as solve_parametric's pass 2)."""
+    (same identity regularization as solve_parametric's pass 2).
+
+    `anchors` (list of per-stage arrays) overrides what each stage is
+    regularized TOWARD — default is each stage's identity, but the tone
+    node is anchored to its grey-scale fit when it co-adapts with a tint.
+    `reg_scales` (list) overrides each stage's reg_scale (used to soft-
+    anchor the un-frozen tone with a high weight)."""
     sizes = [p.size for p in params]
     offsets = np.cumsum([0] + sizes)
     lo = np.concatenate([s.bounds()[0] for s in stages])
     hi = np.concatenate([s.bounds()[1] for s in stages])
-    identity = np.concatenate([s.identity() for s in stages])
+    if anchors is None:
+        anchor = np.concatenate([s.identity() for s in stages])
+    else:
+        anchor = np.concatenate([np.asarray(a, np.float64) for a in anchors])
+    if reg_scales is None:
+        reg_scales = [s.reg_scale for s in stages]
     scale = np.maximum(hi - lo, 1e-6)
     reg = np.sqrt(regularization) * np.concatenate([
-        np.full(s.identity().size, np.sqrt(s.reg_scale)) for s in stages
+        np.full(s.identity().size, np.sqrt(rs))
+        for s, rs in zip(stages, reg_scales)
     ])
 
     def split(flat):
@@ -111,7 +132,7 @@ def _joint_refine(stages, params, source, fit_target, regularization, fwd,
         for stage, p in zip(stages, split(flat)):
             out = stage.apply(out, p)
         fit = (fwd(out) - fit_target).ravel()
-        return np.concatenate([fit, reg * (flat - identity) / scale])
+        return np.concatenate([fit, reg * (flat - anchor) / scale])
 
     sol = least_squares(
         residual, np.clip(np.concatenate(params), lo, hi),
@@ -119,6 +140,66 @@ def _joint_refine(stages, params, source, fit_target, regularization, fwd,
         xtol=1e-9, ftol=1e-9, max_nfev=max_nfev,
     )
     return split(sol.x)
+
+
+def _apply_chain(stages, params, x):
+    out = x
+    for stage, p in zip(stages, params):
+        out = stage.apply(out, p)
+    return out
+
+
+def _refine_chain(stages, params, src, fit_target, regularization, fwd,
+                  frozen_n, grey_anchor, unfreeze_on_tint):
+    """Joint-refine a chain. Normally the frozen tone prefix is held and
+    only stages[frozen_n:] move. But once a Neutral Tint (which is NOT
+    neutral-safe — it tints greys) is present and `unfreeze_on_tint` is
+    set, the tone node is un-frozen INTO the joint solve, soft-anchored
+    to its grey-scale fit, so tone and tint co-adapt on the (tinted)
+    neutrals instead of the tone being locked-then-disturbed."""
+    tint = any(isinstance(s, NeutralTintStage) for s in stages[frozen_n:])
+    if frozen_n and unfreeze_on_tint and tint:
+        anchors = [grey_anchor] + [s.identity() for s in stages[frozen_n:]]
+        reg_scales = ([_TONE_ANCHOR_REG]
+                      + [s.reg_scale for s in stages[frozen_n:]])
+        return _joint_refine(stages, params, src, fit_target,
+                             regularization, fwd,
+                             anchors=anchors, reg_scales=reg_scales)
+    prefix = _apply_chain(stages[:frozen_n], params[:frozen_n], src)
+    refined = _joint_refine(stages[frozen_n:], params[frozen_n:],
+                            prefix, fit_target, regularization, fwd)
+    return list(params[:frozen_n]) + refined
+
+
+def _prune_chain(stages, params, src, fit_target, regularization, fwd,
+                 frozen_n, grey_anchor, unfreeze_on_tint, prune_tol, log):
+    """Drop redundant nodes: greedily remove the node whose removal (after
+    re-refining the rest) keeps the fit within `prune_tol` of the current
+    error, choosing among droppable nodes the one that most REDUCES the
+    chain's max noise gain (Marc: a node that barely helps the fit but
+    spikes noise is the prime candidate). Never prunes the frozen tone."""
+    probe = src[:400]  # subsample for the noise-gain estimate (speed)
+    while len(stages) > frozen_n + 1:
+        base_err = _fit_err(fwd(_apply_chain(stages, params, src)), fit_target)
+        best = None  # (noise_max, err, idx, stages', params')
+        for i in range(frozen_n, len(stages)):
+            ns = stages[:i] + stages[i + 1:]
+            npar = params[:i] + params[i + 1:]
+            npar = _refine_chain(ns, npar, src, fit_target, regularization,
+                                 fwd, frozen_n, grey_anchor, unfreeze_on_tint)
+            err = _fit_err(fwd(_apply_chain(ns, npar, src)), fit_target)
+            if err <= base_err * (1.0 + prune_tol):
+                ng = noise_gain(
+                    lambda x: fwd(_apply_chain(ns, npar, x)), probe)["max"]
+                if best is None or ng < best[0]:
+                    best = (ng, err, i, ns, npar)
+        if best is None:
+            break
+        _, err, i, ns, npar = best
+        log.append(f"pruned node {i + 1} ({stages[i].name}) — "
+                   f"fit {base_err:.5f} -> {err:.5f}, noise max -> {best[0]:.1f}")
+        stages, params = ns, npar
+    return stages, params
 
 
 def search_chain(
@@ -133,6 +214,8 @@ def search_chain(
     display_transform=None,
     regularization: float = 1e-3,
     backend: str = "scipy",
+    local_search: bool = False,
+    prune_tol: float = 0.01,
     verbose: bool = False,
 ) -> ParametricResult:
     """Search a chain of at most `max_nodes` nodes drawn freely (with
@@ -160,7 +243,16 @@ def search_chain(
     display-referred mode: `target` is display values, every audition
     and refine minimizes display_transform(chain(x)) - target directly
     — no cube inversion, no unreachable-dropping (the fix for tone
-    evidence getting deleted at the extremes). scipy backend only."""
+    evidence getting deleted at the extremes). scipy backend only.
+
+    `local_search` turns the greedy builder into a light local search:
+    (a) the frozen tone node is UN-FROZEN into the joint solve (soft-
+    anchored to its grey fit) once a Neutral Tint is in the chain, so
+    tone + tint co-adapt on tinted neutrals; and (b) after building, a
+    PRUNE pass drops any node whose removal keeps the fit within
+    `prune_tol` (default 1%), preferring the drop that most reduces the
+    chain's max noise gain. Off by default so it can be A/B'd against
+    the pure greedy path."""
     # fail BEFORE the expensive search, not at the final polish (a
     # 20-node run once died at the very end on a missing torch)
     validate_backend(backend)
@@ -192,6 +284,7 @@ def search_chain(
     stages: list[Stage] = []
     params: list[np.ndarray] = []
     frozen_n = 0
+    grey_anchor = None   # the tone node's grey-scale fit (soft-anchor target)
     log = []
     cur = src
 
@@ -206,6 +299,7 @@ def search_chain(
             stages.append(con)
             params.append(p)
             frozen_n = 1
+            grey_anchor = p.copy()
             pool = [cls for cls in pool
                     if not issubclass(cls, ContrastCurveStage)]
             cur = con.apply(src, p)
@@ -217,7 +311,6 @@ def search_chain(
         else:
             log.append("neutral_tone skipped: no neutral samples in source")
 
-    src_after_frozen = cur
     err = _fit_err(fwd(cur), fit_target)
 
     while len(stages) < max_nodes:
@@ -245,14 +338,12 @@ def search_chain(
 
         stages.append(best[2])
         params.append(best[3])
-        # refine everything EXCEPT the frozen grey-locked tone node
-        refined = _joint_refine(stages[frozen_n:], params[frozen_n:],
-                                src_after_frozen, fit_target,
-                                regularization, fwd)
-        params = params[:frozen_n] + refined
-        cur = src
-        for stage, p in zip(stages, params):
-            cur = stage.apply(cur, p)
+        # refine the chain: the frozen tone is held, UNLESS local_search
+        # un-freezes it to co-adapt with a tint (see _refine_chain)
+        params = _refine_chain(stages, params, src, fit_target,
+                               regularization, fwd, frozen_n, grey_anchor,
+                               local_search)
+        cur = _apply_chain(stages, params, src)
         err = _fit_err(fwd(cur), fit_target)
         log.append((len(stages), best[2].name, err))
         if verbose:
@@ -260,6 +351,12 @@ def search_chain(
                   f"fit error -> {err:.5f}")
     else:
         log.append(f"stopped: max_nodes ({max_nodes}) reached")
+
+    # local search: drop nodes that went redundant now the chain is built
+    if local_search and len(stages) > frozen_n + 1:
+        stages, params = _prune_chain(
+            stages, params, src, fit_target, regularization, fwd,
+            frozen_n, grey_anchor, local_search, prune_tol, log)
 
     if not stages:
         raise ValueError(

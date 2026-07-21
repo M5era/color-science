@@ -114,8 +114,17 @@ emissive overlays, CSV export, project save/load.
   (R/G+Y/B opponent axes; Y/B is a native reuleaux axis), Colour
   Crosstalk (inherent luminance-weighted tilt; the inherent val
   weighting FADES OUT as |Zone| rises so full-zone throw still has an
-  effect — Marc 2026-07-21), Contrast Boost (grey/highlight
-  pivots + chroma mix 0=val-only..1=per-RGB), Highlight Bleach (RYGB
+  effect — Marc 2026-07-21), **Contrast Curve v2** (NEW 2026-07-21,
+  replaces the old soft-S "Contrast Boost": a real toe+shoulder film S
+  modelled on Diachromie's [1D] CONTRAST panel — Contrast (linear
+  slope), White/Black Offset (highlight/shadow slope, the smooth
+  shoulder/toe), Mid Push + Mid Compensate (midtone bump that lifts the
+  pivot, or holds it and adds local S), Shoulder/Toe Rolloff (knee
+  sharpness, -1≈linear, inert while its offset=1), Luma Blend
+  (0=per-RGB/raises sat, 1=luma only), Blend, plus pre-curve Flare
+  (milky shadows) and Exposure; all in LogC3 stops, pivot fixed at
+  mid-grey, identity=do-nothing; the DCTL has a Draw Curve checkbox that
+  scopes the live curve on screen), Highlight Bleach (RYGB
   sectors x highlight ramp), **Neutral Tint v3** (Baselight-style,
   2026-07-21: SUM-PRESERVING offset in LOG RGB — not a reuleaux chroma
   push; signed amount 0-centred, right=highs/left=lows; Chroma slider
@@ -188,7 +197,10 @@ emissive overlays, CSV export, project save/load.
   order: sectors BEFORE Highlight Bleach; duplicates allowed).
 
 ### DCTLs — 12 files, sliders EXACTLY = solver report units
-ReuleauxFine + 10 Chromogen tools + LiftGammaGain. NOTE: the
+ReuleauxFine + 10 Chromogen tools + LiftGammaGain (ContrastBoost.dctl
+renamed → ContrastCurve.dctl, 11 float sliders + a Draw Curve checkbox
+that scopes the live curve on screen; the checkbox is declared AFTER the
+sliders so it never shifts the sliderFloatParam order). NOTE: the
 NeutralTint.dctl sliders CHANGED 2026-07-21 (Chroma now 0..2 default
 1; log-RGB math) — Marc must reinstall it, and NeutralTint nodes saved
 in the powergrade templates carry old-convention values. Resolve quirk:
@@ -212,7 +224,7 @@ bakes any stage by slider name for that).
 - **--drt-math** = the ANALYTIC openDRT (app/core/opendrt.py, Marc's
   exact config) instead of a baked --drt cube: display-domain loss,
   NO inversion, NO unreachable-dropping. This is what surfaced
-  Contrast Boost in the genesis match (the cube sandwich had been
+  the tone tool in the genesis match (the cube sandwich had been
   deleting the tone evidence). scipy backend only (no torch mirror
   yet). Recommended genesis command:
   `python3 -m tools.lut_match --lut test_luts/genesis_e100_base.cube
@@ -267,16 +279,29 @@ a noise-gain penalty or cap in the search), several bound-pinned
 sector params, worst patch 0.335.
 
 ### Next steps (new priority order)
-1. **CONTRAST BOOST v2 — more shaping power (Marc, 2026-07-21, NOT yet
-   started).** The current ContrastBoostStage makes only a smooth,
-   SOFT S — never a strong S. Marc wants explicit TOE + SHOULDER
-   shaping and a MID-POINT control. Reference uploaded:
-   `reference/Film_Curve_1.dctl` (a density/Dmin/Dmax/gamma film-curve
-   model per channel — quite different approach, may inspire the
-   params). This is why the grey-locked tone still lands a bit softer
-   than genesis. New params likely: toe strength, shoulder strength,
-   pivot/mid. Keep identity = do-nothing and update torch mirror +
-   DCTL + the neutral-tone freeze path together.
+1. **CONTRAST CURVE v2 — DONE (Marc, 2026-07-21).** Replaced the old
+   soft-S "Contrast Boost" with `ContrastCurveStage`, a full film S
+   modelled behaviorally on Diachromie's [1D] CONTRAST panel (Marc's
+   six curve screenshots pinned every slider). Sliders: Contrast
+   (linear log slope), White/Black Offset (highlight/shadow slope = the
+   smooth shoulder/toe; 1=neutral), Mid Push + Mid Compensate (midtone
+   bump: off lifts the pivot, on holds it and adds local S),
+   Shoulder/Toe Rolloff (knee sharpness; -1≈linear, inert while the
+   matching offset=1), Luma Blend (0=per-RGB raises sat, 1=luma-only
+   chroma-preserving), Blend, Flare (milky shadows), Exposure (stops).
+   Identity = do-nothing; pivot fixed at mid-grey; validated to machine
+   epsilon against all six screenshots (slopes, flare, mid-push pivot
+   hold). numpy + torch mirror (parity 1e-9) + ContrastCurve.dctl
+   (with a Draw Curve on-screen scope, à la Film_Curve_1.dctl) + the
+   neutral-tone freeze path all updated together; presets renamed.
+   NOTE the deliberate overlap: per-RGB contrast also moves saturation,
+   so in a pool WITH neutrals the neutral_tone freeze pulls one Contrast
+   Curve out and removes it from the audition (no double-dip); the two
+   synthetic search tests that build sat looks now exclude it / cap the
+   contrast to stay unambiguous. STILL TO EYEBALL ON FOOTAGE (Marc): the
+   guessed shape constants — rolloff knee width/range (_K0=1.2,
+   _K_RANGE=6), mid-push width/scale (_MID_W=2, _MID_SCALE=1), flare
+   scale/width (0.045/3 stops) — and whether Contrast should cap at 2.0.
 2. Torch mirror of the openDRT port -> backprop with display loss
    (currently --drt-math is scipy-only; --backend torch raises early).
 3. Noise-gain-aware search (penalize auditions that amplify noise) —

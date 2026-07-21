@@ -29,7 +29,7 @@ node was chosen because it reduced the residual best at its position.
 import numpy as np
 from scipy.optimize import least_squares
 
-from app.core.chromogen import CHROMOGEN_STAGES, ContrastBoostStage
+from app.core.chromogen import CHROMOGEN_STAGES, ContrastCurveStage
 from app.core.lut import CubeLUT
 from app.core.match import invert_lut_at
 from app.core.parametric import (
@@ -149,11 +149,11 @@ def search_chain(
     winner's real, undiscounted gain.
 
     `neutral_tone` (Marc, 2026-07-21: "contrast adjusted based on grey
-    scale only"): before the free search, ONE Contrast Boost is fitted
+    scale only"): before the free search, ONE Contrast Curve is fitted
     against the NEUTRAL samples only and FROZEN as node 1 — the grey
     scale sets the tone, the search explains color on top, and since
     every other pool tool is neutral-safe by construction the grey
-    match can never be disturbed. Contrast Boost leaves the audition
+    match can never be disturbed. Contrast Curve leaves the audition
     pool in this mode.
 
     `display_transform` (callable) switches to the ANALYTIC
@@ -195,24 +195,24 @@ def search_chain(
     log = []
     cur = src
 
-    # ---- grey-scale-locked tone: fit ONE Contrast Boost on the
+    # ---- grey-scale-locked tone: fit ONE Contrast Curve on the
     # neutral samples only and freeze it as node 1
     if neutral_tone:
         neutral = np.all(src == src[:, :1], axis=1)
         if neutral.sum() >= 8:
-            con = ContrastBoostStage()
+            con = ContrastCurveStage()
             p, _ = _fit_candidate(con, src[neutral], fit_target[neutral],
                                   regularization, fwd, max_nfev=200)
             stages.append(con)
             params.append(p)
             frozen_n = 1
             pool = [cls for cls in pool
-                    if not issubclass(cls, ContrastBoostStage)]
+                    if not issubclass(cls, ContrastCurveStage)]
             cur = con.apply(src, p)
             err0 = _fit_err(fwd(cur), fit_target)
-            log.append((1, "Contrast Boost [grey-scale-locked tone]", err0))
+            log.append((1, "Contrast Curve [grey-scale-locked tone]", err0))
             if verbose:
-                print(f"  node 1: + Contrast Boost (grey-scale-locked "
+                print(f"  node 1: + Contrast Curve (grey-scale-locked "
                       f"tone)  fit error -> {err0:.5f}")
         else:
             log.append("neutral_tone skipped: no neutral samples in source")

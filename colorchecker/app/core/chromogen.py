@@ -262,71 +262,140 @@ class ColourCrosstalkStage(Stage):
         ])
 
 
-class ContrastBoostStage(Stage):
-    """Chromogen Contrast Boost: analytic smooth contrast — slope
-    (1 + boost) around the grey pivot, smoothly returning to slope 1
-    above the highlight pivot (filmic shoulder; push Highlight Pivot to
-    max to disable it). Both pivots are in STOPS from mid-grey. The
-    Chroma mix blends val-only application (0 = chromaticity untouched)
-    with per-RGB-channel (1 = sat rises with contrast); default 0.5."""
+class ContrastCurveStage(Stage):
+    """Parametric film contrast curve (replaces the old soft-S "Contrast
+    Boost"): a real toe + shoulder S with independent shadow/highlight
+    shaping, a movable mid-point, and pre-curve exposure/flare. Modelled
+    on the [1D] CONTRAST panel Marc grades with (Diachromie) — a
+    behavioral reimplementation from his screenshots, not a source port.
+    Built to sit UNDER the DRT (which carries its own curve), so every
+    control is gentle and the defaults are an EXACT identity.
 
-    name = "Contrast Boost"
-    param_names = ["Contrast Boost", "Grey Pivot", "Highlight Pivot", "Chroma"]
+    All tonal work is in LogC3 code values, measured in STOPS from
+    mid-grey. The pivot is fixed at mid-grey; sliders:
+      Contrast        purely LINEAR slope through the pivot (1 = identity)
+      White Offset    highlight-side slope (x Contrast); 1 = neutral,
+                      <1 compresses highlights (shoulder), >1 expands
+      Black Offset    shadow-side slope (x Contrast); 1 = neutral,
+                      >1 deepens/steepens shadows (toe), <1 lifts
+      Mid Push        a midtone bump; + lifts mids, - drops them
+      Mid Compensate  0 = the bump lifts the pivot (Push acts like a
+                      midtone exposure); 1 = the pivot is held and the
+                      bump becomes a local S (added mid contrast)
+      Shoulder Rolloff  knee sharpness of the highlight bend: 0 = the
+                      smooth default, -1 straightens it to ~linear,
+                      +1 rounds it further (inert while White Offset = 1)
+      Toe Rolloff     same, for the shadow bend (inert at Black Offset 1)
+      Luma Blend      0 = per-RGB (contrast raises saturation, the film
+                      look), 1 = luma only (chromaticity preserved)
+      Blend           master mix with the untouched input
+      Flare           milky shadow lift, tapering to identity by the
+                      highlights (added before the curve)
+      Exposure        overall pre-curve shift, in stops
+    """
 
-    _SHOULDER = 0.15  # softplus width of the highlight return, val units
+    name = "Contrast Curve"
+    param_names = [
+        "Contrast", "White Offset", "Black Offset",
+        "Mid Push", "Mid Compensate",
+        "Shoulder Rolloff", "Toe Rolloff",
+        "Luma Blend", "Blend", "Flare", "Exposure",
+    ]
+
+    # curve shape constants (stops unless noted)
+    _K0 = 1.2           # rolloff knee width at rolloff 0 (the smooth default)
+    _K_RANGE = 6.0      # rolloff -1 -> K0/6 (sharp), +1 -> 6*K0 (soft)
+    _MID_W = 2.0        # mid-push bump half-width
+    _MID_SCALE = 1.0    # mid-push max lift (stops) at Push = 1
+    _FLARE_SCALE = 0.045  # code-value shadow lift per Flare unit
+    _FLARE_WIDTH = 3.0    # how far up (stops) the flare lift fades out
 
     def identity(self):
-        return np.array([0.0, 0.0, 6.0, 0.5])
+        # Mid Compensate defaults OFF (0.0), as on Marc's panel.
+        return np.array([1.0, 1.0, 1.0, 0.0, 0.0,
+                         0.0, 0.0, 0.0, 1.0, 0.0, 0.0])
 
     def bounds(self):
-        # The Chromogen panel parks the knob at 0 (no negative half),
-        # but the solver NEEDS the flattening range: with no LGG in the
-        # search pool this is the only neutral-axis tone tool, and the
-        # genesis run proved a boost clamped at 0 simply never gets
-        # picked (Marc, 2026-07-21). Baselight's Extended Ranges goes
-        # beyond the panel too.
-        return (np.asarray([-0.9, -4.0, 0.5, 0.0]),
-                np.asarray([2.0, 4.0, 14.0, 1.0]))
+        lo = [0.2, 0.0, 0.0, -1.0, 0.0, -1.0, -1.0, 0.0, 0.0, 0.0, -3.0]
+        hi = [2.0, 2.0, 2.0,  1.0, 1.0,  1.0,  1.0, 1.0, 1.0, 2.0,  3.0]
+        return np.asarray(lo), np.asarray(hi)
 
-    def _curve(self, v, boost, grey_abs, highlight_abs):
-        w = self._SHOULDER
-        return v + boost * (
-            (v - grey_abs)
-            - _softplus(v - highlight_abs, w)
-            + _softplus(grey_abs - highlight_abs, w)
-        )
+    # ---- the scalar tone pipeline, run on val or on each RGB channel --
+
+    def _curve(self, s, contrast, white, black, sh_roll, toe_roll):
+        """Linear contrast (slope = contrast) plus smooth highlight and
+        shadow deviations that bend the slope to contrast*white / *black
+        at the extremes. The deviation is inert when its offset == 1, so
+        the rolloff (knee width) only matters once a shoulder/toe exists.
+        """
+        ln2 = np.log(2.0)
+        k_sh = self._K0 * self._K_RANGE ** sh_roll
+        k_to = self._K0 * self._K_RANGE ** toe_roll
+        shoulder = _softplus(s, k_sh) - k_sh * ln2      # 0 at pivot, ->s highs
+        toe = -(_softplus(-s, k_to) - k_to * ln2)       # 0 at pivot, ->s lows
+        return contrast * (s + (white - 1.0) * shoulder + (black - 1.0) * toe)
+
+    def _midterm(self, s, mid_push, comp):
+        u = s / self._MID_W
+        g = np.exp(-0.5 * u * u)
+        hump = g                             # symmetric: lifts the pivot
+        scurve = u * np.exp(0.5) * g         # antisymmetric: holds the pivot
+        shape = (1.0 - comp) * hump + comp * scurve
+        return mid_push * self._MID_SCALE * shape
+
+    def _tone(self, v, params):
+        (contrast, white, black, mid_push, comp, sh_roll, toe_roll,
+         _luma, _blend, flare, exposure) = params
+        v = v + exposure * STOP
+        shadow_w = 1.0 - ramp_window(v, MID_GREY, self._FLARE_WIDTH * STOP)
+        v = v + flare * self._FLARE_SCALE * shadow_w
+        s = (v - MID_GREY) / STOP
+        y = (self._curve(s, contrast, white, black, sh_roll, toe_roll)
+             + self._midterm(s, mid_push, comp))
+        return MID_GREY + y * STOP
 
     def apply(self, x, params):
-        boost, grey_pivot, highlight_pivot, mix = params
-        grey_abs = MID_GREY + grey_pivot * STOP
-        highlight_abs = MID_GREY + highlight_pivot * STOP
+        luma_blend, blend = params[7], params[8]
+        rgb_out = self._tone(x, params)
         reuleaux = rgb_to_reuleaux(x)
         hue, sat, val = reuleaux[..., 0], reuleaux[..., 1], reuleaux[..., 2]
-
-        val_mode = reuleaux_to_rgb(np.stack(
-            [hue, sat, self._curve(val, boost, grey_abs, highlight_abs)],
-            axis=-1,
-        ))
-        rgb_mode = self._curve(x, boost, grey_abs, highlight_abs)
-        return (1.0 - mix) * val_mode + mix * rgb_mode
+        luma_out = reuleaux_to_rgb(np.stack(
+            [hue, sat, self._tone(val, params)], axis=-1))
+        curved = (1.0 - luma_blend) * rgb_out + luma_blend * luma_out
+        return (1.0 - blend) * x + blend * curved
 
     def label(self, params):
-        boost, grey, highlight, mix = params
-        if abs(boost) < 0.05:
+        (contrast, white, black, mid_push, comp, sh_roll, toe_roll,
+         luma, blend, flare, exposure) = params
+        if blend < 0.02:
             return "contrast (idle)"
-        verb = "add contrast" if boost > 0 else "flatten contrast"
-        if mix < 0.25:
-            return f"{verb} (silvery)"
-        if mix > 0.75:
-            return f"{verb} (rich)"
-        return verb
+        bits = []
+        if contrast > 1.05:
+            bits.append("add contrast")
+        elif contrast < 0.95:
+            bits.append("flatten contrast")
+        if abs(exposure) > 0.05:
+            bits.append("brighten" if exposure > 0 else "darken")
+        if flare > 0.05:
+            bits.append("lift shadows")
+        if black > 1.1 and not bits:
+            bits.append("crush blacks")
+        if not bits:
+            return "contrast (idle)"
+        note = " (rich)" if luma < 0.25 else (" (clean)" if luma > 0.75 else "")
+        return bits[0] + note
 
     def describe(self, params):
-        boost, grey, highlight, mix = params
+        (contrast, white, black, mid_push, comp, sh_roll, toe_roll,
+         luma, blend, flare, exposure) = params
         return "\n".join([
-            "Contrast Boost (paste into dctl/ContrastBoost.dctl):",
-            f"  Contrast Boost {boost:+.3f}   Grey Pivot {grey:+.3f}   "
-            f"Highlight Pivot {highlight:+.3f}   Chroma {mix:.3f}",
+            "Contrast Curve (paste into dctl/ContrastCurve.dctl):",
+            f"  Contrast {contrast:.3f}  White Offset {white:.3f}  "
+            f"Black Offset {black:.3f}",
+            f"  Mid Push {mid_push:+.3f}  Mid Compensate {comp:.3f}",
+            f"  Shoulder Rolloff {sh_roll:+.3f}  Toe Rolloff {toe_roll:+.3f}",
+            f"  Luma Blend {luma:.3f}  Blend {blend:.3f}  "
+            f"Flare {flare:.3f}  Exposure {exposure:+.3f}",
         ])
 
 
@@ -693,7 +762,7 @@ class SectorSquashStage(_SectorStage):
 CHROMOGEN_STAGES = [
     ColourSaturationStage,
     ColourCrosstalkStage,
-    ContrastBoostStage,
+    ContrastCurveStage,
     HighlightBleachStage,
     NeutralTintStage,
     BrillianceReductionStage,

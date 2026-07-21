@@ -1,0 +1,178 @@
+// ContrastCurve.dctl — parametric film contrast curve (toe + shoulder S,
+// movable mid-point, pre-curve exposure/flare).
+//
+// Companion to the "Contrast Curve" stage of the colorchecker parametric
+// solver (app/core/chromogen.py). The solver's stage report prints values
+// in EXACTLY these slider units — paste them straight in. Defaults are the
+// identity: the node does nothing until moved.
+//
+// A behavioral reimplementation of the [1D] CONTRAST panel (Diachromie)
+// from Marc's screenshots — NOT a source port. All tonal work is in LogC3
+// code values, measured in STOPS from mid-grey; the pivot is fixed at
+// mid-grey (Arri LogC3 EI800 calibration). Controls:
+//   Contrast       linear slope through the pivot (1 = identity)
+//   White/Black Offset  highlight/shadow-side slope (x Contrast); 1 =
+//                  neutral, White<1 compresses highlights (shoulder),
+//                  Black>1 deepens shadows (toe)
+//   Mid Push       midtone bump; Mid Compensate 0 = lifts the pivot,
+//                  1 = holds the pivot (bump becomes local S contrast)
+//   Shoulder/Toe Rolloff  knee sharpness of those bends: 0 = smooth
+//                  default, -1 ~ linear, +1 rounder (inert at offset 1)
+//   Luma Blend     0 = per-RGB (contrast raises saturation), 1 = luma only
+//   Blend          master mix with the untouched input
+//   Flare          milky shadow lift; Exposure  pre-curve shift (stops)
+//
+// The rgb<->reuleaux conversion functions are transcribed from Reuleaux
+// (hotgluebanjo & calvinsilly, github.com/hotgluebanjo/reuleaux), which
+// carries NO license file: private evaluation only — do NOT redistribute
+// this file. The curve/tone math is original to this project.
+
+DEFINE_UI_PARAMS(contrast, Contrast, DCTLUI_SLIDER_FLOAT, 1.0, 0.2, 3.0, 0.001)
+DEFINE_UI_PARAMS(white_offset, White Offset, DCTLUI_SLIDER_FLOAT, 1.0, 0.0, 2.0, 0.001)
+DEFINE_UI_PARAMS(black_offset, Black Offset, DCTLUI_SLIDER_FLOAT, 1.0, 0.0, 2.0, 0.001)
+DEFINE_UI_PARAMS(mid_push, Mid Push, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 1.0, 0.001)
+DEFINE_UI_PARAMS(mid_compensate, Mid Compensate, DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 1.0, 0.001)
+DEFINE_UI_PARAMS(shoulder_rolloff, Shoulder Rolloff, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 1.0, 0.001)
+DEFINE_UI_PARAMS(toe_rolloff, Toe Rolloff, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 1.0, 0.001)
+DEFINE_UI_PARAMS(luma_blend, Luma Blend, DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 1.0, 0.001)
+DEFINE_UI_PARAMS(blend, Blend, DCTLUI_SLIDER_FLOAT, 1.0, 0.0, 1.0, 0.001)
+DEFINE_UI_PARAMS(flare, Flare, DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 2.0, 0.001)
+DEFINE_UI_PARAMS(exposure, Exposure, DCTLUI_SLIDER_FLOAT, 0.0, -3.0, 3.0, 0.001)
+// UI-only overlay toggle — a checkbox, NOT a float slider, so it never
+// shifts the sliderFloatParam order the solver report / .drx patch use.
+DEFINE_UI_PARAMS(draw_curve, Draw Curve, DCTLUI_CHECK_BOX, 0)
+
+#define PI_LOCAL 3.141592653589f
+#define MID_GREY 0.391f
+#define STOP 0.0740774f
+#define LN2 0.693147180559945f
+#define EXP_HALF 1.648721270700128f
+#define CC_K0 1.2f
+#define CC_K_RANGE 6.0f
+#define CC_MID_W 2.0f
+#define CC_MID_SCALE 1.0f
+#define CC_FLARE_SCALE 0.045f
+#define CC_FLARE_WIDTH 3.0f
+
+// ---- reuleaux conversions (1:1 with the validated port) -------------
+
+__DEVICE__ float3 rgb_to_reuleaux(float3 rgb) {
+    float rot_x = _sqrtf(2.0f) / 6.0f * (2.0f * rgb.x - rgb.y - rgb.z);
+    float rot_y = (rgb.y - rgb.z) / _sqrtf(6.0f);
+    float rot_z = (rgb.x + rgb.y + rgb.z) / 3.0f;
+
+    float hue = PI_LOCAL - _atan2f(rot_y, -rot_x);
+    float sat = rot_z == 0.0f ? 0.0f : _sqrtf(rot_x * rot_x + rot_y * rot_y) / rot_z;
+    float val = _fmaxf(rgb.x, _fmaxf(rgb.y, rgb.z));
+
+    return make_float3(hue / (2.0f * PI_LOCAL), sat / _sqrtf(2.0f), val);
+}
+
+__DEVICE__ float3 reuleaux_to_rgb(float3 reuleaux) {
+    float hue = reuleaux.x * 2.0f * PI_LOCAL;
+    float sat = reuleaux.y * _sqrtf(2.0f);
+    float val = reuleaux.z;
+
+    float m = _sqrtf(2.0f) * _fmaxf(_cosf(hue),
+                  _fmaxf(_cosf(hue + 2.0f * PI_LOCAL / 3.0f),
+                         _cosf(hue - 2.0f * PI_LOCAL / 3.0f))) + 1.0f / sat;
+
+    float ocs_x = val * _cosf(hue) / m;
+    float ocs_y = val * _sinf(hue) / m;
+    float ocs_z = val;
+    if (sat == 0.0f) { ocs_x = 0.0f; ocs_y = 0.0f; }
+
+    float s32 = _sqrtf(1.5f);
+    float s3 = _sqrtf(3.0f);
+    float r = ocs_z - s32 * _fmaxf(_fabs(ocs_y) - s3 * ocs_x, 0.0f);
+    float g = ocs_z - s32 * (_fmaxf(_fabs(ocs_y), s3 * ocs_x) - ocs_y);
+    float b = ocs_z - s32 * (_fmaxf(_fabs(ocs_y), s3 * ocs_x) + ocs_y);
+    return make_float3(r, g, b);
+}
+
+// ---- smooth windows + softplus (mirror of app/core) -----------------
+
+__DEVICE__ float ramp_window(float x, float pivot, float falloff) {
+    float t = _clampf((x - pivot) / _fmaxf(falloff, 1e-6f) + 0.5f, 0.0f, 1.0f);
+    if (t <= 0.0f) return 0.0f;
+    if (t >= 1.0f) return 1.0f;
+    float s = _sinf(0.5f * PI_LOCAL * t);
+    return s * s;
+}
+
+__DEVICE__ float softplusw(float x, float w) {
+    return w * _logf(1.0f + _expf(_fminf(x / w, 60.0f)));
+}
+
+// ---- the scalar tone pipeline (per channel or on val) ---------------
+
+__DEVICE__ float tone(float v) {
+    v = v + exposure * STOP;
+    float shadow_w = 1.0f - ramp_window(v, MID_GREY, CC_FLARE_WIDTH * STOP);
+    v = v + flare * CC_FLARE_SCALE * shadow_w;
+    float s = (v - MID_GREY) / STOP;
+
+    float k_sh = CC_K0 * _powf(CC_K_RANGE, shoulder_rolloff);
+    float k_to = CC_K0 * _powf(CC_K_RANGE, toe_rolloff);
+    float shoulder = softplusw(s, k_sh) - k_sh * LN2;
+    float toe = -(softplusw(-s, k_to) - k_to * LN2);
+    float curve = contrast * (s + (white_offset - 1.0f) * shoulder
+                                + (black_offset - 1.0f) * toe);
+
+    float u = s / CC_MID_W;
+    float g = _expf(-0.5f * u * u);
+    float shape = (1.0f - mid_compensate) * g + mid_compensate * (u * EXP_HALF * g);
+    float mid = mid_push * CC_MID_SCALE * shape;
+
+    return MID_GREY + (curve + mid) * STOP;
+}
+
+// On-screen scope: overlays the live tone curve (input->output code
+// value) over the frame — grid, faint identity diagonal, a tick at the
+// mid-grey pivot, and the curve in blue. Modelled on the "Draw
+// Characteristic Curve" scope in reference/Film_Curve_1.dctl.
+__DEVICE__ float3 draw_overlay(float3 col, int p_X, int p_Y, int p_W, int p_H) {
+    float gx = (float)p_X / p_W;            // 0..1 across the frame = input
+    float gy = 1.0f - (float)p_Y / p_H;     // 0..1 up the frame = output
+    float3 out = col * 0.32f;               // dim the image so the plot reads
+
+    // grid dots every 1/8
+    float mgx = _fabs(_fmod(gx + 0.0625f, 0.125f) - 0.0625f);
+    float mgy = _fabs(_fmod(gy + 0.0625f, 0.125f) - 0.0625f);
+    if (mgx < 0.0045f && mgy < 0.0045f) out += 0.18f;
+
+    // identity diagonal
+    if (_fabs(gy - gx) < 0.0025f) out += 0.22f;
+
+    // pivot tick at mid-grey (short horizontal mark at tone(mid-grey))
+    if (_fabs(gy - tone(MID_GREY)) < 0.0025f && _fabs(gx - MID_GREY) < 0.03f)
+        out += 0.35f;
+
+    // the curve itself
+    if (_fabs(gy - tone(gx)) < 0.004f)
+        out = make_float3(0.25f, 0.45f, 1.0f);
+
+    return out;
+}
+
+__DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, float p_R, float p_G, float p_B)
+{
+    float3 rgb = make_float3(p_R, p_G, p_B);
+    float3 rgb_out = make_float3(tone(rgb.x), tone(rgb.y), tone(rgb.z));
+
+    float3 rl = rgb_to_reuleaux(rgb);
+    float3 luma_out = reuleaux_to_rgb(make_float3(rl.x, rl.y, tone(rl.z)));
+
+    float3 curved = make_float3(
+        (1.0f - luma_blend) * rgb_out.x + luma_blend * luma_out.x,
+        (1.0f - luma_blend) * rgb_out.y + luma_blend * luma_out.y,
+        (1.0f - luma_blend) * rgb_out.z + luma_blend * luma_out.z);
+
+    float3 result = make_float3(
+        (1.0f - blend) * rgb.x + blend * curved.x,
+        (1.0f - blend) * rgb.y + blend * curved.y,
+        (1.0f - blend) * rgb.z + blend * curved.z);
+
+    if (draw_curve) return draw_overlay(result, p_X, p_Y, p_Width, p_Height);
+    return result;
+}

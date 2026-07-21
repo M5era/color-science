@@ -18,7 +18,7 @@ from app.core.chromogen import (
     BrillianceReductionStage,
     ColourCrosstalkStage,
     ColourSaturationStage,
-    ContrastBoostStage,
+    ContrastCurveStage,
     HighlightBleachStage,
     NeutralTintStage,
     SectorBrightnessStage,
@@ -111,31 +111,56 @@ def test_colour_saturation_chroma_gate_desats_only_extremes():
     assert extreme_loss > 5 * muted_loss
 
 
-# ------------------------------------------------------ contrast boost
+# ------------------------------------------------------ contrast curve
 
-def test_contrast_boost_steepens_mids_rolls_highlights():
-    stage = ContrastBoostStage()
-    p = _with(stage, **{"Contrast Boost": 0.8})
-    ramp = np.linspace(0.05, 2.5, 800)[:, None].repeat(3, axis=1)
+def test_contrast_curve_is_identity_at_defaults():
+    stage = ContrastCurveStage()
+    x = np.random.default_rng(0).uniform(0.02, 1.2, (200, 3))
+    np.testing.assert_allclose(stage.apply(x, stage.identity()), x, atol=1e-12)
+
+
+def test_contrast_curve_offsets_set_toe_and_shoulder_slopes():
+    # White Offset 0.5 halves the highlight slope (shoulder); Black Offset
+    # 1.5 steepens the shadow slope (toe). Rolloffs at -1 straighten the
+    # knees so the end slopes are clean to read (screenshot 4).
+    stage = ContrastCurveStage()
+    p = _with(stage, **{"White Offset": 0.5, "Black Offset": 1.5,
+                        "Shoulder Rolloff": -1.0, "Toe Rolloff": -1.0})
+    ramp = np.linspace(0.05, 0.95, 800)[:, None].repeat(3, axis=1)
     out = stage.apply(ramp, p)[:, 0]
     slope = np.gradient(out, ramp[:, 0])
-    mid = np.abs(ramp[:, 0] - 0.4) < 0.1
-    high = ramp[:, 0] > 2.0
-    assert slope[mid].mean() > 1.5          # boosted midtones
-    assert abs(slope[high].mean() - 1.0) < 0.1  # rolled back to slope 1
+    v = ramp[:, 0]
+    assert abs(slope[v > 0.78].mean() - 0.5) < 0.15   # compressed highlights
+    assert abs(slope[v < 0.14].mean() - 1.5) < 0.2    # steepened shadows
 
 
-def test_contrast_boost_chroma_modes():
-    stage = ContrastBoostStage()
+def test_contrast_curve_flare_lifts_shadows_only():
+    stage = ContrastCurveStage()
+    p = _with(stage, Flare=2.0)
+    v = np.array([[0.05, 0.05, 0.05], [0.95, 0.95, 0.95]])
+    out = stage.apply(v, p)
+    assert out[0, 0] - 0.05 > 0.02             # shadows milked up
+    assert abs(out[1, 0] - 0.95) < 1e-3        # highlights untouched
+
+
+def test_contrast_curve_luma_blend_preserves_chroma():
+    stage = ContrastCurveStage()
     x = np.array([[0.55, 0.35, 0.25]])
-    keep = stage.apply(x, _with(stage, **{"Contrast Boost": 0.8, "Chroma": 0.0}))
-    film = stage.apply(x, _with(stage, **{"Contrast Boost": 0.8, "Chroma": 1.0}))
-    # chroma 0: chromaticity untouched (reuleaux sat constant)
-    np.testing.assert_allclose(_sat_of(keep), _sat_of(x), atol=1e-6)
-    # chroma 1: exactly the per-channel curve -> sat rises here
-    curve = stage._curve(x, 0.8, MID_GREY, MID_GREY + 6.0 * STOP)
-    np.testing.assert_allclose(film, curve, atol=1e-12)
-    assert _sat_of(film)[0] > _sat_of(x)[0]
+    rgb_mode = stage.apply(x, _with(stage, Contrast=1.8, **{"Luma Blend": 0.0}))
+    luma_mode = stage.apply(x, _with(stage, Contrast=1.8, **{"Luma Blend": 1.0}))
+    # per-RGB contrast raises saturation (the film look); luma-only keeps
+    # chromaticity (reuleaux sat constant)
+    np.testing.assert_allclose(_sat_of(luma_mode), _sat_of(x), atol=1e-6)
+    assert _sat_of(rgb_mode)[0] > _sat_of(x)[0]
+
+
+def test_contrast_curve_mid_compensate_holds_pivot():
+    stage = ContrastCurveStage()
+    grey = np.array([[MID_GREY, MID_GREY, MID_GREY]])
+    off = stage.apply(grey, _with(stage, **{"Mid Push": 0.6, "Mid Compensate": 0.0}))
+    on = stage.apply(grey, _with(stage, **{"Mid Push": 0.6, "Mid Compensate": 1.0}))
+    assert off[0, 0] - MID_GREY > 0.02             # compensate off: pivot lifts
+    np.testing.assert_allclose(on, grey, atol=1e-9)  # compensate on: pivot held
 
 
 # ----------------------------------------------------- highlight bleach

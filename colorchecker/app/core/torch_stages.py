@@ -21,7 +21,7 @@ from app.core.chromogen import (
     BrillianceReductionStage,
     ColourCrosstalkStage,
     ColourSaturationStage,
-    ContrastBoostStage,
+    ContrastCurveStage,
     HighlightBleachStage,
     NeutralTintStage,
     SectorBrightnessStage,
@@ -254,23 +254,43 @@ def _colour_saturation_apply(stage, x, p):
     return _reuleaux_to_rgb(hue2, sat2, val)
 
 
-def _contrast_curve(v, boost, pivot, highlight, width):
-    return v + boost * (
-        (v - pivot)
-        - _softplus_t(v - highlight, width)
-        + _softplus_t(pivot - highlight, width)
-    )
+def _contrast_curve_scalar(v, p, stage):
+    """Differentiable mirror of ContrastCurveStage._tone (float64)."""
+    mg = chromogen.MID_GREY
+    st = chromogen.STOP
+    ln2 = float(np.log(2.0))
+    contrast, white, black = p[0], p[1], p[2]
+    mid_push, comp = p[3], p[4]
+    sh_roll, toe_roll = p[5], p[6]
+    flare, exposure = p[9], p[10]
+
+    v = v + exposure * st
+    fw = torch.as_tensor(stage._FLARE_WIDTH * st, dtype=v.dtype)
+    shadow_w = 1.0 - _ramp(v, mg, fw)
+    v = v + flare * stage._FLARE_SCALE * shadow_w
+    s = (v - mg) / st
+
+    k_sh = stage._K0 * stage._K_RANGE ** sh_roll
+    k_to = stage._K0 * stage._K_RANGE ** toe_roll
+    shoulder = _softplus_t(s, k_sh) - k_sh * ln2
+    toe = -(_softplus_t(-s, k_to) - k_to * ln2)
+    curve = contrast * (s + (white - 1.0) * shoulder + (black - 1.0) * toe)
+
+    u = s / stage._MID_W
+    g = torch.exp(-0.5 * u * u)
+    shape = (1.0 - comp) * g + comp * (u * float(np.exp(0.5)) * g)
+    mid = mid_push * stage._MID_SCALE * shape
+
+    return mg + (curve + mid) * st
 
 
-def _contrast_boost_apply(stage, x, p):
-    w = stage._SHOULDER
-    grey_abs = chromogen.MID_GREY + p[1] * chromogen.STOP
-    highlight_abs = chromogen.MID_GREY + p[2] * chromogen.STOP
+def _contrast_curve_apply(stage, x, p):
+    luma_blend, blend = p[7], p[8]
+    rgb_out = _contrast_curve_scalar(x, p, stage)
     hue, sat, val = _rgb_to_reuleaux(x)
-    val_mode = _reuleaux_to_rgb(hue, sat,
-                                _contrast_curve(val, p[0], grey_abs, highlight_abs, w))
-    rgb_mode = _contrast_curve(x, p[0], grey_abs, highlight_abs, w)
-    return (1.0 - p[3]) * val_mode + p[3] * rgb_mode
+    luma_out = _reuleaux_to_rgb(hue, sat, _contrast_curve_scalar(val, p, stage))
+    curved = (1.0 - luma_blend) * rgb_out + luma_blend * luma_out
+    return (1.0 - blend) * x + blend * curved
 
 
 def _highlight_bleach_apply(stage, x, p):
@@ -379,7 +399,7 @@ _APPLY = {
     ReuleauxBroadStage: _broad_apply,
     ReuleauxFineStage: _fine_apply,
     ColourSaturationStage: _colour_saturation_apply,
-    ContrastBoostStage: _contrast_boost_apply,
+    ContrastCurveStage: _contrast_curve_apply,
     HighlightBleachStage: _highlight_bleach_apply,
     NeutralTintStage: _neutral_tint_apply,
     BrillianceReductionStage: _brilliance_reduction_apply,

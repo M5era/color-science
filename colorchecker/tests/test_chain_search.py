@@ -9,7 +9,7 @@ import pytest
 from app.core.chain_search import default_pool, search_chain
 from app.core.chromogen import (
     ColourSaturationStage,
-    ContrastBoostStage,
+    ContrastCurveStage,
     NeutralTintStage,
 )
 from app.core.stages import LiftGammaGainStage
@@ -27,11 +27,16 @@ def _source(n=250, seed=5):
 
 
 def _simple_look(x):
-    """A look made from two pool tools: global sat boost + contrast."""
+    """A look made from two cleanly-separable broad pool tools: a global
+    sat boost and a warm tint. (Contrast Curve is deliberately kept out
+    of this fixture — in per-RGB mode it also moves saturation, so the
+    recovery-mechanics tests would otherwise have two tools competing to
+    explain the sat; Contrast Curve discovery is covered on its own by
+    the display-domain tests below.)"""
     sat = ColourSaturationStage()
-    con = ContrastBoostStage()
+    tint = NeutralTintStage()
     out = sat.apply(x, _with(sat, **{"R/G": 1.35, "Y/B": 1.35}))
-    return con.apply(out, _with(con, **{"Contrast Boost": 0.5}))
+    return tint.apply(out, _with(tint, Hue=40.0, Amount=0.5))
 
 
 def test_default_pool_is_chromogen_without_lgg():
@@ -72,7 +77,11 @@ def test_search_allows_reusing_a_stage_type():
     sat = ColourSaturationStage()
     p = _with(sat, **{"R/G": 1.9, "Y/B": 1.9})
     target = sat.apply(sat.apply(x, p), p)  # ~3.6x, beyond the 0..2 range
-    result = search_chain(x, target, max_nodes=3, min_gain=0.005)
+    # keep Contrast Curve out of this fixture: in per-RGB mode it also
+    # lifts saturation, so it would compete to explain the sat boost and
+    # muddy this pure reuse-mechanic check.
+    pool = [c for c in default_pool() if c is not ContrastCurveStage]
+    result = search_chain(x, target, max_nodes=3, min_gain=0.005, pool=pool)
     names = [s.name for s in result.model.stages]
     assert names.count("Colour Saturation") >= 2
     assert result.error_after < result.error_before / 5
@@ -80,39 +89,39 @@ def test_search_allows_reusing_a_stage_type():
 
 def test_search_display_domain_analytic_drt_finds_contrast():
     """The genesis lesson: with the analytic DRT and a display-domain
-    loss, a contrasty look must surface Contrast Boost — no cube
+    loss, a contrasty look must surface Contrast Curve — no cube
     inversion deleting the tone evidence at the extremes."""
     from app.core.opendrt import OpenDRTModel
 
     drt = OpenDRTModel()
     x = _source(300)
-    con = ContrastBoostStage()
-    target = drt(con.apply(x, _with(con, **{"Contrast Boost": 0.6})))
+    con = ContrastCurveStage()
+    target = drt(con.apply(x, _with(con, Contrast=1.7)))
     result = search_chain(x, target, max_nodes=3, min_gain=0.005,
                           display_transform=drt)
     names = [s.name for s in result.model.stages]
-    assert "Contrast Boost" in names
+    assert "Contrast Curve" in names
     assert result.error_after < result.error_before / 5
     assert result.pairs_unreachable == 0  # nothing is ever dropped
 
 
 def test_grey_locked_tone_matches_neutrals_exactly():
     """Marc: 'contrast adjusted based on grey scale only'. The tone
-    node is fitted on neutrals, frozen, and no second Contrast Boost
+    node is fitted on neutrals, frozen, and no second Contrast Curve
     enters the chain — so the grey-scale match is exact and stays."""
     from app.core.opendrt import OpenDRTModel
 
     drt = OpenDRTModel()
     neutrals = np.linspace(0.02, 0.95, 40)[:, None].repeat(3, axis=1)
     x = np.concatenate([_source(250), neutrals])
-    con = ContrastBoostStage()
-    target = drt(con.apply(x, _with(con, **{"Contrast Boost": 0.7})))
+    con = ContrastCurveStage()
+    target = drt(con.apply(x, _with(con, Contrast=1.7)))
 
     result = search_chain(x, target, max_nodes=4, min_gain=0.01,
                           display_transform=drt)
-    assert isinstance(result.model.stages[0], ContrastBoostStage)
+    assert isinstance(result.model.stages[0], ContrastCurveStage)
     names = [s.name for s in result.model.stages]
-    assert names.count("Contrast Boost") == 1  # left the pool after node 1
+    assert names.count("Contrast Curve") == 1  # left the pool after node 1
     mask = np.all(x == x[:, :1], axis=1)
     fitted_display = drt(result.model(x[mask]))
     np.testing.assert_allclose(fitted_display, target[mask], atol=5e-3)

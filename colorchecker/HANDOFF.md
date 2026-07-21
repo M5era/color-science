@@ -215,7 +215,37 @@ nodes are leftover pool junk — ignore.
 
 ---
 
-## 5. IMMEDIATE NEXT TASK: the openDRT port
+## 5. openDRT port: DONE (2026-07-21) — and it fixed genesis
+
+`app/core/opendrt.py`: 1:1 float64 port of Marc's EXACT installed
+OpenDRT v1.1.0b50 (`reference/OpenDRT_installed.dctl`, GPLv3), preset
+tables resolved for his confirmed config (AWG3 / LogC3 / Standard /
+Low Contrast / sRGB 2.2, cwp D65, Lp 100). **VALIDATION GATE PASSED
+first try**: mean abs err 7e-6 / max 6e-5 vs the Resolve-baked 65^3
+cube (`test_luts/`, committed) — float32 quantization territory.
+
+**Display-domain loss shipped**: `display_transform=` in
+solve_parametric / search_chain / lut_match (`--drt-math` CLI flag) —
+residual = openDRT(chain(x)) - display_target, computed analytically.
+No cube inversion, no unreachable-dropping. That dropping was the bug
+that hid Contrast Boost from the genesis search (the contrasty
+shadow/highlight pairs were exactly the ones deleted; a synthetic
+sandwich with few drops picked Contrast Boost immediately).
+
+**Genesis verification (cloud, 12 nodes, 1200 samples, scipy):**
+Contrast Boost appears as node 2 at +0.809; display error 0.064
+(old cube-sandwich baseline: 0.109). Caveats for next session:
+chain noise gain max x4188 (a squash/skew pinned at bounds — consider
+a noise-gain penalty or cap in the search), several bound-pinned
+sector params, worst patch 0.335.
+
+### Next steps (new priority order)
+1. Torch mirror of the openDRT port -> backprop with display loss
+   (currently --drt-math is scipy-only; --backend torch raises early).
+2. Noise-gain-aware search (penalize auditions that amplify noise).
+3. Matching-tab UI hookup for the chain search + drt-math.
+
+## 5b. (historical) the original port plan
 
 Goal: replace the baked openDRT cube with exact math
 (`app/core/opendrt.py` + torch mirror) -> exact/cheap inversion (fewer

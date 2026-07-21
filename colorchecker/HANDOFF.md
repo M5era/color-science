@@ -130,6 +130,16 @@ emissive overlays, CSV export, project save/load.
   from Baselight's own panels): Neutral Tint's Chroma is 0..2 with
   1=everything; Brilliance Reduction's Chroma/Pivot/Falloff are in the
   sat domain.
+- **Panel calibration source:** `reference/chromogen_panels.md` (repo
+  root) — full transcription of Marc's Baselight panel screenshots
+  with per-slider defaults/ranges/bar graphics, the pivot=stops
+  evidence, and the open-questions list (missing: the three other
+  Sector panels, hue-slider mapping, tooltip texts). 2026-07-21
+  recalibration from it: Colour Saturation R/G+Y/B range 0..2
+  (identity centred), Contrast Boost floor 0.0 (no negative), Bleach
+  falloff default 0.5 stops, Tint falloff default 1.0 stops (falloff
+  lower bounds now 0.1). Baselight panel default pivots (Bleach -2.00,
+  Tint -0.70~mid-grey) CONFIRM our stops convention.
 - **Solvers:** RBF (unchanged) and Parametric — stagewise coordinate
   descent (prep stages last, per-stage identity reg) -> optional
   **backprop** (torch optional dep; Adam over sigmoid-bounded params;

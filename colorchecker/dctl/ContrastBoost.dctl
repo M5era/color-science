@@ -17,7 +17,7 @@
 // redistribute this file. Windowing/masking/tool math is original to
 // this project.
 
-DEFINE_UI_PARAMS(boost, Contrast Boost, DCTLUI_SLIDER_FLOAT, 0.0, -0.9, 2.0, 0.001)
+DEFINE_UI_PARAMS(boost, Contrast Boost, DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 2.0, 0.001)
 DEFINE_UI_PARAMS(grey_pivot, Grey Pivot, DCTLUI_SLIDER_FLOAT, 0.0, -4.0, 4.0, 0.01)
 DEFINE_UI_PARAMS(highlight_pivot, Highlight Pivot, DCTLUI_SLIDER_FLOAT, 6.0, 0.5, 14.0, 0.01)
 DEFINE_UI_PARAMS(chroma, Chroma, DCTLUI_SLIDER_FLOAT, 0.5, 0.0, 1.0, 0.001)

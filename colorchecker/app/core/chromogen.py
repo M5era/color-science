@@ -143,8 +143,11 @@ class ColourSaturationStage(Stage):
         return np.array([1.0, 1.0, 0.0, 0.0, 0.0])
 
     def bounds(self):
+        # R/G and Y/B are 0..2 with the 1.0 identity dead-centre, as on
+        # the Chromogen panel (Baselight's Extended Ranges would go
+        # further; 2x sat is already a lot)
         lo = [0.0, 0.0, -1.0, -6.0, -1.0]
-        hi = [3.0, 3.0, 1.0, 8.0, 1.0]
+        hi = [2.0, 2.0, 1.0, 8.0, 1.0]
         return np.asarray(lo), np.asarray(hi)
 
     def apply(self, x, params):
@@ -276,7 +279,10 @@ class ContrastBoostStage(Stage):
         return np.array([0.0, 0.0, 6.0, 0.5])
 
     def bounds(self):
-        return (np.asarray([-0.9, -4.0, 0.5, 0.0]),
+        # Boost starts at 0 (the Chromogen panel has its knob parked at
+        # the LEFT end — no negative/flattening range; use LGG or the
+        # curves for that)
+        return (np.asarray([0.0, -4.0, 0.5, 0.0]),
                 np.asarray([2.0, 4.0, 14.0, 1.0]))
 
     def _curve(self, v, boost, grey_abs, highlight_abs):
@@ -332,10 +338,14 @@ class HighlightBleachStage(Stage):
     param_names = ["R", "Y", "G", "B", "Pivot", "Falloff", "Chroma"]
 
     def identity(self):
-        return np.array([0.0, 0.0, 0.0, 0.0, -2.0, 4.0, 0.0])
+        # Chromogen panel defaults: Pivot -2.00 (stops below mid-grey,
+        # confirmed by the knob position on the panel's grey bar) and
+        # Falloff 0.500 — a soft-kneed threshold: everything above ~2
+        # stops under mid-grey bleaches once an amount is raised
+        return np.array([0.0, 0.0, 0.0, 0.0, -2.0, 0.5, 0.0])
 
     def bounds(self):
-        lo = [0.0, 0.0, 0.0, 0.0, -6.0, 0.5, -1.0]
+        lo = [0.0, 0.0, 0.0, 0.0, -6.0, 0.1, -1.0]
         hi = [1.0, 1.0, 1.0, 1.0, 8.0, 16.0, 1.0]
         return np.asarray(lo), np.asarray(hi)
 
@@ -400,10 +410,13 @@ class NeutralTintStage(Stage):
     TINT_SCALE = 0.15
 
     def identity(self):
-        return np.array([0.0, 0.0, 0.0, 4.0, 1.0])
+        # Baselight defaults: Pivot at mid-grey, Falloff 1.0 (stop) — a
+        # near-clean shadows/highlights split at mid-grey that the
+        # falloff then widens/softens
+        return np.array([0.0, 0.0, 0.0, 1.0, 1.0])
 
     def bounds(self):
-        lo = [0.0, -1.0, -6.0, 0.5, 0.0]
+        lo = [0.0, -1.0, -6.0, 0.1, 0.0]
         hi = [360.0, 1.0, 8.0, 16.0, 2.0]
         return np.asarray(lo), np.asarray(hi)
 

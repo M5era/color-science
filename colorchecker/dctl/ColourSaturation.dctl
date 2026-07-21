@@ -17,8 +17,8 @@
 // redistribute this file. Windowing/masking/tool math is original to
 // this project.
 
-DEFINE_UI_PARAMS(sat_rg, R/G, DCTLUI_SLIDER_FLOAT, 1.0, 0.0, 3.0, 0.001)
-DEFINE_UI_PARAMS(sat_yb, Y/B, DCTLUI_SLIDER_FLOAT, 1.0, 0.0, 3.0, 0.001)
+DEFINE_UI_PARAMS(sat_rg, R/G, DCTLUI_SLIDER_FLOAT, 1.0, 0.0, 2.0, 0.001)
+DEFINE_UI_PARAMS(sat_yb, Y/B, DCTLUI_SLIDER_FLOAT, 1.0, 0.0, 2.0, 0.001)
 DEFINE_UI_PARAMS(zone, Zone, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 1.0, 0.001)
 DEFINE_UI_PARAMS(pivot, Pivot, DCTLUI_SLIDER_FLOAT, 0.0, -6.0, 8.0, 0.01)
 DEFINE_UI_PARAMS(chroma, Chroma, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 1.0, 0.001)

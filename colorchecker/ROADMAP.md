@@ -517,3 +517,13 @@ Genesis e100_base + openDRT test taught three things:
    inversion, differentiable display-domain optimization, fewer
    drops. Candidate next step; cube path stays as the generic
    fallback for arbitrary DRTs.
+
+
+## drx node insertion / reordering — SUPERSEDED
+
+(This section came from a parallel 2026-07-20 session, merged via
+PR #5, that concluded insertion needed a future experiment.) The
+experiment is done and the capability is BUILT: see "NODE-GRAPH
+SURGERY — LANDED 2026-07-20" above (app/core/drx_graph.py —
+add/duplicate/reorder/relabel, byte-identical round-trip gate,
+verified in Marc's Resolve).

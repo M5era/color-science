@@ -78,6 +78,24 @@ def test_search_allows_reusing_a_stage_type():
     assert result.error_after < result.error_before / 5
 
 
+def test_search_display_domain_analytic_drt_finds_contrast():
+    """The genesis lesson: with the analytic DRT and a display-domain
+    loss, a contrasty look must surface Contrast Boost — no cube
+    inversion deleting the tone evidence at the extremes."""
+    from app.core.opendrt import OpenDRTModel
+
+    drt = OpenDRTModel()
+    x = _source(300)
+    con = ContrastBoostStage()
+    target = drt(con.apply(x, _with(con, **{"Contrast Boost": 0.6})))
+    result = search_chain(x, target, max_nodes=3, min_gain=0.005,
+                          display_transform=drt)
+    names = [s.name for s in result.model.stages]
+    assert "Contrast Boost" in names
+    assert result.error_after < result.error_before / 5
+    assert result.pairs_unreachable == 0  # nothing is ever dropped
+
+
 def test_search_refuses_identity_target():
     x = _source()
     with pytest.raises(ValueError, match="nothing worth adding"):

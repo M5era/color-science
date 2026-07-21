@@ -305,7 +305,7 @@ def _neutral_tint_apply(stage, x, p):
 def _brilliance_reduction_apply(stage, x, p):
     hue, sat, val = _rgb_to_reuleaux(x)
     w = p[1] * _ramp(sat, p[2], p[3])
-    val2 = val * (1.0 - p[0] * w)
+    val2 = val * 2.0 ** (-stage.REDUCTION_STOPS * p[0] * w)
     return _reuleaux_to_rgb(hue, sat, val2)
 
 

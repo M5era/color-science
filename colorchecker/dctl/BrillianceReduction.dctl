@@ -10,8 +10,10 @@
 // luminance scale (chromaticity untouched) weighted by a saturation
 // ramp: Chroma, Pivot and Falloff all live in the SAT domain (reuleaux
 // sat units, NOT stops) — Pivot is where the ramp starts biting,
-// Falloff its width, Chroma the overall mask strength. At Amount 1 a
-// fully-masked color loses Chroma's worth of its luminance.
+// Falloff its width, Chroma the overall mask strength. The reduction
+// is an EXPOSURE scale in stops: full throw with a fully-open mask
+// darkens by exactly REDUCTION_STOPS (2.0) — it can never crush to
+// black, keeping the tool gentle by construction.
 //
 // The rgb<->reuleaux conversion functions are transcribed from
 // Reuleaux (hotgluebanjo & calvinsilly, github.com/hotgluebanjo/reuleaux),
@@ -74,8 +76,9 @@ __DEVICE__ float ramp_window(float x, float pivot_, float falloff_) {
 
 __DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, float p_R, float p_G, float p_B)
 {
+    const float REDUCTION_STOPS = 2.0f;
     float3 rl = rgb_to_reuleaux(make_float3(p_R, p_G, p_B));
     float w = chroma * ramp_window(rl.y, pivot, falloff);
-    float val2 = rl.z * (1.0f - amount * w);
+    float val2 = rl.z * _exp2f(-REDUCTION_STOPS * amount * w);
     return reuleaux_to_rgb(make_float3(rl.x, rl.y, val2));
 }

@@ -54,16 +54,18 @@ def _fit_err(a, b):
 
 
 def _fit_candidate(stage: Stage, cur: np.ndarray, fit_target: np.ndarray,
-                   regularization: float, max_nfev: int = 80):
+                   regularization: float, fwd, max_nfev: int = 80):
     """Fit ONE stage on top of the frozen chain output `cur`. Returns
-    (params, fit_error). Multi-starts the Hue slider when present."""
+    (params, fit_error). Multi-starts the Hue slider when present.
+    `fwd` maps working-domain output to the fit domain (identity, or
+    the analytic display transform)."""
     lo, hi = stage.bounds()
     identity = stage.identity()
     scale = np.maximum(hi - lo, 1e-6)
     reg = np.sqrt(regularization * stage.reg_scale)
 
     def residual(p):
-        fit = (stage.apply(cur, p) - fit_target).ravel()
+        fit = (fwd(stage.apply(cur, p)) - fit_target).ravel()
         return np.concatenate([fit, reg * (p - identity) / scale])
 
     starts = [identity]
@@ -81,13 +83,13 @@ def _fit_candidate(stage: Stage, cur: np.ndarray, fit_target: np.ndarray,
             residual, np.clip(x0, lo, hi), bounds=(lo, hi), method="trf",
             xtol=1e-9, ftol=1e-9, max_nfev=max_nfev,
         )
-        err = _fit_err(stage.apply(cur, sol.x), fit_target)
+        err = _fit_err(fwd(stage.apply(cur, sol.x)), fit_target)
         if err < best_e:
             best_p, best_e = sol.x, err
     return best_p, best_e
 
 
-def _joint_refine(stages, params, source, fit_target, regularization,
+def _joint_refine(stages, params, source, fit_target, regularization, fwd,
                   max_nfev: int = 150):
     """Bounded joint least-squares over every parameter of the chain
     (same identity regularization as solve_parametric's pass 2)."""
@@ -108,7 +110,7 @@ def _joint_refine(stages, params, source, fit_target, regularization,
         out = source
         for stage, p in zip(stages, split(flat)):
             out = stage.apply(out, p)
-        fit = (out - fit_target).ravel()
+        fit = (fwd(out) - fit_target).ravel()
         return np.concatenate([fit, reg * (flat - identity) / scale])
 
     sol = least_squares(
@@ -126,6 +128,7 @@ def search_chain(
     max_nodes: int = 10,
     min_gain: float = 0.005,
     output_transform: CubeLUT | None = None,
+    display_transform=None,
     regularization: float = 1e-3,
     backend: str = "scipy",
     verbose: bool = False,
@@ -133,10 +136,21 @@ def search_chain(
     """Search a chain of at most `max_nodes` nodes drawn freely (with
     repetition) from `pool`, then polish + report via solve_parametric.
     `min_gain` is the relative fit-error improvement a new node must
-    deliver to be accepted (0.005 = 0.5%)."""
+    deliver to be accepted (0.005 = 0.5%).
+
+    `display_transform` (callable) switches to the ANALYTIC
+    display-referred mode: `target` is display values, every audition
+    and refine minimizes display_transform(chain(x)) - target directly
+    — no cube inversion, no unreachable-dropping (the fix for tone
+    evidence getting deleted at the extremes). scipy backend only."""
     # fail BEFORE the expensive search, not at the final polish (a
     # 20-node run once died at the very end on a missing torch)
     validate_backend(backend)
+    if display_transform is not None and backend == "torch":
+        raise NotImplementedError(
+            "display_transform has no torch mirror yet — use "
+            "backend='scipy' with the analytic DRT"
+        )
     if pool is None:
         pool = default_pool()
     source = np.asarray(source, dtype=np.float64)
@@ -146,23 +160,28 @@ def search_chain(
     # final report on the same inputs — semantics stay identical)
     valid = ~(np.isnan(source).any(axis=1) | np.isnan(target).any(axis=1))
     src, tgt = source[valid], target[valid]
+    if output_transform is not None and display_transform is not None:
+        raise ValueError("Pass output_transform OR display_transform, "
+                         "not both")
     if output_transform is not None:
         fit_target, reachable, _ = invert_lut_at(output_transform, tgt)
         src, fit_target = src[reachable], fit_target[reachable]
     else:
         fit_target = tgt
 
+    fwd = display_transform if display_transform is not None else (lambda v: v)
+
     stages: list[Stage] = []
     params: list[np.ndarray] = []
     cur = src
-    err = _fit_err(cur, fit_target)
+    err = _fit_err(fwd(cur), fit_target)
     log = []
 
     while len(stages) < max_nodes:
         best = None  # (err, stage, params)
         for cls in pool:
             stage = cls()
-            p, e = _fit_candidate(stage, cur, fit_target, regularization)
+            p, e = _fit_candidate(stage, cur, fit_target, regularization, fwd)
             if best is None or e < best[0]:
                 best = (e, stage, p)
 
@@ -175,11 +194,11 @@ def search_chain(
         stages.append(best[1])
         params.append(best[2])
         params = _joint_refine(stages, params, src, fit_target,
-                               regularization)
+                               regularization, fwd)
         cur = src
         for stage, p in zip(stages, params):
             cur = stage.apply(cur, p)
-        err = _fit_err(cur, fit_target)
+        err = _fit_err(fwd(cur), fit_target)
         log.append((len(stages), best[1].name, err))
         if verbose:
             print(f"  node {len(stages)}: + {best[1].name}  "
@@ -197,6 +216,7 @@ def search_chain(
     result = solve_parametric(
         source, target, stages,
         output_transform=output_transform,
+        display_transform=display_transform,
         regularization=regularization,
         backend=backend,
         init_params=params,

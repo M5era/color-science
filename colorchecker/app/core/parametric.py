@@ -87,6 +87,7 @@ def solve_parametric(
     sweeps: int = 2,
     backend: str = "scipy",
     init_params: list[np.ndarray] | None = None,
+    display_transform=None,
 ) -> ParametricResult:
     """backend='torch' inserts a gradient (backprop) refinement pass —
     Adam over autograd mirrors of the stages, with multi-restart hue
@@ -97,7 +98,15 @@ def solve_parametric(
     of the identity start — used by the chain search to polish a chain
     it has already roughed in. The stagewise sweeps still run (each
     least_squares starts from the warm values, so they can only keep or
-    improve the fit)."""
+    improve the fit).
+
+    `display_transform` (callable, e.g. app.core.opendrt.OpenDRTModel)
+    is the ANALYTIC display-referred mode: `target` is display values
+    and the residual is display_transform(chain(x)) - target, computed
+    directly — no LUT inversion, so NO pairs are dropped as
+    unreachable and clipped targets still pull the fit the right way.
+    Mutually exclusive with `output_transform` (the cube-inversion
+    sandwich). scipy backend only for now (no torch mirror yet)."""
     validate_backend(backend)
     source = np.asarray(source, dtype=np.float64)
     target = np.asarray(target, dtype=np.float64)
@@ -108,6 +117,15 @@ def solve_parametric(
         )
     if not stages:
         raise ValueError("The stage chain is empty — add at least one stage")
+
+    if output_transform is not None and display_transform is not None:
+        raise ValueError("Pass output_transform (cube sandwich) OR "
+                         "display_transform (analytic), not both")
+    if display_transform is not None and backend == "torch":
+        raise NotImplementedError(
+            "display_transform has no torch mirror yet — use "
+            "backend='scipy' with the analytic DRT"
+        )
 
     valid = ~(np.isnan(source).any(axis=1) | np.isnan(target).any(axis=1))
     dropped = int((~valid).sum())
@@ -120,13 +138,20 @@ def solve_parametric(
         source, target = source[reachable], target[reachable]
         fit_target = fit_target[reachable]
     else:
+        # analytic display mode: fit straight against the display
+        # targets through display_transform — nothing to invert, no
+        # pairs dropped
         fit_target = target
 
     if source.shape[0] < 8:
         raise ValueError("Need at least 8 valid patch pairs to fit")
 
+    fwd = display_transform if display_transform is not None else (lambda v: v)
+
     def display(values):
-        return apply_lut(output_transform, values) if output_transform is not None else values
+        if output_transform is not None:
+            return apply_lut(output_transform, values)
+        return fwd(values)
 
     if init_params is not None:
         if len(init_params) != len(stages):
@@ -162,7 +187,7 @@ def solve_parametric(
             def residual(p, i=i, stage_id=stage_id,
                          stage_scale=stage_scale, stage_reg=stage_reg):
                 trial = params[:i] + [p] + params[i + 1 :]
-                fit = (chain(source, trial) - fit_target).ravel()
+                fit = (fwd(chain(source, trial)) - fit_target).ravel()
                 reg = stage_reg * (p - stage_id) / stage_scale
                 return np.concatenate([fit, reg])
 
@@ -199,7 +224,7 @@ def solve_parametric(
         return [flat[offsets[i] : offsets[i + 1]] for i in range(len(stages))]
 
     def joint_residual(flat):
-        fit = chain(source, split(flat)) - fit_target
+        fit = fwd(chain(source, split(flat))) - fit_target
         reg = reg_weight * reg_scale_all * (flat - identity_all) / scale_all
         return np.concatenate([fit.ravel(), reg])
 
@@ -232,7 +257,8 @@ def solve_parametric(
         pairs_used=int(source.shape[0]),
         pairs_dropped=dropped,
         pairs_unreachable=unreachable,
-        display_referred=output_transform is not None,
+        display_referred=(output_transform is not None
+                          or display_transform is not None),
         error_before=error_before,
         error_after=float(per_patch.mean()),
         error_after_max=float(per_patch.max()),

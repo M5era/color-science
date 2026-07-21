@@ -49,16 +49,29 @@ def solve_lut_match(
     drt: CubeLUT | None = None,
     target_is_display: bool = False,
     init_params: list[np.ndarray] | None = None,
+    drt_math=None,
 ) -> ParametricResult:
     """With `drt`, the match runs as the display-referred sandwich:
     the chain approximates the LUT in the working (log) domain, but
     targets the DRT inverts back from display, unreachable/clipped
     patches are dropped, and errors are reported THROUGH the DRT —
-    what the eye sees. Stack the fitted chain BEFORE the DRT node."""
+    what the eye sees. Stack the fitted chain BEFORE the DRT node.
+
+    `drt_math` (callable, e.g. opendrt.OpenDRTModel()) replaces the
+    baked-cube sandwich with the ANALYTIC DRT: the fit error is
+    computed in display space directly, nothing is inverted, no pairs
+    are dropped."""
     if source_points is None:
         source_points = sample_lut_domain(lut, n=n_samples, seed=seed)
     source_points = np.asarray(source_points, dtype=np.float64)
     targets = apply_lut(lut, source_points)
+    if drt_math is not None:
+        display_targets = targets if target_is_display else drt_math(targets)
+        return solve_parametric(
+            source_points, display_targets, stages,
+            backend=backend, regularization=regularization,
+            display_transform=drt_math, init_params=init_params,
+        )
     if drt is not None:
         # target_is_display: the LUT already renders to display (e.g. a
         # print emulation) — rebuild it as [chain under the DRT], i.e.
@@ -90,15 +103,25 @@ def search_lut_match(
     drt: CubeLUT | None = None,
     target_is_display: bool = False,
     verbose: bool = False,
+    drt_math=None,
 ) -> ParametricResult:
     """solve_lut_match without a prescribed chain: the free-order
     greedy search (app/core/chain_search.py) picks which tools to use,
     how often, and in what order — bounded only by max_nodes. Same DRT
-    sandwich semantics as solve_lut_match."""
+    sandwich semantics as solve_lut_match; `drt_math` (callable) uses
+    the analytic DRT with a display-domain loss instead of the cube."""
     if source_points is None:
         source_points = sample_lut_domain(lut, n=n_samples, seed=seed)
     source_points = np.asarray(source_points, dtype=np.float64)
     targets = apply_lut(lut, source_points)
+    if drt_math is not None:
+        display_targets = targets if target_is_display else drt_math(targets)
+        return search_chain(
+            source_points, display_targets,
+            pool=pool, max_nodes=max_nodes, min_gain=min_gain,
+            backend=backend, regularization=regularization,
+            display_transform=drt_math, verbose=verbose,
+        )
     if drt is not None:
         display_targets = targets if target_is_display else apply_lut(drt, targets)
         return search_chain(

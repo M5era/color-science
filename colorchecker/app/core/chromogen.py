@@ -483,16 +483,23 @@ class BrillianceReductionStage(Stage):
     (reuleaux sat units, not stops): Pivot is where the ramp starts
     biting, Falloff its width, Chroma the overall mask strength.
 
-    Amount 0.0 (LEFT end) is the identity — raise it to reduce; at 1.0
-    a fully-masked color loses Chroma's worth of its luminance.
-    (Corrected 2026-07-21: the first screenshot showed a non-default
-    grade with Amount at 1.0, and the shipped identity-at-1 design
-    made the panel read as dead. Baselight's true default is 0.)
-    Defaults Chroma 0.6 / Pivot 0.35 / Falloff 0.5 shape the mask but
-    do nothing while Amount stays at 0."""
+    Amount 0.0 (LEFT end) is the identity — raise it to reduce. The
+    reduction is an EXPOSURE scale in stops, 2^(-REDUCTION_STOPS *
+    amount * mask): even the most pathological settings (amount 1,
+    chroma 1, pivot 0, falloff 0 = mask everywhere) bottom out at
+    -REDUCTION_STOPS, never black — a linear scale could hit exactly 0
+    and crushed the image (Marc, 2026-07-21). (Amount correction same
+    day: the first screenshot showed a non-default grade with Amount
+    at 1.0; Baselight's true default is 0 and identity-at-1 read as a
+    dead panel.) Defaults Chroma 0.6 / Pivot 0.35 / Falloff 0.5 shape
+    the mask but do nothing while Amount stays at 0."""
 
     name = "Brilliance Reduction"
     param_names = ["Amount", "Chroma", "Pivot", "Falloff"]
+
+    # full throw with a fully-open mask darkens by exactly this many
+    # stops — the ceiling that keeps the tool gentle by construction
+    REDUCTION_STOPS = 2.0
 
     def identity(self):
         return np.array([0.0, 0.6, 0.35, 0.5])
@@ -508,7 +515,7 @@ class BrillianceReductionStage(Stage):
         hue, sat, val = reuleaux[..., 0], reuleaux[..., 1], reuleaux[..., 2]
 
         w = chroma * ramp_window(sat, pivot, falloff)
-        val2 = val * (1.0 - amount * w)
+        val2 = val * 2.0 ** (-self.REDUCTION_STOPS * amount * w)
         return reuleaux_to_rgb(np.stack([hue, sat, val2], axis=-1))
 
     def label(self, params):

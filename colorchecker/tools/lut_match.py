@@ -62,6 +62,12 @@ def main() -> None:
                         help="DRT .cube to work under (display-referred "
                              "sandwich: fit in log, errors through the DRT; "
                              "stack the result BEFORE the DRT node)")
+    parser.add_argument("--drt-math", action="store_true",
+                        help="use the ANALYTIC openDRT (Marc's exact "
+                             "config, app/core/opendrt.py) instead of a "
+                             "baked --drt cube: display-domain loss, no "
+                             "inversion, no unreachable-dropping. scipy "
+                             "backend only.")
     parser.add_argument("--target-is-display", action="store_true",
                         help="the LUT already outputs display (print "
                              "emulation etc.) — rebuild it as chain+DRT: "
@@ -98,7 +104,18 @@ def main() -> None:
     if args.source_csv:
         source_points, _ = load_patch_csv(args.source_csv)
 
-    drt = parse_cube(args.drt) if args.drt else None
+    drt_math = None
+    if args.drt_math:
+        from app.core.opendrt import OpenDRTModel
+
+        if args.backend == "torch":
+            raise SystemExit(
+                "--drt-math has no torch mirror yet — drop --backend torch"
+            )
+        drt_math = OpenDRTModel()
+        drt = None
+    else:
+        drt = parse_cube(args.drt) if args.drt else None
     if args.search:
         result = search_lut_match(
             lut,
@@ -110,6 +127,7 @@ def main() -> None:
             drt=drt,
             target_is_display=args.target_is_display,
             verbose=True,
+            drt_math=drt_math,
         )
         print()
         print("Search log:")
@@ -129,6 +147,7 @@ def main() -> None:
             backend=args.backend,
             drt=drt,
             target_is_display=args.target_is_display,
+            drt_math=drt_math,
         )
 
     print(f"Backend: {result.backend}   pairs: {result.pairs_used}"
@@ -201,6 +220,7 @@ def main() -> None:
                     drt=drt,
                     target_is_display=args.target_is_display,
                     init_params=[keyed[j][2] for j in order],
+                    drt_math=drt_math,
                 )
                 print(f".drx (template-order) error: "
                       f"{export_result.error_after:.5f}   "

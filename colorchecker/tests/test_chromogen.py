@@ -272,6 +272,19 @@ def test_brilliance_reduction_darkens_by_saturation():
     np.testing.assert_allclose(stage.apply(grey, p), grey, atol=1e-9)
 
 
+def test_brilliance_reduction_can_never_crush_to_black():
+    """Marc's report: amount+chroma at 1 with pivot/falloff at 0 made
+    the image fully black. The stops-based scale bounds the darkening
+    at 2^-REDUCTION_STOPS for ANY slider combination."""
+    stage = BrillianceReductionStage()
+    worst = _with(stage, Amount=1.0, Chroma=1.0, Pivot=0.0, Falloff=0.01)
+    x = np.random.default_rng(8).uniform(0.05, 0.95, (200, 3))
+    out = stage.apply(x, worst)
+    floor = 2.0 ** (-stage.REDUCTION_STOPS)
+    assert (out.max(axis=1) >= x.max(axis=1) * floor - 1e-9).all()
+    assert out.max() > 0.01  # nowhere near black
+
+
 def test_brilliance_reduction_mask_sliders():
     stage = BrillianceReductionStage()
     saturated = np.array([[0.8, 0.25, 0.2]])

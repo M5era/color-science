@@ -263,7 +263,33 @@ port module must carry the license; fine for private use).
 5. Tone pre-curve option for LUT matching (bridging different
    renderings — roadmap).
 6. drx node-graph surgery: DONE + VERIFIED in Resolve (2026-07-20).
-7. **Neutral Tint v3 (NEXT):** Marc is still not happy with v2 ("not
+7. **GENESIS MATCH VERDICT ON REAL FOOTAGE (Marc, 2026-07-21): NOT A
+   MATCH.** The rerun reproduced the math (display error 0.224 ->
+   0.110, 484/1395 unreachable) and the graph-surgery .drx imported
+   fine — but on footage "the only thing that had an actual effect
+   was the lift gamma gain... that gave a green tint as well which
+   didn't really work at all". Diagnosis from the fitted params:
+   - Nearly every non-LGG stage GATED ITSELF INTO RARE STATES the
+     uniform lattice sample weights heavily but footage rarely
+     occupies: ColourSat Zone +0.95 / Pivot +4.7 stops, Crosstalk
+     Pivot +5.6 stops, Bleach Chroma +0.68, Tint focus at brightest
+     with Chroma +0.76. Mathematically real, perceptually a no-op.
+   - The visible move was LGG's white balance: Gain R 1.063 G 1.125
+     B 1.001 = GREEN CAST. Nothing constrains the neutral axis.
+   - Fix directions for the next attempt: (a) weight samples like
+     footage, not like a lattice — favor a scene-plausible exposure
+     distribution around mid-grey and/or fit on real chart CSVs
+     (--source-csv exists); (b) heavily weight the neutral ramp so
+     neutrals STAY neutral (kills the green cast); (c) regularize
+     the modulation gates (Zone/Pivot/Chroma) toward BROAD so error
+     reduction must come from moves that act on the bulk of the
+     image; (d) the tone residual still wants the monotone tone
+     pre-curve option (Contrast Boost pinned Highlight Pivot at its
+     14-stop bound again — same smell as the first run).
+   - **LGG stays FIRST in the chain — Marc: not negotiable.** (The
+     presets already do this; keep it that way in any new preset or
+     order-search experiment.)
+8. **Neutral Tint v3 (NEXT):** Marc is still not happy with v2 ("not
    organic"). His clue: "I always liked how log state offset behaves"
    + he uploaded Thatcher's LGGO_Temperature_Tint.dctl (saved in
    reference/, MIT — thatcherfreeman/utility-dctls). Design

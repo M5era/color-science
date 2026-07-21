@@ -164,43 +164,54 @@ def test_highlight_bleach_unganged_spares_a_sector():
 
 # -------------------------------------------------------- neutral tint
 
-def test_neutral_tint_pivot_focuses_tonal_band_and_keeps_val():
-    """v2 semantics: Amount 0..1, Pivot -1..+1 sweeps the focus bump
+def test_neutral_tint_pivot_focuses_tonal_band():
+    """v3 semantics: Amount 0..1, Pivot -1..+1 sweeps the focus bump
     from the darkest section to the brightest — no dead zones."""
     stage = NeutralTintStage()
     highs = np.array([[0.9, 0.9, 0.9]])
     lows = np.array([[0.12, 0.12, 0.12]])
 
+    def spread(x, p):
+        out = stage.apply(x, p)
+        return float(out.max() - out.min())
+
     warm_high = _with(stage, Hue=40.0, Amount=0.5, Pivot=1.0)
-    for x in (highs, lows):
-        out = stage.apply(x, warm_high)
-        # val (contrast) untouched by construction
-        np.testing.assert_allclose(out.max(axis=1), x.max(axis=1), atol=1e-9)
-    assert _sat_of(stage.apply(highs, warm_high))[0] > 0.05   # tinted
-    assert _sat_of(stage.apply(lows, warm_high))[0] < 0.02    # spared
+    assert spread(highs, warm_high) > 0.02      # tinted
+    assert spread(lows, warm_high) < 1e-6       # spared
 
     # leftmost pivot MUST grab the darkest section (v1's dead zone bug)
     cold_low = _with(stage, Hue=220.0, Amount=0.5, Pivot=-1.0)
-    assert _sat_of(stage.apply(lows, cold_low))[0] > 0.05
-    assert _sat_of(stage.apply(highs, cold_low))[0] < 0.02
+    assert spread(lows, cold_low) > 0.02
+    assert spread(highs, cold_low) < 1e-6
 
 
-def test_neutral_tint_amount_is_dye_convergence_not_gain():
-    """Full amount pulls a focused neutral all the way to the dye
-    anchor (sat = TINT_MAX_SAT) — bounded, saturating response."""
+def test_neutral_tint_is_zero_mean_log_offset():
+    """v3: the tint is a plain offset in log state, zero-mean across
+    channels — a neutral keeps its mean level, takes the cast, and
+    the offset direction matches the reuleaux hue axis."""
     stage = NeutralTintStage()
-    # grey exactly at the default focus center (pivot 0 -> MID_GREY)
-    grey = np.full((1, 3), 0.391)
+    grey = np.full((1, 3), 0.391)   # at the default focus center
 
-    sats = []
+    p_red = _with(stage, Hue=0.0, Amount=1.0)
+    out = stage.apply(grey, p_red)
+    np.testing.assert_allclose(out.mean(), grey.mean(), atol=1e-12)
+    assert out[0, 0] > out[0, 1] and out[0, 0] > out[0, 2]  # red cast
+    # full throw = TINT_LOG_SCALE along the unit direction
+    np.testing.assert_allclose(
+        np.linalg.norm(out - grey), stage.TINT_LOG_SCALE, atol=1e-9)
+
+    p_blue = _with(stage, Hue=240.0, Amount=1.0)
+    out_b = stage.apply(grey, p_blue)
+    assert out_b[0, 2] > out_b[0, 0] and out_b[0, 2] > out_b[0, 1]
+
+    # amount: monotone with an eased (soft) start
+    spreads = []
     for a in (0.0, 0.25, 0.5, 0.75, 1.0):
-        p = _with(stage, Hue=40.0, Amount=a)
-        sats.append(_sat_of(stage.apply(grey, p))[0])
-    assert sats[0] < 1e-12                       # 0 = nothing
-    assert all(b > a for a, b in zip(sats, sats[1:]))  # monotone
-    np.testing.assert_allclose(sats[-1], stage.TINT_MAX_SAT, atol=1e-6)
-    # eased start: quarter throw is well under a quarter of the range
-    assert sats[1] < 0.25 * sats[-1] * 0.8
+        o = stage.apply(grey, _with(stage, Hue=0.0, Amount=a))
+        spreads.append(float(o.max() - o.min()))
+    assert spreads[0] < 1e-12
+    assert all(b > a for a, b in zip(spreads, spreads[1:]))
+    assert spreads[1] < 0.25 * spreads[-1] * 0.8
 
 
 # ---------------------------------------------------- colour crosstalk

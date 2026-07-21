@@ -292,13 +292,17 @@ def _neutral_tint_apply(stage, x, p):
 
     a = torch.clamp(p[1], 0.0, 1.0)
     eased = a * a * (3.0 - 2.0 * a)
-    t = eased * m
-    ang = (p[0] / 360.0) * (2.0 * torch.pi)
-    c1, c2 = _to_chroma_vec(hue, sat)
-    c1 = c1 + t * (stage.TINT_MAX_SAT * torch.cos(ang) - c1)
-    c2 = c2 + t * (stage.TINT_MAX_SAT * torch.sin(ang) - c2)
-    hue2, sat2 = _from_chroma_vec(c1, c2)
-    return _reuleaux_to_rgb(hue2, sat2, val)
+    t = eased * stage.TINT_LOG_SCALE * m
+
+    theta = (p[0] / 360.0) * (2.0 * torch.pi)
+    c, s = torch.cos(theta), torch.sin(theta)
+    rt2 = float(np.sqrt(2.0))
+    rt6 = float(np.sqrt(6.0))
+    rt3 = float(np.sqrt(3.0))
+    d = torch.stack([rt2 * c,
+                     (-rt2 * c + rt6 * s) / 2.0,
+                     (-rt2 * c - rt6 * s) / 2.0]) / rt3
+    return x + t.unsqueeze(-1) * d
 
 
 def _colour_crosstalk_apply(stage, x, p):

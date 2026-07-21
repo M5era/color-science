@@ -1,8 +1,13 @@
-// NeutralTint.dctl — dye-style tint toward a picked hue, val untouched
-// v2 (2026-07-20 rework):
-//   Amount  0..1 — 0 nothing, 1 a lot (eased; chroma CONVERGES toward
-//           a dye anchor instead of a constant offset — filmic, and
-//           bounded so nothing slides off forever)
+// NeutralTint.dctl — tint as an OFFSET IN LOG STATE (printer lights)
+// v3 (2026-07-21): the working image is log-encoded, so this node
+// adds a plain per-channel offset — the classic log/printer-light
+// move that rides the tone curve and breathes with exposure. The
+// offset direction is the reuleaux hue axis mapped into RGB and is
+// ZERO-MEAN across channels: a neutral keeps its mean level and
+// takes the cast.
+//   Hue     which way the cast leans (0 red, 60 yellow, 240 blue —
+//           same axis as every other tool)
+//   Amount  0..1 — 0 nothing, 1 a lot (smoothstep-eased)
 //   Pivot   -1..+1 FOCUS — leftmost concentrates the tint on the
 //           darkest section of the image, rightmost on the brightest,
 //           0 = midtones (smooth bump, no dead zones)
@@ -135,26 +140,30 @@ __DEVICE__ float bump_window(float x, float center, float soft) {
 
 __DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, float p_R, float p_G, float p_B)
 {
-    const float TINT_MAX_SAT = 0.35f;
+    const float TINT_LOG_SCALE = 0.15f;
     const float PIVOT_SPAN = 0.34f;
-    float3 rl = rgb_to_reuleaux(make_float3(p_R, p_G, p_B));
+    float3 rgb = make_float3(p_R, p_G, p_B);
+    float3 rl = rgb_to_reuleaux(rgb);   // masks only
     float center = MID_GREY + pivot * PIVOT_SPAN;
     float w = bump_window(rl.z, center, falloff * STOP);
     float m = w * modulation(rl.z, rl.y, 0.0f, 0.0f, chroma);
 
     float a = _clampf(amount, 0.0f, 1.0f);
     float eased = a * a * (3.0f - 2.0f * a);
-    float t = eased * m;
+    float t = eased * TINT_LOG_SCALE * m;
 
-    float ang0 = rl.x * 2.0f * PI_LOCAL;
-    float c1 = rl.y * _cosf(ang0);
-    float c2 = rl.y * _sinf(ang0);
-    float angT = hue / 360.0f * 2.0f * PI_LOCAL;
-    c1 += t * (TINT_MAX_SAT * _cosf(angT) - c1);
-    c2 += t * (TINT_MAX_SAT * _sinf(angT) - c2);
+    // zero-mean unit RGB direction of the reuleaux hue (R+G+B = 0)
+    float theta = hue / 360.0f * 2.0f * PI_LOCAL;
+    float cth = _cosf(theta);
+    float sth = _sinf(theta);
+    float rt2 = _sqrtf(2.0f);
+    float rt6 = _sqrtf(6.0f);
+    float rt3 = _sqrtf(3.0f);
+    float3 d = make_float3(rt2 * cth,
+                           (-rt2 * cth + rt6 * sth) * 0.5f,
+                           (-rt2 * cth - rt6 * sth) * 0.5f);
 
-    float sat2 = _sqrtf(c1 * c1 + c2 * c2);
-    float hue2 = _atan2f(c2, c1) / (2.0f * PI_LOCAL);
-    hue2 -= _floorf(hue2);
-    return reuleaux_to_rgb(make_float3(hue2, sat2, rl.z));
+    return make_float3(rgb.x + t * d.x / rt3,
+                       rgb.y + t * d.y / rt3,
+                       rgb.z + t * d.z / rt3);
 }

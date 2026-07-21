@@ -11,10 +11,11 @@ Usage (from the colorchecker/ directory):
   python3 -m tools.lut_match --lut somelook.cube --backend torch \
       --source-csv all_EV0.csv --out fitted.cube
 
-Default chain is the "Chromogen match" mode: Lift Gamma Gain prep
-(strongly anchored at identity — it only moves if it makes the fit a
-LOT easier) followed by the Chromogen look chain. --preset picks any
-chain preset; --list-presets shows them.
+Default chain is the plain Chromogen chain WITHOUT Lift Gamma Gain
+(Marc, 2026-07-21: the LGG soaked up the global error as a green
+white-balance cast on real footage — "remove lgg for now from the
+equation"). The LGG-prep preset still exists via --preset.
+--list-presets shows all chains.
 """
 
 import argparse
@@ -24,7 +25,7 @@ from app.core.lut_match import solve_lut_match
 from app.core.match import load_patch_csv, write_cube
 from app.core.stages import CHAIN_PRESETS, STAGE_POOL
 
-DEFAULT_PRESET = "Chromogen match (LGG prep → Chromogen chain)"
+DEFAULT_PRESET = "Chromogen broad (Sat → Crosstalk → Contrast → Bleach → Tint)"
 
 
 def main() -> None:
@@ -119,7 +120,13 @@ def main() -> None:
                                         write_graph)
 
         drx = DrxTemplate(args.drx_template)
-        stage_names = {s.name.replace(" ", "") for s in result.model.stages}
+        # ALL registered tool types, not just the fitted chain's: an
+        # unfitted tool node in the template (e.g. LGG since it left
+        # the default chain) stays in the grade, reset to identity,
+        # instead of being dropped as an unknown utility node
+        all_stages = {name: STAGE_POOL[name]() for name in STAGE_POOL}
+        stage_names = {s.name.replace(" ", "")
+                       for s in all_stages.values()}
         graphs = graph_bodies(drx)
         candidates = {
             bi: sum(1 for n in g.nodes if n.dctl_name in stage_names)
@@ -140,7 +147,7 @@ def main() -> None:
         ]
         identity_lookup = {
             stage.name.replace(" ", ""): list(stage.identity())
-            for stage in result.model.stages
+            for stage in all_stages.values()
         }
         reports = rebuild_as_chain(graph, want, stage_names,
                                    identity_lookup)

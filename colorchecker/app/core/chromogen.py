@@ -363,30 +363,31 @@ class HighlightBleachStage(Stage):
 
 
 class NeutralTintStage(Stage):
-    """Neutral Tint, reworked 2026-07-20 (Marc's feedback on v1):
+    """Neutral Tint v3 (2026-07-21): tint as an OFFSET IN LOG STATE —
+    printer-light behavior. Marc on v2: "still not very organic...
+    I always liked how log state offset behaves".
 
-    - Amount is UNSIGNED 0..1: 0 = nothing, 1 = a lot.
-    - Pivot is a FOCUS slider -1..+1 (not stops, not meaningful units):
-      leftmost concentrates the tint on the darkest section of the
-      image, rightmost on the brightest, 0 = midtones. The luma weight
-      is a smooth cos^2 bump centered there (v1's one-sided ramp had a
-      dead zone: pivot -6 with +amount masked nothing).
-    - Filmic response instead of v1's constant chroma offset (Marc:
-      "looks like linear gain, not natural"): chroma CONVERGES toward
-      a dye anchor (TINT_MAX_SAT at the picked hue) — lerp, so the
-      tint saturates like a dye bath instead of shifting everything by
-      a fixed amount, and blacks/whites outside the focus window stay
-      clean. Amount is eased (smoothstep) for fine control low.
-    Val untouched by construction (contrast safe). Chroma gate
-    unchanged, defaults protective (only-neutrals)."""
+    The working values ARE log-encoded (LogC3), so a plain RGB offset
+    here is exactly the classic log offset: a per-channel exposure
+    scale in linear light that rides the tone curve and breathes with
+    exposure — nothing sits "on top" of the image. The offset
+    direction is the reuleaux hue axis mapped into RGB (so the Hue
+    slider agrees with every other tool) and is ZERO-MEAN across
+    channels: a neutral keeps its mean level and takes the cast.
+    Unlike v1/v2, val is NOT preserved per-channel — that is the
+    point (cf. Thatcher's LGGO offset, reference/).
+
+    Kept from v2: Amount 0..1 (smoothstep-eased), Pivot -1..+1 focus
+    bump over the tonal range (leftmost = darkest section), Falloff
+    in stops, protective Chroma gate."""
 
     name = "Neutral Tint"
     param_names = ["Hue", "Amount", "Pivot", "Falloff", "Chroma"]
 
-    # dye anchor: full amount at the window center pulls chroma all
-    # the way to this reuleaux sat (v1's full-throw offset was 0.25
-    # and read "strong but usable" — this is deliberately "a lot")
-    TINT_MAX_SAT = 0.35
+    # log-units offset at full amount along the unit hue direction:
+    # 0.15 puts ~2.5 stops between the pushed and opposed channels at
+    # full throw on a focused neutral — deliberately "a lot"
+    TINT_LOG_SCALE = 0.15
     # pivot -1..+1 sweeps the window center MID_GREY +- this span:
     # leftmost ~0.05 (deepest LogC3 shadows), rightmost ~0.73 (near
     # clip). Slider units are intentionally not stops (Marc).
@@ -400,10 +401,25 @@ class NeutralTintStage(Stage):
         hi = [360.0, 1.0, 1.0, 16.0, 1.0]
         return np.asarray(lo), np.asarray(hi)
 
+    @staticmethod
+    def _hue_dir(hue_deg):
+        """Unit-length, zero-mean RGB direction of a reuleaux hue:
+        the inverse of the opponent projection in rgb_to_reuleaux
+        restricted to the chroma plane (R+G+B = 0). |d| = 1, and
+        hue 0 = red, 60 = yellow, 240 = blue, matching every other
+        tool's Hue slider."""
+        theta = np.deg2rad(hue_deg)
+        c, s = np.cos(theta), np.sin(theta)
+        rt2, rt6 = np.sqrt(2.0), np.sqrt(6.0)
+        d = np.array([rt2 * c,
+                      (-rt2 * c + rt6 * s) / 2.0,
+                      (-rt2 * c - rt6 * s) / 2.0])
+        return d / np.sqrt(3.0)
+
     def apply(self, x, params):
         hue_deg, amount, pivot, falloff, chroma = params
-        reuleaux = rgb_to_reuleaux(x)
-        hue, sat, val = reuleaux[..., 0], reuleaux[..., 1], reuleaux[..., 2]
+        reuleaux = rgb_to_reuleaux(x)          # masks only
+        sat, val = reuleaux[..., 1], reuleaux[..., 2]
 
         center = MID_GREY + pivot * self.PIVOT_SPAN
         w = plateau_window(val, center, 0.0, falloff * STOP)
@@ -411,13 +427,8 @@ class NeutralTintStage(Stage):
 
         a = np.clip(amount, 0.0, 1.0)
         eased = a * a * (3.0 - 2.0 * a)          # smoothstep ease-in
-        t = eased * m                             # 0..1 convergence
-        d1, d2 = _axis_dir(hue_deg / 360.0)
-        c1, c2 = to_chroma_vec(hue, sat)
-        c1 = c1 + t * (self.TINT_MAX_SAT * d1 - c1)
-        c2 = c2 + t * (self.TINT_MAX_SAT * d2 - c2)
-        hue2, sat2 = from_chroma_vec(c1, c2)
-        return reuleaux_to_rgb(np.stack([hue2, sat2, val], axis=-1))
+        t = eased * self.TINT_LOG_SCALE * m
+        return x + t[..., None] * self._hue_dir(hue_deg)
 
     def label(self, params):
         hue_deg, amount, pivot, falloff, chroma = params

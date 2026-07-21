@@ -140,9 +140,10 @@ def test_lut_match_to_drx_end_to_end(tmp_path, monkeypatch, capsys):
 
 def test_lut_match_full_template_maps_every_stage(tmp_path, monkeypatch,
                                                   capsys):
-    """With Marc's full-stack template the default Chromogen-match
-    chain (LGG + 5 Chromogen tools incl. ContrastBoost) maps with
-    ZERO unmatched stages."""
+    """With Marc's full-stack template the default Chromogen chain
+    (5 Chromogen tools incl. ContrastBoost — NO LGG since 2026-07-21,
+    Marc's call) maps with ZERO unmatched stages; the template's LGG
+    node is kept in the chain but reset to identity."""
     import sys
 
     from app.core.drx import DrxTemplate
@@ -159,9 +160,12 @@ def test_lut_match_full_template_maps_every_stage(tmp_path, monkeypatch,
     cli.main()
     text = capsys.readouterr().out
     assert "NO NODE OF THIS TYPE IN TEMPLATE" not in text
-    for node in ("LiftGammaGain", "ColourSaturation", "ColourCrosstalk",
+    for node in ("ColourSaturation", "ColourCrosstalk",
                  "ContrastBoost", "HighlightBleach", "NeutralTint"):
         assert f"drx node {node}" in text
+    # LGG is no longer fitted — it must come through as identity-reset
+    assert "drx node LiftGammaGain" in text
+    assert "reset to identity" in text
 
     fitted = DrxTemplate(out_drx)
     cb = next(n for n in fitted.nodes if n.dctl_name == "ContrastBoost")

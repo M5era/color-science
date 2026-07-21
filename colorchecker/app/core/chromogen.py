@@ -329,8 +329,8 @@ class ContrastCurveStage(Stage):
                          0.0, 1.0, 0.0, 0.0, 0.0])
 
     def bounds(self):
-        lo = [0.2, 0.5, 0.5, -1.0, -1.0, -1.0, 0.0, 0.0, 0.0, -3.0, 0.0]
-        hi = [2.0, 1.5, 1.5,  1.0,  1.0,  1.0, 1.0, 1.0, 2.0,  3.0, 1.0]
+        lo = [0.2, 0.4, 0.4, -1.0, -1.0, -1.0, 0.0, 0.0, 0.0, -3.0, 0.0]
+        hi = [2.0, 1.6, 1.6,  1.0,  1.0,  1.0, 1.0, 1.0, 2.0,  3.0, 1.0]
         return np.asarray(lo), np.asarray(hi)
 
     # ---- the scalar tone pipeline, run on val or on each RGB channel --

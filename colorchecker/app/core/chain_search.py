@@ -314,6 +314,12 @@ def search_chain(
     log = []
     cur = src
 
+    # baseline: the error with NO nodes at all (source vs target)
+    err0 = _fit_err(fwd(src), fit_target)
+    log.append((0, "(no nodes / source)", err0))
+    if verbose:
+        print(f"  before any nodes: fit error -> {err0:.5f}")
+
     # ---- grey-scale-locked tone: fit ONE Contrast Curve on the
     # neutral samples only and freeze it as node 1
     if neutral_tone:

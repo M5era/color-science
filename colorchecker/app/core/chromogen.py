@@ -329,8 +329,13 @@ class ContrastCurveStage(Stage):
                          0.0, 1.0, 0.0, 0.0, 0.0])
 
     def bounds(self):
-        lo = [0.2, 0.4, 0.4, -1.0, -1.0, -1.0, 0.0, 0.0, 0.0, -3.0, 0.0]
-        hi = [2.0, 1.6, 1.6,  1.0,  1.0,  1.0, 1.0, 1.0, 2.0,  3.0, 1.0]
+        # White/Black points, Mid Push and the rolloff knees widened
+        # 2026-07-21 — the genesis neutral wanted brighter whites, a
+        # stronger mid push and a sharper toe than the first ranges gave
+        # (fit pinned at 1.6/±1). Rolloff floor kept > -1.5 so the knee
+        # exponent n = 3.5 - 2.5*rolloff stays positive.
+        lo = [0.2, 0.3, 0.3, -2.0, -1.5, -1.5, 0.0, 0.0, 0.0, -3.0, 0.0]
+        hi = [2.0, 1.8, 1.8,  2.0,  1.2,  1.2, 1.0, 1.0, 2.0,  3.0, 1.0]
         return np.asarray(lo), np.asarray(hi)
 
     # ---- the scalar tone pipeline, run on val or on each RGB channel --

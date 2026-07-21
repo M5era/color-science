@@ -32,7 +32,11 @@ from scipy.optimize import least_squares
 from app.core.chromogen import CHROMOGEN_STAGES
 from app.core.lut import CubeLUT
 from app.core.match import invert_lut_at
-from app.core.parametric import ParametricResult, solve_parametric
+from app.core.parametric import (
+    ParametricResult,
+    solve_parametric,
+    validate_backend,
+)
 from app.core.stages import Stage
 
 # hue seeds for auditioning stages that have a "Hue" slider (degrees)
@@ -130,6 +134,9 @@ def search_chain(
     repetition) from `pool`, then polish + report via solve_parametric.
     `min_gain` is the relative fit-error improvement a new node must
     deliver to be accepted (0.005 = 0.5%)."""
+    # fail BEFORE the expensive search, not at the final polish (a
+    # 20-node run once died at the very end on a missing torch)
+    validate_backend(backend)
     if pool is None:
         pool = default_pool()
     source = np.asarray(source, dtype=np.float64)

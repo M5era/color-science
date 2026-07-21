@@ -279,10 +279,13 @@ class ContrastBoostStage(Stage):
         return np.array([0.0, 0.0, 6.0, 0.5])
 
     def bounds(self):
-        # Boost starts at 0 (the Chromogen panel has its knob parked at
-        # the LEFT end — no negative/flattening range; use LGG or the
-        # curves for that)
-        return (np.asarray([0.0, -4.0, 0.5, 0.0]),
+        # The Chromogen panel parks the knob at 0 (no negative half),
+        # but the solver NEEDS the flattening range: with no LGG in the
+        # search pool this is the only neutral-axis tone tool, and the
+        # genesis run proved a boost clamped at 0 simply never gets
+        # picked (Marc, 2026-07-21). Baselight's Extended Ranges goes
+        # beyond the panel too.
+        return (np.asarray([-0.9, -4.0, 0.5, 0.0]),
                 np.asarray([2.0, 4.0, 14.0, 1.0]))
 
     def _curve(self, v, boost, grey_abs, highlight_abs):

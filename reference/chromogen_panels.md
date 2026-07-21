@@ -62,7 +62,7 @@ ganged move.
 ### Contrast Boost (screenshot 2026-07-21)
 | Slider | Default | Knob | Bar | Ours |
 |---|---|---|---|---|
-| Contrast Boost | 0.00 | FAR LEFT | grey->white | 0, range now 0..2 (dropped the −0.9 flattening range — panel has none) |
+| Contrast Boost | 0.00 | FAR LEFT | grey->white | 0, range −0.9..2 (panel shows no negative half, but the flattening range is kept: it's the only neutral-axis tone tool in the search pool, and Baselight's Extended Ranges goes beyond the panel anyway) |
 | Grey Pivot | 0.00 | centre | stepped greys | 0 stops, −4..4 ✓ |
 | Highlight Pivot | 6.00 | ~55-60% | stepped greys, bright | 6 stops, range 0.5..14 (our 6 sits at 41% — Baselight's range is likely different, maybe −4..14 or 0..10; value matches, range unresolved) |
 | Chroma | 0.50 | centre | greys->colours | 0.5, 0..1 ✓ (val-only vs per-RGB mix) |

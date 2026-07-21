@@ -61,6 +61,22 @@ def _mean_dist(a, b):
     return float(np.linalg.norm(a - b, axis=1).mean())
 
 
+def validate_backend(backend: str) -> None:
+    """Raise early if the requested backend cannot run — callers doing
+    expensive work first (the chain search) must fail BEFORE it."""
+    if backend not in ("scipy", "torch"):
+        raise ValueError(f"Unknown backend {backend!r} — use 'scipy' or 'torch'")
+    if backend == "torch":
+        from app.core.backprop import torch_available
+
+        if not torch_available():
+            raise RuntimeError(
+                "backend='torch' needs PyTorch — install it with "
+                "python3 -m pip install torch (optional dependency), "
+                "or use backend='scipy'"
+            )
+
+
 def solve_parametric(
     source: np.ndarray,
     target: np.ndarray,
@@ -82,17 +98,7 @@ def solve_parametric(
     it has already roughed in. The stagewise sweeps still run (each
     least_squares starts from the warm values, so they can only keep or
     improve the fit)."""
-    if backend not in ("scipy", "torch"):
-        raise ValueError(f"Unknown backend {backend!r} — use 'scipy' or 'torch'")
-    if backend == "torch":
-        from app.core.backprop import torch_available
-
-        if not torch_available():
-            raise RuntimeError(
-                "backend='torch' needs PyTorch — install it with "
-                "python3 -m pip install torch (optional dependency), "
-                "or use backend='scipy'"
-            )
+    validate_backend(backend)
     source = np.asarray(source, dtype=np.float64)
     target = np.asarray(target, dtype=np.float64)
     if source.shape != target.shape or source.ndim != 2 or source.shape[1] != 3:

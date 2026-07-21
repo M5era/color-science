@@ -132,9 +132,11 @@ emissive overlays, CSV export, project save/load.
   sat domain.
 - **Panel calibration source:** `reference/chromogen_panels.md` (repo
   root) — full transcription of Marc's Baselight panel screenshots
-  with per-slider defaults/ranges/bar graphics, the pivot=stops
-  evidence, and the open-questions list (missing: the three other
-  Sector panels, hue-slider mapping, tooltip texts). 2026-07-21
+  (ALL 10 tools covered incl. the four Sector panels) with per-slider
+  defaults/ranges/bar graphics, the pivot=stops evidence, Marc's
+  answers (Baselight hue 0 = yellow, ours stays red-at-0; Extended
+  Ranges ~doubles effect; keep our Chroma sign), and the remaining
+  open questions (tooltip texts "later", falloff units). 2026-07-21
   recalibration from it: Colour Saturation R/G+Y/B range 0..2
   (identity centred), Contrast Boost floor 0.0 (no negative), Bleach
   falloff default 0.5 stops, Tint falloff default 1.0 stops (falloff
@@ -258,7 +260,8 @@ port module must carry the license; fine for private use).
 2. Marc's real-footage validation: Fine-zone DCTL pixel A/B, the
    fitted genesis .drx on footage, stops-calibrated pivots feel.
 3. Order-search option for chain order (roadmap, soft preference).
-4. Sector Saturation linear range 0-2: Marc may want it tighter.
+4. ~~Sector Saturation linear range 0-2~~ RESOLVED 2026-07-21: the
+   Baselight panel shows 1.00 dead-centre of 0..2 — our range is right.
 5. Tone pre-curve option for LUT matching (bridging different
    renderings — roadmap).
 6. drx node LABEL patching (variable-length strings -> needs generic

@@ -112,38 +112,44 @@ All three mask sliders live in the saturation domain (Marc). All four
 ranges inferred 0..1 from knob positions — the one panel where every
 value/percentage lines up self-consistently.
 
-### Sector Skew (screenshot 2026-07-21)
-| Slider | Default | Knob | Bar | Ours |
-|---|---|---|---|---|
-| Hue | 0.0 | CENTRE | full spectrum | ours 0..360°, 0 = red at left end — Baselight centred/signed, mapping unknown |
-| Skew | 0.00 | centre | green->red | 0, ours ±60° ✓ identity (their range/unit unknown) |
-| Falloff | 0.500 | centre | grey gradient | ours 60° of hue, range 5..180 — Baselight's 0.500 unit in the HUE domain unknown (fraction of a sector? 0..1 normalized?) |
-| Zone/Pivot/Chroma | 0/0/0 | centre | standard | ✓ all match |
+### The four Sector tools (screenshots 2026-07-21, second batch)
 
-Assumed representative for Sector Brightness / Saturation / Squash
-(no screenshots yet).
+All four panels share the layout Hue / <amount> / Falloff +
+Modulation, and every default matches our stages — no code changes
+were needed from this batch.
+
+| Slider | Baselight default | Knob | Ours |
+|---|---|---|---|
+| Hue (all four) | 0.0 | CENTRE of spectrum bar | 0..360°, 0 = red. Baselight's centred 0.0 = **yellow** in their representation (Marc) — deliberately NOT copied, ours stays reuleaux-red-at-0 ("not important, keep as is") |
+| Skew | 0.00 | centre | 0 in ±60° ✓ (bar: the two skew directions, green<->red at yellow) |
+| Brightness | 0.00 | centre | 0 in ±3 ✓ (bar: dark -> bright orange) |
+| Saturation | 1.00 | centre | 1.0 in 0..2 ✓ — confirms our linear 0..2 range with the identity dead-centre (bar: grey -> saturated orange) |
+| Squash | 0.00 | centre | 0 in ±1 ✓ (bar: spread <-> squash, green<->orange) |
+| Falloff (all four) | 0.500 / 0.50 | centre | ours 60° of hue, range 5..180. Baselight's hue-domain falloff is normalized (0..1, mid default); unit unresolved — if 0..1 maps to 0..120° their default equals our 60°, but that's a guess |
+| Zone/Pivot/Chroma | 0/0/0 | centre | ✓ all match |
+
+(The Sector Saturation screenshot came from Marc's grade with the node
+named "Dark Red Boost", sliders at defaults.)
 
 ---
 
+## Answered (Marc, 2026-07-21)
+
+- **Hue 0.0 in Baselight = yellow**, sliders signed around it. Not
+  important — our 0..360°/red-at-0 convention stays.
+- **Extended Ranges**: the sliders stay the same, the effect roughly
+  DOUBLES. So our wider-than-panel solver bounds (e.g. pivot stops,
+  falloff stops up to 16) are the moral equivalent — fine as-is.
+- **Chroma bar direction** (Baselight: left = saturated; ours: right =
+  saturated): keep ours.
+
 ## Open questions / missing screenshots
 
-1. **Sector Brightness, Sector Saturation, Sector Squash panels** —
-   no screenshots at all yet. Needed: their amount defaults + ranges
-   (especially Squash, and whether Saturation is centred at 1.0).
-2. **Hue slider mapping** — Baselight hue sliders are centred at 0.0
-   over a spectrum bar. What colour is 0.0, and is the range ±180°?
-   Easiest evidence: a screenshot with Hue dragged to a known colour
-   (or the "?" tooltip text).
-3. **Falloff units in the hue domain** (Sector tools' 0.500) and
-   confirmation that luma-ramp falloffs are stops (Bleach 0.5, Tint
-   1.0 — currently adopted as stops on the strength of the pivot-bar
-   evidence).
-4. **Extended Ranges** — what each slider's extended min/max becomes.
-5. **The "?" tooltips** — every slider has one; their text would
-   settle units definitively. Screenshots of a few tooltips (Pivot,
-   Falloff, Chroma) would be gold.
-6. **Contrast Boost Highlight Pivot range** (its 6.00 sits at ~55-60%
+1. **The "?" tooltips** — every slider has one; their text would
+   settle units definitively (Pivot, Falloff, Chroma). Marc: "later".
+2. **Falloff units**: hue-domain (Sector tools' 0.500 normalized —
+   what width in degrees?) and confirmation that luma-ramp falloffs
+   are stops (Bleach 0.5, Tint 1.0 — currently adopted as stops on
+   the strength of the pivot-bar evidence).
+3. **Contrast Boost Highlight Pivot range** (its 6.00 sits at ~55-60%
    of the bar; ours sits at 41%).
-7. Baselight Chroma bar direction is colours-left/grey-right (left =
-   saturated); our signed Chroma is right = saturated (Marc's chosen
-   convention) — flag if this should be flipped to match Baselight.

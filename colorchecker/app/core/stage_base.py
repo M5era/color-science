@@ -55,6 +55,7 @@ _WORDS = {
     "colors": "Col", "zone": "Zn", "shift": "Shf", "prep": "Prep",
     "dark": "Dk", "bright": "Br", "saturation": "Sat", "sector": "Sec",
     "contrast": "Con", "crosstalk": "XT", "tint": "Tnt",
+    "reduce": "Rdc", "brilliance": "Brill",
     "red": "Red", "reds": "Red", "orange": "Org", "oranges": "Org",
     "yellow": "Yel", "yellows": "Yel", "lime": "Lim", "limes": "Lim",
     "green": "Grn", "greens": "Grn", "teal": "Teal", "teals": "Teal",

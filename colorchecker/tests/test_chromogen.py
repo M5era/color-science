@@ -15,6 +15,7 @@ from app.core.chromogen import (
     CHROMOGEN_STAGES,
     MID_GREY,
     STOP,
+    BrillianceReductionStage,
     ColourCrosstalkStage,
     ColourSaturationStage,
     ContrastBoostStage,
@@ -164,21 +165,52 @@ def test_highlight_bleach_unganged_spares_a_sector():
 
 # -------------------------------------------------------- neutral tint
 
-def test_neutral_tint_signed_amount_picks_side_and_keeps_val():
+def test_neutral_tint_signed_amount_picks_side_in_log():
+    """v3: sum-preserving RGB offset in log; + = highlights, - = shadows."""
     stage = NeutralTintStage()
     highs = np.array([[0.9, 0.9, 0.9]])
     lows = np.array([[0.12, 0.12, 0.12]])
     warm_high = _with(stage, Hue=40.0, Amount=0.3)
     for x in (highs, lows):
         out = stage.apply(x, warm_high)
-        # val (contrast) untouched by construction
-        np.testing.assert_allclose(out.max(axis=1), x.max(axis=1), atol=1e-9)
-    assert _sat_of(stage.apply(highs, warm_high))[0] > 0.05   # tinted
-    assert _sat_of(stage.apply(lows, warm_high))[0] < 0.02    # spared
+        # channel mean (log exposure) untouched by construction
+        np.testing.assert_allclose(out.mean(axis=1), x.mean(axis=1),
+                                   atol=1e-12)
+    assert _sat_of(stage.apply(highs, warm_high))[0] > 0.015  # tinted
+    assert _sat_of(stage.apply(lows, warm_high))[0] < 1e-6    # spared
 
     cold_low = _with(stage, Hue=220.0, Amount=-0.3)
     assert _sat_of(stage.apply(lows, cold_low))[0] > 0.05
-    assert _sat_of(stage.apply(highs, cold_low))[0] < 0.02
+    assert _sat_of(stage.apply(highs, cold_low))[0] < 1e-6
+
+
+def test_neutral_tint_offset_direction_matches_picked_hue():
+    """The RGB offset direction reads back as the picked reuleaux hue."""
+    grey = np.array([[0.391, 0.391, 0.391]])
+    stage = NeutralTintStage()
+    for hue_deg in (0.0, 60.0, 137.0, 240.0, 313.0):
+        out = stage.apply(grey, _with(stage, Hue=hue_deg, Amount=0.5))
+        got = rgb_to_reuleaux(out)[0, 0] * 360.0
+        assert abs((got - hue_deg + 180.0) % 360.0 - 180.0) < 1e-6, hue_deg
+
+
+def test_neutral_tint_chroma_is_baselight_sat_mask():
+    """Chroma slider: 1 = everything, 2 = only neutrals, 0 = only
+    saturated colors."""
+    stage = NeutralTintStage()
+    grey = np.array([[0.12, 0.12, 0.12]])
+    saturated = np.array([[0.3, 0.06, 0.05]])
+
+    neutrals_only = _with(stage, Hue=220.0, Amount=-0.5, Chroma=2.0)
+    np.testing.assert_allclose(stage.apply(saturated, neutrals_only),
+                               saturated, atol=1e-9)
+    assert np.abs(stage.apply(grey, neutrals_only) - grey).max() > 0.01
+
+    saturated_only = _with(stage, Hue=220.0, Amount=-0.5, Chroma=0.0)
+    np.testing.assert_allclose(stage.apply(grey, saturated_only),
+                               grey, atol=1e-9)
+    assert np.abs(stage.apply(saturated, saturated_only)
+                  - saturated).max() > 0.01
 
 
 # ---------------------------------------------------- colour crosstalk
@@ -194,6 +226,68 @@ def test_crosstalk_luminance_weighted_and_neutral_safe():
     assert move_bright > 5 * max(move_dark, 1e-9)  # stronger when brighter
     grays = np.array([[0.8, 0.8, 0.8], [0.2, 0.2, 0.2]])
     np.testing.assert_allclose(stage.apply(grays, p), grays, atol=1e-9)
+
+
+def test_crosstalk_full_zone_still_has_an_effect():
+    """At full Zone throw the zone mask takes over the inherent
+    brightness weighting — shadow-zoned crosstalk must still visibly
+    move dark saturated colors (it used to do ~nothing there)."""
+    stage = ColourCrosstalkStage()
+
+    def p(zone):
+        return _with(stage, **{"R -> Y/B": 0.7, "Y -> R/G": 0.7,
+                               "G -> Y/B": 0.7, "B -> R/G": 0.7,
+                               "Zone": zone})
+
+    dark_red = np.array([[0.18, 0.07, 0.06]])
+    bright = np.array([[0.55, 0.35, 0.30]])
+    move_everywhere = np.abs(stage.apply(dark_red, p(0.0)) - dark_red).max()
+    move_shadow_zone = np.abs(stage.apply(dark_red, p(-1.0)) - dark_red).max()
+    assert move_shadow_zone > 3.0 * move_everywhere
+    # and the zone still SELECTS: bright pixels barely move at zone -1
+    move_bright_at_lo = np.abs(stage.apply(bright, p(-1.0)) - bright).max()
+    assert move_bright_at_lo < move_shadow_zone / 3.0
+    # highlight zone keeps working too
+    move_bright_at_hi = np.abs(stage.apply(bright, p(1.0)) - bright).max()
+    assert move_bright_at_hi > np.abs(stage.apply(bright, p(0.0)) - bright).max() * 0.9
+
+
+# ------------------------------------------------- brilliance reduction
+
+def test_brilliance_reduction_darkens_by_saturation():
+    stage = BrillianceReductionStage()
+    p = _with(stage, Amount=0.3)
+    saturated = np.array([[0.8, 0.25, 0.2]])
+    mild = np.array([[0.5, 0.42, 0.4]])
+    grey = np.array([[0.5, 0.5, 0.5]])
+
+    out_sat = stage.apply(saturated, p)
+    assert out_sat.max() < saturated.max() * 0.8          # darkened
+    # chromaticity untouched: a pure luminance scale per pixel
+    ratio = out_sat / saturated
+    np.testing.assert_allclose(ratio, np.full_like(ratio, ratio[0, 0]),
+                               atol=1e-9)
+    # mild colors sit below the default sat pivot: spared
+    np.testing.assert_allclose(stage.apply(mild, p), mild, atol=1e-9)
+    np.testing.assert_allclose(stage.apply(grey, p), grey, atol=1e-9)
+
+
+def test_brilliance_reduction_mask_sliders():
+    stage = BrillianceReductionStage()
+    saturated = np.array([[0.8, 0.25, 0.2]])
+    # chroma 0 kills the mask -> identity even at full reduction
+    np.testing.assert_allclose(
+        stage.apply(saturated, _with(stage, Amount=0.0, Chroma=0.0)),
+        saturated, atol=1e-9)
+    # raising the pivot above the color's sat spares it
+    np.testing.assert_allclose(
+        stage.apply(saturated, _with(stage, Amount=0.0, Pivot=1.0,
+                                     Falloff=0.2)),
+        saturated, atol=1e-9)
+    # lower pivot bites harder than the default
+    lo = stage.apply(saturated, _with(stage, Amount=0.3, Pivot=0.1))
+    hi = stage.apply(saturated, _with(stage, Amount=0.3, Pivot=0.6))
+    assert lo.max() < hi.max()
 
 
 # ------------------------------------------------------- sector family

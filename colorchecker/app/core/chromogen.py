@@ -12,6 +12,10 @@ sliders:
            - = only neutrals/desaturated (Marc's intuitive convention)
 Falloff appears as a fourth slider only where Chromogen exposes one
 (Highlight Bleach, Neutral Tint ramps; the sector tools' hue falloff).
+Two tools deviate from the standard block, copied from Baselight's own
+panels: Neutral Tint's Chroma is 0..2 with 1 = everything (2 = only
+neutrals, 0 = only saturated), and Brilliance Reduction's Chroma/
+Pivot/Falloff all live in the saturation domain.
 
 Shared geometric primitive: the OPPONENT view of the reuleaux chroma
 plane. Yellow (60 deg) and Blue (240 deg) are exactly antipodal in
@@ -196,6 +200,12 @@ class ColourCrosstalkStage(Stage):
     param_names = ["R -> Y/B", "Y -> R/G", "G -> Y/B", "B -> R/G",
                    "Zone", "Pivot", "Chroma"]
 
+    # The inherent brightness weighting yields to the Zone mask as
+    # |Zone| rises: at full zone the luma selection comes ONLY from the
+    # mask. Without this, zoning to the shadows multiplied the (tiny)
+    # shadow val into the effect exactly where the mask pointed and the
+    # tool visibly did nothing at full throw (Marc, 2026-07-21).
+
     # sector index -> displacement axis (R, G along Y/B; Y, B along R/G)
     _AXES = (YB_AXIS_TURNS, RG_AXIS_TURNS, YB_AXIS_TURNS, RG_AXIS_TURNS)
 
@@ -213,11 +223,12 @@ class ColourCrosstalkStage(Stage):
         hue, sat, val = reuleaux[..., 0], reuleaux[..., 1], reuleaux[..., 2]
 
         m = modulation(val, sat, zone, pivot, chroma)
+        inherent = (1.0 - abs(zone)) * val + abs(zone)
         c1, c2 = to_chroma_vec(hue, sat)
         for i in range(4):
             one_hot = np.zeros(4)
             one_hot[i] = 1.0
-            w = rygb_interp(hue, one_hot) * sat * val * m * amounts[i]
+            w = rygb_interp(hue, one_hot) * sat * inherent * m * amounts[i]
             d1, d2 = _axis_dir(self._AXES[i])
             c1 = c1 + w * d1
             c2 = c2 + w * d2
@@ -363,45 +374,66 @@ class HighlightBleachStage(Stage):
 
 
 class NeutralTintStage(Stage):
-    """Chromogen Neutral Tint: tint toward a picked hue with a SIGNED
-    amount (+ = highlights, - = shadows) at constant val — contrast
-    untouched by construction. Pivot/Falloff are in stops; the
-    Chroma gate defaults protective (only-neutrals) so saturated colors
-    aren't pushed toward a gamut edge. Two instances = warm highs +
-    cold lows."""
+    """Neutral Tint v3 — Baselight-style, applied in LOG RGB (Marc,
+    2026-07-21): a SUM-PRESERVING RGB offset toward the picked hue,
+    NOT a reuleaux chroma push. The offset direction is the picked
+    hue's chroma-plane direction mapped back to RGB (zero-sum, so the
+    channel mean — log exposure — is untouched; being a fixed log
+    offset it tints shadows harder than highlights, printer-light
+    style).
+
+    Amount is SIGNED with 0 (identity) in the middle: right tints the
+    highlights, left the shadows. Pivot (stops from mid-grey, 0 = mid
+    grey) and Falloff (ramp width in stops) shape the luma mask — drop
+    the pivot with Amount right to tint mids + highs. Chroma is the
+    Baselight sat mask: 1 = everything (default), down to 0 = only
+    saturated colors, up to 2 = only neutrals. (NOTE: this differs
+    from the signed 0-centred Chroma of the other tools — copied from
+    Baselight's Neutral Tint panel deliberately.)"""
 
     name = "Neutral Tint"
     param_names = ["Hue", "Amount", "Pivot", "Falloff", "Chroma"]
 
-    # slider +-1.0 maps to +-TINT_SCALE in reuleaux sat units — a raw
-    # sat push of 0.5 was WAY too aggressive (Marc); mid-slider should
-    # be a subtle tint, full throw strong but usable
-    TINT_SCALE = 0.25
+    # slider +-1.0 maps to an RGB offset of TINT_SCALE (L2, code
+    # values): full throw on deep shadows separates channels by up to
+    # ~1.6 stops — strong but usable; mid-slider is a subtle tint
+    TINT_SCALE = 0.15
 
     def identity(self):
-        return np.array([0.0, 0.0, 0.0, 4.0, -0.5])
+        return np.array([0.0, 0.0, 0.0, 4.0, 1.0])
 
     def bounds(self):
-        lo = [0.0, -1.0, -6.0, 0.5, -1.0]
-        hi = [360.0, 1.0, 8.0, 16.0, 1.0]
+        lo = [0.0, -1.0, -6.0, 0.5, 0.0]
+        hi = [360.0, 1.0, 8.0, 16.0, 2.0]
         return np.asarray(lo), np.asarray(hi)
+
+    @staticmethod
+    def _tint_direction(hue_deg):
+        """Unit (L2) zero-sum RGB direction whose reuleaux hue is
+        hue_deg — the inverse of the rgb->rot rotation restricted to
+        the chroma plane; the un-normalized vector has norm sqrt(3)
+        for every hue."""
+        ang = (hue_deg / 360.0) * _TWO_PI
+        s2, s6 = np.sqrt(2.0), np.sqrt(6.0)
+        d = np.array([
+            s2 * np.cos(ang),
+            (s6 * np.sin(ang) - s2 * np.cos(ang)) / 2.0,
+            (-s6 * np.sin(ang) - s2 * np.cos(ang)) / 2.0,
+        ])
+        return d / np.sqrt(3.0)
 
     def apply(self, x, params):
         hue_deg, amount, pivot, falloff, chroma = params
+        x = np.asarray(x, dtype=np.float64)
         reuleaux = rgb_to_reuleaux(x)
-        hue, sat, val = reuleaux[..., 0], reuleaux[..., 1], reuleaux[..., 2]
+        sat, val = reuleaux[..., 1], reuleaux[..., 2]
 
         r = ramp_window(val, MID_GREY + pivot * STOP, falloff * STOP)
         side = r if amount >= 0.0 else 1.0 - r
-        m = side * modulation(val, sat, 0.0, 0.0, chroma)
+        m = side * modulation(val, sat, 0.0, 0.0, 1.0 - chroma)
 
         strength = abs(amount) * self.TINT_SCALE
-        d1, d2 = _axis_dir(hue_deg / 360.0)
-        c1, c2 = to_chroma_vec(hue, sat)
-        c1 = c1 + strength * m * d1
-        c2 = c2 + strength * m * d2
-        hue2, sat2 = from_chroma_vec(c1, c2)
-        return reuleaux_to_rgb(np.stack([hue2, sat2, val], axis=-1))
+        return x + (strength * m)[..., None] * self._tint_direction(hue_deg)
 
     def label(self, params):
         hue_deg, amount, pivot, falloff, chroma = params
@@ -422,7 +454,58 @@ class NeutralTintStage(Stage):
         return "\n".join([
             "Neutral Tint (paste into dctl/NeutralTint.dctl):",
             f"  Hue {hue_deg:.1f}°  Amount {amount:+.3f} (tints {where})",
-            f"  Pivot {pivot:+.3f}  Falloff {falloff:.3f}  Chroma {chroma:+.3f}",
+            f"  Pivot {pivot:+.3f}  Falloff {falloff:.3f}  "
+            f"Chroma {chroma:.3f} (1 = all, 0 = saturated, 2 = neutrals)",
+        ])
+
+
+class BrillianceReductionStage(Stage):
+    """Baselight Brilliance Reduction (the last Chromogen-family tool):
+    darken colors ACCORDING TO their saturation — a plain luminance
+    scale (chromaticity untouched), weighted by a sat-domain ramp.
+    Chroma, Pivot and Falloff all live in the SATURATION domain
+    (reuleaux sat units, not stops): Pivot is where the ramp starts
+    biting, Falloff its width, Chroma the overall mask strength.
+
+    Sliders copied from Baselight's panel: Amount 1.0 (identity) at
+    the RIGHT end — pull it DOWN to reduce; at 0 a fully-masked color
+    loses all its luminance. Defaults Chroma 0.6 / Pivot 0.35 /
+    Falloff 0.5 shape the default mask but do nothing while Amount
+    stays at 1."""
+
+    name = "Brilliance Reduction"
+    param_names = ["Amount", "Chroma", "Pivot", "Falloff"]
+
+    def identity(self):
+        return np.array([1.0, 0.6, 0.35, 0.5])
+
+    def bounds(self):
+        lo = [0.0, 0.0, 0.0, 0.01]
+        hi = [1.0, 1.0, 1.0, 1.0]
+        return np.asarray(lo), np.asarray(hi)
+
+    def apply(self, x, params):
+        amount, chroma, pivot, falloff = params
+        reuleaux = rgb_to_reuleaux(x)
+        hue, sat, val = reuleaux[..., 0], reuleaux[..., 1], reuleaux[..., 2]
+
+        w = chroma * ramp_window(sat, pivot, falloff)
+        val2 = val * (1.0 - (1.0 - amount) * w)
+        return reuleaux_to_rgb(np.stack([hue, sat, val2], axis=-1))
+
+    def label(self, params):
+        amount = params[0]
+        if amount > 0.95:
+            return "brilliance (idle)"
+        return "reduce brilliance"
+
+    def describe(self, params):
+        amount, chroma, pivot, falloff = params
+        return "\n".join([
+            "Brilliance Reduction (paste into dctl/BrillianceReduction.dctl):",
+            f"  Amount {amount:.3f}",
+            f"  Chroma {chroma:.3f}  Pivot {pivot:.3f}  Falloff {falloff:.3f}"
+            "  (all in the sat domain)",
         ])
 
 
@@ -587,6 +670,7 @@ CHROMOGEN_STAGES = [
     ContrastBoostStage,
     HighlightBleachStage,
     NeutralTintStage,
+    BrillianceReductionStage,
     SectorSkewStage,
     SectorBrightnessStage,
     SectorSaturationStage,

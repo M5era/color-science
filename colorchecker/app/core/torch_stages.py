@@ -18,6 +18,7 @@ import torch
 
 from app.core import chromogen
 from app.core.chromogen import (
+    BrillianceReductionStage,
     ColourCrosstalkStage,
     ColourSaturationStage,
     ContrastBoostStage,
@@ -288,24 +289,35 @@ def _neutral_tint_apply(stage, x, p):
     r = _ramp(val, chromogen.MID_GREY + p[2] * chromogen.STOP, p[3] * chromogen.STOP)
     side = torch.where(p[1] >= 0.0, r, 1.0 - r)
     zero = p[4] * 0.0
-    m = side * _modulation(val, sat, zero, zero, p[4])
+    m = side * _modulation(val, sat, zero, zero, 1.0 - p[4])
 
     strength = torch.abs(p[1]) * stage.TINT_SCALE
     ang = (p[0] / 360.0) * (2.0 * torch.pi)
-    c1, c2 = _to_chroma_vec(hue, sat)
-    c1 = c1 + strength * m * torch.cos(ang)
-    c2 = c2 + strength * m * torch.sin(ang)
-    hue2, sat2 = _from_chroma_vec(c1, c2)
-    return _reuleaux_to_rgb(hue2, sat2, val)
+    s2, s6, s3 = float(np.sqrt(2.0)), float(np.sqrt(6.0)), float(np.sqrt(3.0))
+    d = torch.stack([
+        s2 * torch.cos(ang),
+        (s6 * torch.sin(ang) - s2 * torch.cos(ang)) / 2.0,
+        (-s6 * torch.sin(ang) - s2 * torch.cos(ang)) / 2.0,
+    ]) / s3
+    return x + (strength * m)[..., None] * d
+
+
+def _brilliance_reduction_apply(stage, x, p):
+    hue, sat, val = _rgb_to_reuleaux(x)
+    w = p[1] * _ramp(sat, p[2], p[3])
+    val2 = val * (1.0 - (1.0 - p[0]) * w)
+    return _reuleaux_to_rgb(hue, sat, val2)
 
 
 def _colour_crosstalk_apply(stage, x, p):
     hue, sat, val = _rgb_to_reuleaux(x)
     m = _modulation(val, sat, p[4], p[5], p[6])
+    az = torch.abs(p[4])
+    inherent = (1.0 - az) * val + az
     c1, c2 = _to_chroma_vec(hue, sat)
     eye = torch.eye(4, dtype=x.dtype)
     for i in range(4):
-        w = _rygb_interp(hue, eye[i]) * sat * val * m * p[i]
+        w = _rygb_interp(hue, eye[i]) * sat * inherent * m * p[i]
         ang = stage._AXES[i] * 2.0 * np.pi
         c1 = c1 + w * float(np.cos(ang))
         c2 = c2 + w * float(np.sin(ang))
@@ -370,6 +382,7 @@ _APPLY = {
     ContrastBoostStage: _contrast_boost_apply,
     HighlightBleachStage: _highlight_bleach_apply,
     NeutralTintStage: _neutral_tint_apply,
+    BrillianceReductionStage: _brilliance_reduction_apply,
     ColourCrosstalkStage: _colour_crosstalk_apply,
     SectorSkewStage: _sector_skew_apply,
     SectorBrightnessStage: _sector_brightness_apply,

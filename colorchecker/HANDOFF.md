@@ -3,7 +3,7 @@
 Read this first in a new session. It is the map: what the tool is, what
 is built, the non-negotiable decisions, the resources, and where we
 left off. Deep design lives in `ROADMAP.md`; this is the orientation
-layer. (Refreshed 2026-07-20 end-of-session; supersedes prior handoff.)
+layer. (Refreshed 2026-07-21 end-of-session; supersedes prior handoff.)
 
 ---
 
@@ -70,7 +70,7 @@ colorchecker/
     drx.py                     .drx parse/patch: zstd bodies, DCTL nodes, slider doubles
                                (fixed-width patch), combo/checkbox READ
   app/ui/                      PySide6; three tabs (Processing/Matching/LUT Inspector)
-  dctl/                        11 companion DCTLs (paste-parity with solver reports)
+  dctl/                        12 companion DCTLs (paste-parity with solver reports)
   tools/                       reuleaux_bake, reuleaux_fine_bake, stage_bake,
                                lut_match (CLI), drx_export
   templates/                   Marc's powergrades: contrast_boost_1.6.4.T.drx
@@ -78,7 +78,7 @@ colorchecker/
                                openDRT + genesis cube node; only LiftGammaGain
                                still missing), plus the older 1.6.1/1.6.2 ones
   reference/OpenDRT.dctl       openDRT source (Jed Smith, GPLv3) for the port
-  tests/                       135 green offscreen (torch tests auto-skip w/o torch)
+  tests/                       140 green offscreen (torch tests auto-skip w/o torch)
 ```
 
 Tests drive REAL interaction paths (canvas signals, mocked dialogs).
@@ -106,18 +106,30 @@ emissive overlays, CSV export, project save/load.
   360-degree zone + sat/luma masks), Lift Gamma Gain (prep: master
   lift+gamma, per-channel gain; reg_scale=25, fitted LAST in stagewise
   init — only moves if it makes the fit a LOT easier; verified both
-  ways), and the **Chromogen family**: Colour Saturation (R/G+Y/B
-  opponent axes; Y/B is a native reuleaux axis), Colour Crosstalk
-  (inherent luminance-weighted tilt), Contrast Boost (grey/highlight
+  ways), and the **Chromogen family** (now 10): Colour Saturation
+  (R/G+Y/B opponent axes; Y/B is a native reuleaux axis), Colour
+  Crosstalk (inherent luminance-weighted tilt; the inherent val
+  weighting FADES OUT as |Zone| rises so full-zone throw still has an
+  effect — Marc 2026-07-21), Contrast Boost (grey/highlight
   pivots + chroma mix 0=val-only..1=per-RGB), Highlight Bleach (RYGB
-  sectors x highlight ramp), Neutral Tint (signed amount +-highs/lows,
-  val-preserving, x0.25 internal scale), Sector Skew/Brightness/
-  Saturation/Squash (single picked hue; squash signed, foldover-proof;
-  sector SATURATION IS LINEAR — the power law amplified noise).
+  sectors x highlight ramp), **Neutral Tint v3** (Baselight-style,
+  2026-07-21: SUM-PRESERVING offset in LOG RGB — not a reuleaux chroma
+  push; signed amount 0-centred, right=highs/left=lows; Chroma slider
+  is Baselight's 0..2 sat mask, 1=all/0=saturated/2=neutrals;
+  TINT_SCALE=0.15), **Brilliance Reduction** (NEW 2026-07-21, the last
+  missing Chromogen tool: luminance scale weighted by a SAT-domain
+  ramp; Amount 1.0=identity at right end, pull DOWN to reduce;
+  Chroma/Pivot/Falloff all in sat units, defaults 0.6/0.35/0.5),
+  Sector Skew/Brightness/Saturation/Squash (single picked hue; squash
+  signed, foldover-proof; sector SATURATION IS LINEAR — the power law
+  amplified noise).
 - **Modulation block everywhere:** Zone (signed, middle=all), Pivot
   (IN STOPS from mid-grey; LogC3 calibration MID_GREY=0.391,
   STOP=0.0741), Chroma (signed: right=saturated, left=neutrals).
-  Falloff (stops) only where Chromogen exposes it.
+  Falloff (stops) only where Chromogen exposes it. EXCEPTIONS (copied
+  from Baselight's own panels): Neutral Tint's Chroma is 0..2 with
+  1=everything; Brilliance Reduction's Chroma/Pivot/Falloff are in the
+  sat domain.
 - **Solvers:** RBF (unchanged) and Parametric — stagewise coordinate
   descent (prep stages last, per-stage identity reg) -> optional
   **backprop** (torch optional dep; Adam over sigmoid-bounded params;
@@ -128,8 +140,11 @@ emissive overlays, CSV export, project save/load.
   chain)" and "Chromogen film look (full stack)" (Marc's canonical
   order: sectors BEFORE Highlight Bleach; duplicates allowed).
 
-### DCTLs — 11 files, sliders EXACTLY = solver report units
-ReuleauxFine + 9 Chromogen tools + LiftGammaGain. Resolve quirk:
+### DCTLs — 12 files, sliders EXACTLY = solver report units
+ReuleauxFine + 10 Chromogen tools + LiftGammaGain. NOTE: the
+NeutralTint.dctl sliders CHANGED 2026-07-21 (Chroma now 0..2 default
+1; log-RGB math) — Marc must reinstall it, and NeutralTint nodes saved
+in the powergrade templates carry old-convention values. Resolve quirk:
 transform() signature must be ONE LINE. Chromogen-family DCTLs carry
 the reuleaux no-license warning (private use only). Marc: "it fucking
 works". NOT yet formally A/B-verified vs Python (tools/stage_bake
@@ -210,13 +225,15 @@ port module must carry the license; fine for private use).
 
 ## 7. Dev workflow / gotchas
 
-- **Branch:** `claude/color-checker-handoff-91whob` (PRs #1/#2 merged
-  long ago; this branch carries the whole Chromogen/backprop/drx era).
+- **Branch:** `claude/color-tools-crosstalk-tint-d6pbl7` (current;
+  crosstalk-zone fix + Neutral Tint v3 + Brilliance Reduction). The
+  Chromogen/backprop/drx era lived on `claude/color-checker-handoff-
+  91whob`, merged via PRs #3-#5.
 - **Run on Mac:** `python3 main.py` from `colorchecker/`; deps
   `python3 -m pip install -r requirements.txt` (NOT pip3 — path has
   spaces). torch is OPTIONAL (backprop); zstandard required (drx).
 - **Tests:** `QT_QPA_PLATFORM=offscreen python3 -m pytest tests/` —
-  135 green, ~2-3 min. Cloud container may need
+  140 green, ~2-3 min. Cloud container may need
   `apt-get install libegl1 libgl1 libxkbcommon0` for Qt.
 - **Detection code is Marc-blessed** — don't touch without cause.
 - **Commit trailers:** Co-Authored-By + Claude-Session lines; never
@@ -238,3 +255,11 @@ port module must carry the license; fine for private use).
    protobuf re-serialize; short_label() names exist already).
 7. Transfer-function dropdown for stops calibration (LogC3-only now).
 8. Curves-in-DRX experiment (old thread, still unrun).
+9. Where does Brilliance Reduction sit in the canonical "Chromogen
+   film look (full stack)" preset order? Not added yet — ask Marc.
+   Also: no BrillianceReduction node exists in the powergrade
+   templates (drx export will report it as a gap for manual pasting).
+10. Marc to eyeball the 2026-07-21 changes on footage: crosstalk
+    shadow-zone strength, Neutral Tint v3 feel (TINT_SCALE=0.15 max
+    throw), Brilliance Reduction slider ranges (all guessed 0..1 from
+    the Baselight screenshot knob positions).

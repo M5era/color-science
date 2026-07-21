@@ -11,16 +11,26 @@ Usage (from the colorchecker/ directory):
   python3 -m tools.lut_match --lut somelook.cube --backend torch \
       --source-csv all_EV0.csv --out fitted.cube
 
-Default chain is the "Chromogen match" mode: Lift Gamma Gain prep
-(strongly anchored at identity — it only moves if it makes the fit a
-LOT easier) followed by the Chromogen look chain. --preset picks any
-chain preset; --list-presets shows them.
+FREE-ORDER SEARCH MODE (Marc's 2026-07-21 pipeline): pass --search and
+no chain is prescribed at all — the solver auditions every Chromogen
+tool (no Lift Gamma Gain), reuses types as often as they help, and
+discovers its own order; --max-nodes is the only structural limit.
+
+  python3 -m tools.lut_match --lut somelook.cube --search \
+      --max-nodes 10 --backend torch --deliver
+
+--deliver drops the fitted .cube AND the patched .drx straight into
+~/Downloads (for running the script locally on the Mac).
+
+Preset mode is still available: default chain is the "Chromogen match"
+mode; --preset picks any chain preset; --list-presets shows them.
 """
 
 import argparse
+from pathlib import Path
 
 from app.core.lut import parse_cube
-from app.core.lut_match import solve_lut_match
+from app.core.lut_match import search_lut_match, solve_lut_match
 from app.core.match import load_patch_csv, write_cube
 from app.core.stages import CHAIN_PRESETS, STAGE_POOL
 
@@ -32,6 +42,19 @@ def main() -> None:
     parser.add_argument("--lut", help=".cube to explain")
     parser.add_argument("--preset", default=DEFAULT_PRESET)
     parser.add_argument("--list-presets", action="store_true")
+    parser.add_argument("--search", action="store_true",
+                        help="free-order chain search: no preset, no "
+                             "LGG — every Chromogen tool auditioned, "
+                             "reuse allowed, order discovered")
+    parser.add_argument("--max-nodes", type=int, default=10,
+                        help="search mode: maximum nodes in the chain")
+    parser.add_argument("--min-gain", type=float, default=0.005,
+                        help="search mode: minimum relative fit "
+                             "improvement a new node must deliver "
+                             "(0.005 = 0.5%%)")
+    parser.add_argument("--deliver", action="store_true",
+                        help="write the fitted .cube and .drx into "
+                             "~/Downloads (implies --out/--drx-out)")
     parser.add_argument("--backend", choices=["scipy", "torch"],
                         default="scipy")
     parser.add_argument("--samples", type=int, default=1500)
@@ -52,7 +75,7 @@ def main() -> None:
                         help="also write a PowerGrade with the fitted "
                              "values patched into the template's DCTL nodes")
     parser.add_argument("--drx-template",
-                        default="templates/contrast_boost_1.6.4.T.drx")
+                        default="templates/brilliance_red_1.4.1.T.drx")
     args = parser.parse_args()
 
     if args.list_presets or not args.lut:
@@ -62,21 +85,51 @@ def main() -> None:
             return
 
     lut = parse_cube(args.lut)
-    stages = [STAGE_POOL[name]() for name in CHAIN_PRESETS[args.preset]]
+
+    if args.deliver:
+        downloads = Path.home() / "Downloads"
+        base = Path(args.lut).stem + "_fit"
+        if not args.out:
+            args.out = str(downloads / f"{base}.cube")
+        if not args.drx_out:
+            args.drx_out = str(downloads / f"{base}.drx")
 
     source_points = None
     if args.source_csv:
         source_points, _ = load_patch_csv(args.source_csv)
 
     drt = parse_cube(args.drt) if args.drt else None
-    result = solve_lut_match(
-        lut, stages,
-        source_points=source_points,
-        n_samples=args.samples,
-        backend=args.backend,
-        drt=drt,
-        target_is_display=args.target_is_display,
-    )
+    if args.search:
+        result = search_lut_match(
+            lut,
+            max_nodes=args.max_nodes,
+            min_gain=args.min_gain,
+            source_points=source_points,
+            n_samples=args.samples,
+            backend=args.backend,
+            drt=drt,
+            target_is_display=args.target_is_display,
+            verbose=True,
+        )
+        print()
+        print("Search log:")
+        for entry in result.search_log:
+            if isinstance(entry, str):
+                print(f"  {entry}")
+            else:
+                n, name, err = entry
+                print(f"  node {n}: {name}  fit error -> {err:.5f}")
+        print()
+    else:
+        stages = [STAGE_POOL[name]() for name in CHAIN_PRESETS[args.preset]]
+        result = solve_lut_match(
+            lut, stages,
+            source_points=source_points,
+            n_samples=args.samples,
+            backend=args.backend,
+            drt=drt,
+            target_is_display=args.target_is_display,
+        )
 
     print(f"Backend: {result.backend}   pairs: {result.pairs_used}"
           + (f"   (dropped {result.pairs_unreachable} unreachable through DRT)"
@@ -112,13 +165,53 @@ def main() -> None:
 
     if args.drx_out:
         from app.core.drx import DrxTemplate
+        from app.core.stages import STAGE_POOL as _POOL
 
         drx = DrxTemplate(args.drx_template)
-        counters: dict = {}
+
+        export_result = result
+        if args.search and len(result.model.stages) > 1:
+            # A .drx can only run the template's own node order. Map
+            # each found stage to its k-th node of that type; if the
+            # discovered order differs, REFIT the same stage set in
+            # template order (warm-started) so the exported grade is
+            # optimal for the order it will actually run in.
+            counters: dict = {}
+            keyed = []
+            for pos, (stage, params) in enumerate(
+                    zip(result.model.stages, result.model.params)):
+                name = stage.name.replace(" ", "")
+                node_ids = [i for i, n in enumerate(drx.nodes)
+                            if n.dctl_name == name]
+                k = counters.get(name, 0)
+                counters[name] = k + 1
+                idx = node_ids[k] if k < len(node_ids) else 10_000 + pos
+                keyed.append((idx, stage, params))
+            order = sorted(range(len(keyed)), key=lambda j: keyed[j][0])
+            if order != list(range(len(keyed))):
+                print("search order != template node order — refitting "
+                      "in template order for the .drx export (assumes "
+                      "the template's stored node order is its graph "
+                      "order — verify the stack in Resolve)")
+                export_result = solve_lut_match(
+                    lut, [keyed[j][1] for j in order],
+                    source_points=source_points,
+                    n_samples=args.samples,
+                    backend=args.backend,
+                    drt=drt,
+                    target_is_display=args.target_is_display,
+                    init_params=[keyed[j][2] for j in order],
+                )
+                print(f".drx (template-order) error: "
+                      f"{export_result.error_after:.5f}   "
+                      f"free-order error: {result.error_after:.5f}")
+
+        counters = {}
         unmatched = []
-        for stage, params, label in zip(result.model.stages,
-                                        result.model.params,
-                                        result.stage_labels):
+        patched_ids = set()
+        for stage, params, label in zip(export_result.model.stages,
+                                        export_result.model.params,
+                                        export_result.stage_labels):
             name = stage.name.replace(" ", "")
             matches = [n for n in drx.nodes if n.dctl_name == name]
             k = counters.get(name, 0)
@@ -127,11 +220,37 @@ def main() -> None:
                 unmatched.append(f"{stage.name} — {label}")
                 continue
             node = matches[k]
+            missing = []
             for i, value in enumerate(params):
                 if i in node._offsets:
                     drx.set_slider(node, i, float(value))
+                elif abs(value - stage.identity()[i]) > 1e-9:
+                    missing.append(f"{stage.param_names[i]}={value:.4f}")
+            patched_ids.add(id(node))
             print(f"drx node {name}#{k} <- {label}  "
                   f"[node name: {stage.short_label(params)}]")
+            if missing:
+                print(f"  WARNING: {name}#{k} sliders not stored in the "
+                      f"template, set by hand: {', '.join(missing)} "
+                      "(wiggle them once in Resolve and re-save the "
+                      "template to fix)")
+
+        # template nodes carry the grade they were saved with — reset
+        # every look node the fit did NOT use to its stage identity so
+        # the exported powergrade is EXACTLY the fitted chain (+ DRT)
+        by_dctl = {cls.name.replace(" ", ""): cls for cls in _POOL.values()}
+        resets = 0
+        for node in drx.nodes:
+            if id(node) in patched_ids or node.dctl_name not in by_dctl:
+                continue
+            identity = by_dctl[node.dctl_name]().identity()
+            for i, value in enumerate(identity):
+                if i in node._offsets:
+                    drx.set_slider(node, i, float(value))
+            resets += 1
+        if resets:
+            print(f"reset {resets} unused look nodes to identity")
+
         drx.write(args.drx_out)
         print(f"wrote {args.drx_out} (template: {args.drx_template})")
         if unmatched:

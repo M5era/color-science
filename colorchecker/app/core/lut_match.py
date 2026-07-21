@@ -15,6 +15,7 @@ colors that actually occur on real charts.
 
 import numpy as np
 
+from app.core.chain_search import search_chain
 from app.core.lut import CubeLUT, apply_lut
 from app.core.parametric import ParametricResult, solve_parametric
 from app.core.stages import Stage
@@ -47,6 +48,7 @@ def solve_lut_match(
     seed: int = 11,
     drt: CubeLUT | None = None,
     target_is_display: bool = False,
+    init_params: list[np.ndarray] | None = None,
 ) -> ParametricResult:
     """With `drt`, the match runs as the display-referred sandwich:
     the chain approximates the LUT in the working (log) domain, but
@@ -66,9 +68,47 @@ def solve_lut_match(
         return solve_parametric(
             source_points, display_targets, stages,
             backend=backend, regularization=regularization,
-            output_transform=drt,
+            output_transform=drt, init_params=init_params,
         )
     return solve_parametric(
         source_points, targets, stages,
         backend=backend, regularization=regularization,
+        init_params=init_params,
+    )
+
+
+def search_lut_match(
+    lut: CubeLUT,
+    max_nodes: int = 10,
+    min_gain: float = 0.005,
+    pool: list[type] | None = None,
+    source_points: np.ndarray | None = None,
+    n_samples: int = 1500,
+    backend: str = "scipy",
+    regularization: float = 1e-3,
+    seed: int = 11,
+    drt: CubeLUT | None = None,
+    target_is_display: bool = False,
+    verbose: bool = False,
+) -> ParametricResult:
+    """solve_lut_match without a prescribed chain: the free-order
+    greedy search (app/core/chain_search.py) picks which tools to use,
+    how often, and in what order — bounded only by max_nodes. Same DRT
+    sandwich semantics as solve_lut_match."""
+    if source_points is None:
+        source_points = sample_lut_domain(lut, n=n_samples, seed=seed)
+    source_points = np.asarray(source_points, dtype=np.float64)
+    targets = apply_lut(lut, source_points)
+    if drt is not None:
+        display_targets = targets if target_is_display else apply_lut(drt, targets)
+        return search_chain(
+            source_points, display_targets,
+            pool=pool, max_nodes=max_nodes, min_gain=min_gain,
+            backend=backend, regularization=regularization,
+            output_transform=drt, verbose=verbose,
+        )
+    return search_chain(
+        source_points, targets,
+        pool=pool, max_nodes=max_nodes, min_gain=min_gain,
+        backend=backend, regularization=regularization, verbose=verbose,
     )

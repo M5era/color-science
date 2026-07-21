@@ -480,17 +480,19 @@ class BrillianceReductionStage(Stage):
     (reuleaux sat units, not stops): Pivot is where the ramp starts
     biting, Falloff its width, Chroma the overall mask strength.
 
-    Sliders copied from Baselight's panel: Amount 1.0 (identity) at
-    the RIGHT end — pull it DOWN to reduce; at 0 a fully-masked color
-    loses all its luminance. Defaults Chroma 0.6 / Pivot 0.35 /
-    Falloff 0.5 shape the default mask but do nothing while Amount
-    stays at 1."""
+    Amount 0.0 (LEFT end) is the identity — raise it to reduce; at 1.0
+    a fully-masked color loses Chroma's worth of its luminance.
+    (Corrected 2026-07-21: the first screenshot showed a non-default
+    grade with Amount at 1.0, and the shipped identity-at-1 design
+    made the panel read as dead. Baselight's true default is 0.)
+    Defaults Chroma 0.6 / Pivot 0.35 / Falloff 0.5 shape the mask but
+    do nothing while Amount stays at 0."""
 
     name = "Brilliance Reduction"
     param_names = ["Amount", "Chroma", "Pivot", "Falloff"]
 
     def identity(self):
-        return np.array([1.0, 0.6, 0.35, 0.5])
+        return np.array([0.0, 0.6, 0.35, 0.5])
 
     def bounds(self):
         lo = [0.0, 0.0, 0.0, 0.01]
@@ -503,12 +505,12 @@ class BrillianceReductionStage(Stage):
         hue, sat, val = reuleaux[..., 0], reuleaux[..., 1], reuleaux[..., 2]
 
         w = chroma * ramp_window(sat, pivot, falloff)
-        val2 = val * (1.0 - (1.0 - amount) * w)
+        val2 = val * (1.0 - amount * w)
         return reuleaux_to_rgb(np.stack([hue, sat, val2], axis=-1))
 
     def label(self, params):
         amount = params[0]
-        if amount > 0.95:
+        if amount < 0.05:
             return "brilliance (idle)"
         return "reduce brilliance"
 

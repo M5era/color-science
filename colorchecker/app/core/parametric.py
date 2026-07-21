@@ -52,6 +52,9 @@ class ParametricResult:
     stage_noise_gain: list = None  # [(stage name, stats dict)]
     chain_noise_gain: dict = None
     stage_labels: list = None  # short human names ("cool lows", ...)
+    # filled by chain_search: [(round, stage name, fit error after
+    # accepting it)] plus the stop reason as a final string entry
+    search_log: list = None
 
 
 def _mean_dist(a, b):
@@ -67,11 +70,18 @@ def solve_parametric(
     regularization: float = 1e-3,
     sweeps: int = 2,
     backend: str = "scipy",
+    init_params: list[np.ndarray] | None = None,
 ) -> ParametricResult:
     """backend='torch' inserts a gradient (backprop) refinement pass —
     Adam over autograd mirrors of the stages, with multi-restart hue
     placement for Reuleaux Fine zones — between the stagewise init and
-    the scipy joint refine. Requires the optional PyTorch dependency."""
+    the scipy joint refine. Requires the optional PyTorch dependency.
+
+    `init_params` warm-starts the solve (one vector per stage) instead
+    of the identity start — used by the chain search to polish a chain
+    it has already roughed in. The stagewise sweeps still run (each
+    least_squares starts from the warm values, so they can only keep or
+    improve the fit)."""
     if backend not in ("scipy", "torch"):
         raise ValueError(f"Unknown backend {backend!r} — use 'scipy' or 'torch'")
     if backend == "torch":
@@ -112,7 +122,12 @@ def solve_parametric(
     def display(values):
         return apply_lut(output_transform, values) if output_transform is not None else values
 
-    params = [stage.identity().astype(np.float64) for stage in stages]
+    if init_params is not None:
+        if len(init_params) != len(stages):
+            raise ValueError("init_params must have one vector per stage")
+        params = [np.asarray(p, dtype=np.float64).copy() for p in init_params]
+    else:
+        params = [stage.identity().astype(np.float64) for stage in stages]
 
     def chain(x, plist):
         out = x

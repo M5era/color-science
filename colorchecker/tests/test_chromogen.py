@@ -256,7 +256,7 @@ def test_crosstalk_full_zone_still_has_an_effect():
 
 def test_brilliance_reduction_darkens_by_saturation():
     stage = BrillianceReductionStage()
-    p = _with(stage, Amount=0.3)
+    p = _with(stage, Amount=0.7)  # identity is Amount 0 — raise to reduce
     saturated = np.array([[0.8, 0.25, 0.2]])
     mild = np.array([[0.5, 0.42, 0.4]])
     grey = np.array([[0.5, 0.5, 0.5]])
@@ -277,16 +277,16 @@ def test_brilliance_reduction_mask_sliders():
     saturated = np.array([[0.8, 0.25, 0.2]])
     # chroma 0 kills the mask -> identity even at full reduction
     np.testing.assert_allclose(
-        stage.apply(saturated, _with(stage, Amount=0.0, Chroma=0.0)),
+        stage.apply(saturated, _with(stage, Amount=1.0, Chroma=0.0)),
         saturated, atol=1e-9)
     # raising the pivot above the color's sat spares it
     np.testing.assert_allclose(
-        stage.apply(saturated, _with(stage, Amount=0.0, Pivot=1.0,
+        stage.apply(saturated, _with(stage, Amount=1.0, Pivot=1.0,
                                      Falloff=0.2)),
         saturated, atol=1e-9)
     # lower pivot bites harder than the default
-    lo = stage.apply(saturated, _with(stage, Amount=0.3, Pivot=0.1))
-    hi = stage.apply(saturated, _with(stage, Amount=0.3, Pivot=0.6))
+    lo = stage.apply(saturated, _with(stage, Amount=0.7, Pivot=0.1))
+    hi = stage.apply(saturated, _with(stage, Amount=0.7, Pivot=0.6))
     assert lo.max() < hi.max()
 
 

@@ -73,12 +73,16 @@ colorchecker/
   dctl/                        12 companion DCTLs (paste-parity with solver reports)
   tools/                       reuleaux_bake, reuleaux_fine_bake, stage_bake,
                                lut_match (CLI), drx_export
-  templates/                   Marc's powergrades: contrast_boost_1.6.4.T.drx
-                               (DEFAULT: 8 Chromogen nodes + ContrastBoost +
-                               openDRT + genesis cube node; only LiftGammaGain
-                               still missing), plus the older 1.6.1/1.6.2 ones
+  templates/                   Marc's powergrades. DEFAULT (2026-07-21):
+                               brilliance_red_1.4.1.T.drx — 12 look nodes incl.
+                               BrillianceReduction, LGG, 2x NeutralTint, all 4
+                               Sectors + 2x OpenDRT (which one is live?
+                               unverified). Its BrillianceReduction node has NO
+                               stored double for Pivot (slider 2) — Marc must
+                               wiggle it once + re-save to make it patchable.
+                               Older: contrast_boost_1.6.4.T.drx + 1.6.1/1.6.2
   reference/OpenDRT.dctl       openDRT source (Jed Smith, GPLv3) for the port
-  tests/                       140 green offscreen (torch tests auto-skip w/o torch)
+  tests/                       146 green offscreen (torch tests auto-skip w/o torch)
 ```
 
 Tests drive REAL interaction paths (canvas signals, mocked dialogs).
@@ -119,7 +123,10 @@ emissive overlays, CSV export, project save/load.
   TINT_SCALE=0.15), **Brilliance Reduction** (NEW 2026-07-21, the last
   missing Chromogen tool: luminance scale weighted by a SAT-domain
   ramp; Amount 1.0=identity at right end, pull DOWN to reduce;
-  Chroma/Pivot/Falloff all in sat units, defaults 0.6/0.35/0.5),
+  Chroma/Pivot/Falloff all in sat units, defaults 0.6/0.35/0.5;
+  CORRECTED same day: identity is Amount 0 at the LEFT end, raise to
+  reduce — the first screenshot's Amount 1.0 was a graded value, and
+  the identity-at-1 first version read as a dead panel),
   Sector Skew/Brightness/Saturation/Squash (single picked hue; squash
   signed, foldover-proof; sector SATURATION IS LINEAR — the power law
   amplified noise).
@@ -147,7 +154,17 @@ emissive overlays, CSV export, project save/load.
   **backprop** (torch optional dep; Adam over sigmoid-bounded params;
   multi-restart hue placement for Fine zones) -> scipy joint refine.
   Output: error waterfall + **noise-gain KPI** per stage/chain +
-  labels + paste-ready reports.
+  labels + paste-ready reports. solve_parametric now takes
+  `init_params` (warm start).
+- **FREE-ORDER CHAIN SEARCH** (Marc's 2026-07-21 pipeline rework,
+  `app/core/chain_search.py`): no preset, no LGG, no prescribed
+  order — greedy forward construction auditions every Chromogen tool
+  each round (hue multi-seeded), appends the winner, jointly refines
+  the whole chain, stops at --max-nodes or when the best candidate
+  gains < min_gain (0.5% default); final polish+report via
+  solve_parametric warm start. Validated: recovers a hidden 4-tool
+  chain exactly, in order, error 0.179 -> 0.002 after 4 nodes; ~40s
+  for 8 nodes / 1500 samples / scipy on the cloud box.
 - **Chain presets** incl. "Chromogen match (LGG prep -> Chromogen
   chain)" and "Chromogen film look (full stack)" (Marc's canonical
   order: sectors BEFORE Highlight Bleach; duplicates allowed).
@@ -166,6 +183,14 @@ bakes any stage by slider name for that).
 `python3 -m tools.lut_match --lut look.cube [--backend torch]
 [--drt drt.cube] [--target-is-display] [--out fitted.cube]
 [--drx-out fitted.drx] [--source-csv patches.csv]`
+- **--search --max-nodes N [--min-gain 0.005] --deliver**: the
+  free-order search mode (see above); --deliver drops the fitted
+  .cube AND .drx straight into ~/Downloads (for local runs on the
+  Mac). Search+drx: the .drx can only run the template's node order,
+  so if the discovered order differs the CLI REFITS the found stage
+  set in template order (warm start) and reports both errors; unused
+  template look-nodes are reset to identity so the exported grade is
+  exactly the fitted chain.
 - --drt = display-referred sandwich (fit in log under the DRT, errors
   through it, unreachable targets dropped).
 - --target-is-display = the look LUT already renders to display
@@ -245,7 +270,7 @@ port module must carry the license; fine for private use).
   `python3 -m pip install -r requirements.txt` (NOT pip3 — path has
   spaces). torch is OPTIONAL (backprop); zstandard required (drx).
 - **Tests:** `QT_QPA_PLATFORM=offscreen python3 -m pytest tests/` —
-  140 green, ~2-3 min. Cloud container may need
+  146 green, ~2-3 min. Cloud container may need
   `apt-get install libegl1 libgl1 libxkbcommon0` for Qt.
 - **Detection code is Marc-blessed** — don't touch without cause.
 - **Commit trailers:** Co-Authored-By + Claude-Session lines; never
@@ -268,10 +293,12 @@ port module must carry the license; fine for private use).
    protobuf re-serialize; short_label() names exist already).
 7. Transfer-function dropdown for stops calibration (LogC3-only now).
 8. Curves-in-DRX experiment (old thread, still unrun).
-9. Where does Brilliance Reduction sit in the canonical "Chromogen
-   film look (full stack)" preset order? Not added yet — ask Marc.
-   Also: no BrillianceReduction node exists in the powergrade
-   templates (drx export will report it as a gap for manual pasting).
+9. Brilliance Reduction is still absent from the "Chromogen film look
+   (full stack)" preset (search mode makes order moot, but preset
+   mode users should know). The NEW template has its node, but with
+   Pivot unpatchable (see templates/ note) and saved with old-DCTL
+   values (identity reset on export handles that). Matching-tab UI
+   does not expose the chain search yet — CLI only.
 10. Marc to eyeball the 2026-07-21 changes on footage: crosstalk
     shadow-zone strength, Neutral Tint v3 feel (TINT_SCALE=0.15 max
     throw), Brilliance Reduction slider ranges (all guessed 0..1 from

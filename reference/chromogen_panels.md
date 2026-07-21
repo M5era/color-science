@@ -100,17 +100,24 @@ slider and that sector's highlights bleach to white.
 v3 of our stage applies the tint in LOG RGB (sum-preserving offset);
 TINT_SCALE 0.15 at full throw.
 
-### Brilliance Reduction (screenshot 2026-07-20)
+### Brilliance Reduction (CORRECTED screenshot 2026-07-21)
 | Slider | Default | Knob | Bar | Ours |
 |---|---|---|---|---|
-| Amount | 1.000000 | FAR RIGHT | rainbow, darkening left | 1.0, 0..1 ✓ (1 = identity, pull DOWN to reduce) |
-| Chroma | 0.6000 | ~60% | saturated colours | 0.6, 0..1 ✓ (mask strength) |
-| Pivot | 0.35000 | ~35% | greys | 0.35, 0..1 ✓ (SAT units — where the ramp starts biting) |
-| Falloff | 0.500 | ~50% | greys | 0.5, 0..1 ✓ (SAT units — ramp width) |
+| Amount | 0.000000 | FAR LEFT | rainbow, dark red floor | 0.0, 0..1 ✓ (0 = identity, RAISE to reduce) |
+| Chroma | 0.600000 | ~60% | grey->saturated colours | 0.6, 0..1 ✓ (mask strength) |
+| Pivot | 0.350000 | ~35% | stepped greys | 0.35, 0..1 ✓ (SAT units — where the ramp starts biting) |
+| Falloff | 0.500 | ~50% | grey gradient | 0.5, 0..1 ✓ (SAT units — ramp width) |
 
 All three mask sliders live in the saturation domain (Marc). All four
-ranges inferred 0..1 from knob positions — the one panel where every
-value/percentage lines up self-consistently.
+ranges inferred 0..1 from knob positions.
+
+HISTORY WARNING: the FIRST screenshot (2026-07-20) showed Amount at
+1.000000 far right — that was a graded setting, NOT the default. The
+first shipped version of our tool copied it as identity-at-1, which
+made the panel read as dead (Amount parked at its identity looks
+"fully up", and then no other slider does anything). Corrected
+2026-07-21: identity at Amount 0, effect = amount x chroma x
+ramp(sat).
 
 ### The four Sector tools (screenshots 2026-07-21, second batch)
 

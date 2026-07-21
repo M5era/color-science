@@ -289,6 +289,15 @@ port module must carry the license; fine for private use).
    - **LGG stays FIRST in the chain — Marc: not negotiable.** (The
      presets already do this; keep it that way in any new preset or
      order-search experiment.)
+   - **Rerun without LGG + Neutral Tint v3 (2026-07-21):** 0.224 ->
+     0.126 (was 0.110 with LGG). Green cast gone by construction,
+     but the corner-hiding REPEATED exactly as predicted: ColourSat
+     Zone +0.77 / Pivot +4.8 stops, Crosstalk Pivot +5.0 stops. The
+     v3 zero-mean tint fitted to IDLE — it can no longer fake tone
+     work, which is honest: the residual IS tone. Only Highlight
+     Bleach did visible-plausible work. CONCLUSION: LGG removal was
+     not the fix for corner-hiding; fixes (a)-(d) above are the next
+     lever, and (d) tone pre-curve addresses the real residual.
 8. **Neutral Tint v3 (NEXT):** Marc is still not happy with v2 ("not
    organic"). His clue: "I always liked how log state offset behaves"
    + he uploaded Thatcher's LGGO_Temperature_Tint.dctl (saved in

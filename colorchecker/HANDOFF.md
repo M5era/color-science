@@ -198,9 +198,14 @@ emissive overlays, CSV export, project save/load.
 
 ### DCTLs — 12 files, sliders EXACTLY = solver report units
 ReuleauxFine + 10 Chromogen tools + LiftGammaGain (ContrastBoost.dctl
-renamed → ContrastCurve.dctl, 11 float sliders + a Draw Curve checkbox
-that scopes the live curve on screen; the checkbox is declared AFTER the
-sliders so it never shifts the sliderFloatParam order). NOTE: the
+renamed → ContrastCurve.dctl: 10 float sliders + TWO checkboxes — Mid
+Push Compensate (right after Mid Push, like Diachromie) and Draw Curve
+(scopes the live curve on screen). Because a checkbox is NOT a
+sliderFloatParam, "Mid Compensate" is the LAST entry in the stage's
+param_names so the 10 float sliders stay contiguous (sliderFloatParam
+0..9) for the .drx patch; its fitted 0/1 value is exported as a template
+gap, not auto-patched. DCTL overlay math is per-component only — this
+compiler rejects float3+scalar). NOTE: the
 NeutralTint.dctl sliders CHANGED 2026-07-21 (Chroma now 0..2 default
 1; log-RGB math) — Marc must reinstall it, and NeutralTint nodes saved
 in the powergrade templates carry old-convention values. Resolve quirk:

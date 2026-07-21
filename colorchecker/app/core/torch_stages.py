@@ -260,9 +260,10 @@ def _contrast_curve_scalar(v, p, stage):
     st = chromogen.STOP
     ln2 = float(np.log(2.0))
     contrast, white, black = p[0], p[1], p[2]
-    mid_push, comp = p[3], p[4]
-    sh_roll, toe_roll = p[5], p[6]
-    flare, exposure = p[9], p[10]
+    mid_push = p[3]
+    sh_roll, toe_roll = p[4], p[5]
+    flare, exposure = p[8], p[9]
+    comp = p[10]
 
     v = v + exposure * st
     fw = torch.as_tensor(stage._FLARE_WIDTH * st, dtype=v.dtype)
@@ -285,7 +286,7 @@ def _contrast_curve_scalar(v, p, stage):
 
 
 def _contrast_curve_apply(stage, x, p):
-    luma_blend, blend = p[7], p[8]
+    luma_blend, blend = p[6], p[7]
     rgb_out = _contrast_curve_scalar(x, p, stage)
     hue, sat, val = _rgb_to_reuleaux(x)
     luma_out = _reuleaux_to_rgb(hue, sat, _contrast_curve_scalar(val, p, stage))

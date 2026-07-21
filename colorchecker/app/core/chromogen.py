@@ -295,11 +295,16 @@ class ContrastCurveStage(Stage):
     """
 
     name = "Contrast Curve"
+    # NOTE the order: the 10 FLOAT sliders come first (they map 1:1 onto
+    # the DCTL's sliderFloatParam0..9 and the .drx patch), and "Mid
+    # Compensate" is LAST because in the DCTL it is a CHECK_BOX (like
+    # Diachromie's panel) — a checkbox is not a sliderFloatParam, so
+    # keeping it out of the float run keeps every other slider aligned.
     param_names = [
         "Contrast", "White Offset", "Black Offset",
-        "Mid Push", "Mid Compensate",
-        "Shoulder Rolloff", "Toe Rolloff",
+        "Mid Push", "Shoulder Rolloff", "Toe Rolloff",
         "Luma Blend", "Blend", "Flare", "Exposure",
+        "Mid Compensate",
     ]
 
     # curve shape constants (stops unless noted)
@@ -311,13 +316,14 @@ class ContrastCurveStage(Stage):
     _FLARE_WIDTH = 3.0    # how far up (stops) the flare lift fades out
 
     def identity(self):
-        # Mid Compensate defaults OFF (0.0), as on Marc's panel.
-        return np.array([1.0, 1.0, 1.0, 0.0, 0.0,
-                         0.0, 0.0, 0.0, 1.0, 0.0, 0.0])
+        # order: Contrast, White, Black, Mid Push, Shoulder, Toe, Luma,
+        # Blend, Flare, Exposure, Mid Compensate (OFF, as on the panel).
+        return np.array([1.0, 1.0, 1.0, 0.0, 0.0, 0.0,
+                         0.0, 1.0, 0.0, 0.0, 0.0])
 
     def bounds(self):
-        lo = [0.2, 0.0, 0.0, -1.0, 0.0, -1.0, -1.0, 0.0, 0.0, 0.0, -3.0]
-        hi = [2.0, 2.0, 2.0,  1.0, 1.0,  1.0,  1.0, 1.0, 1.0, 2.0,  3.0]
+        lo = [0.2, 0.0, 0.0, -1.0, -1.0, -1.0, 0.0, 0.0, 0.0, -3.0, 0.0]
+        hi = [2.0, 2.0, 2.0,  1.0,  1.0,  1.0, 1.0, 1.0, 2.0,  3.0, 1.0]
         return np.asarray(lo), np.asarray(hi)
 
     # ---- the scalar tone pipeline, run on val or on each RGB channel --
@@ -344,8 +350,8 @@ class ContrastCurveStage(Stage):
         return mid_push * self._MID_SCALE * shape
 
     def _tone(self, v, params):
-        (contrast, white, black, mid_push, comp, sh_roll, toe_roll,
-         _luma, _blend, flare, exposure) = params
+        (contrast, white, black, mid_push, sh_roll, toe_roll,
+         _luma, _blend, flare, exposure, comp) = params
         v = v + exposure * STOP
         shadow_w = 1.0 - ramp_window(v, MID_GREY, self._FLARE_WIDTH * STOP)
         v = v + flare * self._FLARE_SCALE * shadow_w
@@ -355,7 +361,7 @@ class ContrastCurveStage(Stage):
         return MID_GREY + y * STOP
 
     def apply(self, x, params):
-        luma_blend, blend = params[7], params[8]
+        luma_blend, blend = params[6], params[7]
         rgb_out = self._tone(x, params)
         reuleaux = rgb_to_reuleaux(x)
         hue, sat, val = reuleaux[..., 0], reuleaux[..., 1], reuleaux[..., 2]
@@ -365,8 +371,8 @@ class ContrastCurveStage(Stage):
         return (1.0 - blend) * x + blend * curved
 
     def label(self, params):
-        (contrast, white, black, mid_push, comp, sh_roll, toe_roll,
-         luma, blend, flare, exposure) = params
+        (contrast, white, black, mid_push, sh_roll, toe_roll,
+         luma, blend, flare, exposure, comp) = params
         if blend < 0.02:
             return "contrast (idle)"
         bits = []
@@ -386,16 +392,17 @@ class ContrastCurveStage(Stage):
         return bits[0] + note
 
     def describe(self, params):
-        (contrast, white, black, mid_push, comp, sh_roll, toe_roll,
-         luma, blend, flare, exposure) = params
+        (contrast, white, black, mid_push, sh_roll, toe_roll,
+         luma, blend, flare, exposure, comp) = params
         return "\n".join([
             "Contrast Curve (paste into dctl/ContrastCurve.dctl):",
             f"  Contrast {contrast:.3f}  White Offset {white:.3f}  "
             f"Black Offset {black:.3f}",
-            f"  Mid Push {mid_push:+.3f}  Mid Compensate {comp:.3f}",
-            f"  Shoulder Rolloff {sh_roll:+.3f}  Toe Rolloff {toe_roll:+.3f}",
+            f"  Mid Push {mid_push:+.3f}  Shoulder Rolloff {sh_roll:+.3f}  "
+            f"Toe Rolloff {toe_roll:+.3f}",
             f"  Luma Blend {luma:.3f}  Blend {blend:.3f}  "
             f"Flare {flare:.3f}  Exposure {exposure:+.3f}",
+            f"  Mid Compensate (checkbox) {comp:.0f}",
         ])
 
 

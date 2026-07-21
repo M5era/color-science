@@ -31,7 +31,9 @@ DEFINE_UI_PARAMS(contrast, Contrast, DCTLUI_SLIDER_FLOAT, 1.0, 0.2, 3.0, 0.001)
 DEFINE_UI_PARAMS(white_offset, White Offset, DCTLUI_SLIDER_FLOAT, 1.0, 0.0, 2.0, 0.001)
 DEFINE_UI_PARAMS(black_offset, Black Offset, DCTLUI_SLIDER_FLOAT, 1.0, 0.0, 2.0, 0.001)
 DEFINE_UI_PARAMS(mid_push, Mid Push, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 1.0, 0.001)
-DEFINE_UI_PARAMS(mid_compensate, Mid Compensate, DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 1.0, 0.001)
+// a checkbox (like Diachromie's panel), NOT a float slider — so it is
+// not a sliderFloatParam and the sliders below keep their 0..9 order.
+DEFINE_UI_PARAMS(mid_compensate, Mid Push Compensate, DCTLUI_CHECK_BOX, 0)
 DEFINE_UI_PARAMS(shoulder_rolloff, Shoulder Rolloff, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 1.0, 0.001)
 DEFINE_UI_PARAMS(toe_rolloff, Toe Rolloff, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 1.0, 0.001)
 DEFINE_UI_PARAMS(luma_blend, Luma Blend, DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 1.0, 0.001)
@@ -127,34 +129,6 @@ __DEVICE__ float tone(float v) {
     return MID_GREY + (curve + mid) * STOP;
 }
 
-// On-screen scope: overlays the live tone curve (input->output code
-// value) over the frame — grid, faint identity diagonal, a tick at the
-// mid-grey pivot, and the curve in blue. Modelled on the "Draw
-// Characteristic Curve" scope in reference/Film_Curve_1.dctl.
-__DEVICE__ float3 draw_overlay(float3 col, int p_X, int p_Y, int p_W, int p_H) {
-    float gx = (float)p_X / p_W;            // 0..1 across the frame = input
-    float gy = 1.0f - (float)p_Y / p_H;     // 0..1 up the frame = output
-    float3 out = col * 0.32f;               // dim the image so the plot reads
-
-    // grid dots every 1/8
-    float mgx = _fabs(_fmod(gx + 0.0625f, 0.125f) - 0.0625f);
-    float mgy = _fabs(_fmod(gy + 0.0625f, 0.125f) - 0.0625f);
-    if (mgx < 0.0045f && mgy < 0.0045f) out += 0.18f;
-
-    // identity diagonal
-    if (_fabs(gy - gx) < 0.0025f) out += 0.22f;
-
-    // pivot tick at mid-grey (short horizontal mark at tone(mid-grey))
-    if (_fabs(gy - tone(MID_GREY)) < 0.0025f && _fabs(gx - MID_GREY) < 0.03f)
-        out += 0.35f;
-
-    // the curve itself
-    if (_fabs(gy - tone(gx)) < 0.004f)
-        out = make_float3(0.25f, 0.45f, 1.0f);
-
-    return out;
-}
-
 __DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, float p_R, float p_G, float p_B)
 {
     float3 rgb = make_float3(p_R, p_G, p_B);
@@ -173,6 +147,36 @@ __DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, float p
         (1.0f - blend) * rgb.y + blend * curved.y,
         (1.0f - blend) * rgb.z + blend * curved.z);
 
-    if (draw_curve) return draw_overlay(result, p_X, p_Y, p_Width, p_Height);
+    // On-screen scope: overlays the live tone curve (input->output code
+    // value) over the frame — grid, faint identity diagonal, a tick at
+    // the mid-grey pivot, and the curve in blue. Modelled on the "Draw
+    // Characteristic Curve" scope in reference/Film_Curve_1.dctl. Inlined
+    // with per-component math only (no float3+scalar, which this compiler
+    // rejects) so it builds alongside the rest of the toolkit.
+    if (draw_curve) {
+        float gx = (float)p_X / (float)p_Width;      // 0..1 across = input
+        float gy = 1.0f - (float)p_Y / (float)p_Height;  // 0..1 up = output
+        float rr = result.x * 0.32f;   // dim the image so the plot reads
+        float gg = result.y * 0.32f;
+        float bb = result.z * 0.32f;
+
+        // grid dots every 1/8 (distance to the nearest gridline)
+        float dx = _fabs(gx - 0.125f * _floorf(gx / 0.125f + 0.5f));
+        float dy = _fabs(gy - 0.125f * _floorf(gy / 0.125f + 0.5f));
+        if (dx < 0.0045f && dy < 0.0045f) { rr += 0.18f; gg += 0.18f; bb += 0.18f; }
+
+        // identity diagonal
+        if (_fabs(gy - gx) < 0.0025f) { rr += 0.22f; gg += 0.22f; bb += 0.22f; }
+
+        // short tick at the mid-grey pivot
+        if (_fabs(gy - tone(MID_GREY)) < 0.0025f && _fabs(gx - MID_GREY) < 0.03f) {
+            rr += 0.35f; gg += 0.35f; bb += 0.35f;
+        }
+
+        // the curve itself, in blue
+        if (_fabs(gy - tone(gx)) < 0.004f) { rr = 0.25f; gg = 0.45f; bb = 1.0f; }
+
+        return make_float3(rr, gg, bb);
+    }
     return result;
 }

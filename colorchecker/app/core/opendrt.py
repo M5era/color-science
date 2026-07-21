@@ -151,7 +151,12 @@ def hue_offset(h, o):
 def oetf_arri_logc3(x):
     x = np.asarray(x, dtype=np.float64)
     lin = (x - 0.092809) / 5.367655
-    exp = (10.0 ** ((x - 0.385537) / 0.247190) - 0.052272) / 5.555556
+    # clamp the exponent so wildly out-of-range code values (a contorted
+    # upstream node can push code >> 1) don't overflow 10**e — valid LogC3
+    # (x in [0,1]) keeps e in ~[-1.6, 2.5], far inside the clamp, so the
+    # 1:1 port is unchanged where it matters (validation gate still passes)
+    e = np.clip((x - 0.385537) / 0.247190, -50.0, 50.0)
+    exp = (10.0 ** e - 0.052272) / 5.555556
     return np.where(x < 5.367655 * 0.010591 + 0.092809, lin, exp)
 
 

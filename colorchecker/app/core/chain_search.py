@@ -48,8 +48,11 @@ from app.core.stages import Stage
 _HUE_SEEDS = (0.0, 60.0, 120.0, 180.0, 240.0, 300.0)
 
 # how hard the un-frozen tone node is anchored to its grey-scale fit when
-# a tint co-adapts with it (high = "move only as much as the tint needs")
-_TONE_ANCHOR_REG = 40.0
+# a tint co-adapts with it (high = "move only as much as the tint needs").
+# Strong: the tone should nudge for the tint's crossover, NOT wander off
+# to a contorted exposure/mid-push combo chasing colour error (genesis
+# drifted Exposure -0.66 -> -2.0 at reg 40).
+_TONE_ANCHOR_REG = 250.0
 
 
 def default_pool() -> list[type]:

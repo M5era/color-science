@@ -270,12 +270,18 @@ def _contrast_curve_scalar(v, p, stage):
     v = v + flare * stage._FLARE_SCALE * shadow_w
     s = (v - mg) / st
 
-    k_sh = stage._K0 * stage._K_RANGE ** sh_roll
-    k_to = stage._K0 * stage._K_RANGE ** toe_roll
-    zero = torch.zeros_like(s)
-    shoulder = torch.where(s > 0.0, s - k_sh * torch.tanh(s / k_sh), zero)
-    toe = torch.where(s < 0.0, s - k_to * torch.tanh(s / k_to), zero)
-    curve = contrast * (s + (white - 1.0) * shoulder + (black - 1.0) * toe)
+    a = stage._BASE / (contrast - 1.0 + stage._EPS)
+    a_hi = white * a
+    a_lo = black * a
+    n_hi = stage._KNEE0 - stage._KNEE_SLOPE * sh_roll
+    n_lo = stage._KNEE0 - stage._KNEE_SLOPE * toe_roll
+
+    def gsc(u, n):
+        return u / torch.pow(1.0 + torch.pow(torch.abs(u), n), 1.0 / n)
+
+    up = a_hi * gsc(contrast * s / a_hi, n_hi)
+    dn = a_lo * gsc(contrast * s / a_lo, n_lo)
+    curve = torch.where(s >= 0.0, up, dn)
 
     u = s / stage._MID_W
     g = torch.exp(-0.5 * u * u)

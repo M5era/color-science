@@ -49,8 +49,10 @@ DEFINE_UI_PARAMS(draw_curve, Draw Curve, DCTLUI_CHECK_BOX, 0)
 #define STOP 0.0740774f
 #define LN2 0.693147180559945f
 #define EXP_HALF 1.648721270700128f
-#define CC_K0 1.2f
-#define CC_K_RANGE 6.0f
+#define CC_BASE 6.0f
+#define CC_EPS 0.000001f
+#define CC_KNEE0 3.5f
+#define CC_KNEE_SLOPE 2.5f
 #define CC_MID_W 2.0f
 #define CC_MID_SCALE 1.0f
 #define CC_FLARE_SCALE 0.045f
@@ -106,6 +108,11 @@ __DEVICE__ float softplusw(float x, float w) {
     return w * _logf(1.0f + _expf(_fminf(x / w, 60.0f)));
 }
 
+// generalized soft-clip: slope 1 at 0, asymptotes to +-1, knee sharpness n
+__DEVICE__ float gsc(float u, float n) {
+    return u / _powf(1.0f + _powf(_fabs(u), n), 1.0f / n);
+}
+
 // ---- the scalar tone pipeline (per channel or on val) ---------------
 // Takes every control as an ARGUMENT — like the other helpers here, it
 // never reads a UI global (only transform() does). Some GPU backends
@@ -119,14 +126,16 @@ __DEVICE__ float tone(float v, float contrast, float white, float black,
     v = v + flare * CC_FLARE_SCALE * shadow_w;
     float s = (v - MID_GREY) / STOP;
 
-    float k_sh = CC_K0 * _powf(CC_K_RANGE, sh_roll);
-    float k_to = CC_K0 * _powf(CC_K_RANGE, toe_roll);
-    // one-sided, flat at the pivot: White bends ONLY highlights, Black
-    // ONLY shadows, neither touches the mid (pivot) contrast.
-    float shoulder = (s > 0.0f) ? (s - k_sh * _tanhf(s / k_sh)) : 0.0f;
-    float toe = (s < 0.0f) ? (s - k_to * _tanhf(s / k_to)) : 0.0f;
-    float curve = contrast * (s + (white - 1.0f) * shoulder
-                                + (black - 1.0f) * toe);
+    // bounded (asymptotic) film S: mid slope = contrast, rolling off
+    // smoothly toward the white/black points, never a hard clip. Latitude
+    // ~ 1/(contrast-1) so contrast 1 is an exact straight line.
+    float a = CC_BASE / (contrast - 1.0f + CC_EPS);
+    float a_hi = white * a;
+    float a_lo = black * a;
+    float n_hi = CC_KNEE0 - CC_KNEE_SLOPE * sh_roll;
+    float n_lo = CC_KNEE0 - CC_KNEE_SLOPE * toe_roll;
+    float curve = (s >= 0.0f) ? (a_hi * gsc(contrast * s / a_hi, n_hi))
+                              : (a_lo * gsc(contrast * s / a_lo, n_lo));
 
     float u = s / CC_MID_W;
     float g = _expf(-0.5f * u * u);

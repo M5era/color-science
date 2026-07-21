@@ -273,20 +273,24 @@ class ContrastCurveStage(Stage):
 
     All tonal work is in LogC3 code values, measured in STOPS from
     mid-grey. The pivot is fixed at mid-grey; sliders:
-      Contrast        purely LINEAR slope through the pivot (1 = identity)
-      White Offset    highlight-only slope; 1 = neutral, <1 compresses
-                      highlights (shoulder), >1 expands. Touches ONLY the
-                      highlights and never the mid contrast (see _curve).
-      Black Offset    shadow-only slope; 1 = neutral, >1 deepens shadows
-                      (toe), <1 lifts. Independent of White Offset.
+      Contrast        mid slope of a BOUNDED S at the pivot (1 = identity,
+                      a straight line; >1 steepens the mid and the curve
+                      asymptotes toward the white/black points — it never
+                      hard-clips out of range)
+      White Offset    highlight point: scales the highlight asymptote
+                      distance; 1 = neutral, <1 pulls the white point in
+                      (softer/lower whites), >1 pushes it out. Highlights
+                      only, independent of Black Offset.
+      Black Offset    shadow point: scales the shadow asymptote; <1 lifts
+                      the black point (milky), >1 deepens it. Shadows only.
       Mid Push        a midtone bump; + lifts mids, - drops them
       Mid Compensate  0 = the bump lifts the pivot (Push acts like a
                       midtone exposure); 1 = the pivot is held and the
                       bump becomes a local S (added mid contrast)
-      Shoulder Rolloff  knee sharpness of the highlight bend: 0 = the
-                      smooth default, -1 straightens it to ~linear,
-                      +1 rounds it further (inert while White Offset = 1)
-      Toe Rolloff     same, for the shadow bend (inert at Black Offset 1)
+      Shoulder Rolloff  knee sharpness of the highlight rolloff: 0 = the
+                      smooth default, -1 straightens it to ~linear then a
+                      corner, +1 rounds it further
+      Toe Rolloff     same, for the shadow rolloff
       Luma Blend      0 = per-RGB (contrast raises saturation, the film
                       look), 1 = luma only (chromaticity preserved)
       Blend           master mix with the untouched input
@@ -309,8 +313,10 @@ class ContrastCurveStage(Stage):
     ]
 
     # curve shape constants (stops unless noted)
-    _K0 = 1.2           # rolloff knee width at rolloff 0 (the smooth default)
-    _K_RANGE = 6.0      # rolloff -1 -> K0/6 (sharp), +1 -> 6*K0 (soft)
+    _BASE = 6.0         # latitude scale: asymptote distance = BASE/(contrast-1)
+    _EPS = 1e-6         # keeps contrast=1 an EXACT straight line (latitude ->inf)
+    _KNEE0 = 3.5        # soft-clip knee exponent at rolloff 0
+    _KNEE_SLOPE = 2.5   # rolloff -1 -> n 6 (sharp/linear), +1 -> n 1 (round)
     _MID_W = 2.0        # mid-push bump half-width
     _MID_SCALE = 1.0    # mid-push max lift (stops) at Push = 1
     _FLARE_SCALE = 0.045  # code-value shadow lift per Flare unit
@@ -329,20 +335,31 @@ class ContrastCurveStage(Stage):
 
     # ---- the scalar tone pipeline, run on val or on each RGB channel --
 
+    @staticmethod
+    def _gsc(u, n):
+        """Generalized soft-clip: slope 1 at 0, asymptotes to +-1, with a
+        knee sharpness `n` (n->1 round, large n -> linear then a corner)."""
+        return u / np.power(1.0 + np.power(np.abs(u), n), 1.0 / n)
+
     def _curve(self, s, contrast, white, black, sh_roll, toe_roll):
-        """Linear contrast (slope = `contrast` AT THE PIVOT) plus ONE-SIDED
-        highlight and shadow deviations. Each deviation is exactly 0 on
-        the far side of the pivot and has zero slope at the pivot (C1),
-        so White Offset bends only the highlights, Black Offset only the
-        shadows, the two never interact, and neither changes the mid
-        contrast. The far-end slope reaches contrast*white / contrast*
-        black; the rolloff sets the knee width (how fast it gets there).
+        """A BOUNDED (asymptotic) film S — never a straight line diving out
+        of range. Mid slope AT THE PIVOT is `contrast`; the curve then rolls
+        off smoothly toward a highlight/shadow asymptote (the white/black
+        point) and approaches it without ever hard-clipping. Latitude
+        scales as 1/(contrast-1), so contrast 1 is an EXACT straight line
+        (latitude -> inf) and more contrast gives a steeper mid AND a
+        tighter, filmier S. White/Black Offset move the two points
+        independently (they only touch their own side of the pivot);
+        Shoulder/Toe Rolloff set the knee sharpness of each end.
         """
-        k_sh = self._K0 * self._K_RANGE ** sh_roll
-        k_to = self._K0 * self._K_RANGE ** toe_roll
-        shoulder = np.where(s > 0.0, s - k_sh * np.tanh(s / k_sh), 0.0)
-        toe = np.where(s < 0.0, s - k_to * np.tanh(s / k_to), 0.0)
-        return contrast * (s + (white - 1.0) * shoulder + (black - 1.0) * toe)
+        a = self._BASE / (contrast - 1.0 + self._EPS)   # latitude in stops
+        a_hi = white * a
+        a_lo = black * a
+        n_hi = self._KNEE0 - self._KNEE_SLOPE * sh_roll
+        n_lo = self._KNEE0 - self._KNEE_SLOPE * toe_roll
+        up = a_hi * self._gsc(contrast * s / a_hi, n_hi)
+        dn = a_lo * self._gsc(contrast * s / a_lo, n_lo)
+        return np.where(s >= 0.0, up, dn)
 
     def _midterm(self, s, mid_push, comp):
         u = s / self._MID_W

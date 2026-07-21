@@ -119,19 +119,31 @@ def test_contrast_curve_is_identity_at_defaults():
     np.testing.assert_allclose(stage.apply(x, stage.identity()), x, atol=1e-12)
 
 
-def test_contrast_curve_offsets_set_toe_and_shoulder_slopes():
-    # White Offset 0.5 halves the highlight slope (shoulder); Black Offset
-    # 1.5 steepens the shadow slope (toe). Rolloffs at -1 straighten the
-    # knees so the end slopes are clean to read (screenshot 4).
+def test_contrast_curve_is_bounded_asymptotic_not_clipped():
+    # High contrast must NOT dive out of range and hard-clip: the curve is
+    # a bounded S that rolls off toward the black/white points, steep in
+    # the mid and flattening (asymptotic) at the ends.
     stage = ContrastCurveStage()
-    p = _with(stage, **{"White Offset": 0.5, "Black Offset": 1.5,
-                        "Shoulder Rolloff": -1.0, "Toe Rolloff": -1.0})
-    ramp = np.linspace(0.05, 0.95, 800)[:, None].repeat(3, axis=1)
-    out = stage.apply(ramp, p)[:, 0]
+    ramp = np.linspace(0.0, 1.0, 800)[:, None].repeat(3, axis=1)
+    out = stage.apply(ramp, _with(stage, Contrast=2.5))[:, 0]
+    assert out.min() > -0.02 and out.max() < 1.02     # never leaves range
     slope = np.gradient(out, ramp[:, 0])
     v = ramp[:, 0]
-    assert abs(slope[v > 0.78].mean() - 0.5) < 0.15   # compressed highlights
-    assert abs(slope[v < 0.14].mean() - 1.5) < 0.2    # steepened shadows
+    mid = np.abs(v - MID_GREY) < 0.05
+    toe = v < 0.12
+    assert slope[mid].mean() > 1.3                     # contrast added at mid
+    assert slope[mid].mean() > slope[toe].mean() + 0.5  # ends roll off
+
+
+def test_contrast_curve_offsets_move_white_black_points():
+    stage = ContrastCurveStage()
+    ramp = np.linspace(0.0, 1.0, 400)[:, None].repeat(3, axis=1)
+    lo_w = stage.apply(ramp, _with(stage, Contrast=2.0, **{"White Offset": 0.6}))[:, 0]
+    hi_w = stage.apply(ramp, _with(stage, Contrast=2.0, **{"White Offset": 1.4}))[:, 0]
+    assert lo_w.max() < hi_w.max()                     # white offset moves white pt
+    lo_b = stage.apply(ramp, _with(stage, Contrast=2.0, **{"Black Offset": 0.6}))[:, 0]
+    hi_b = stage.apply(ramp, _with(stage, Contrast=2.0, **{"Black Offset": 1.4}))[:, 0]
+    assert lo_b.min() > hi_b.min()                     # black offset moves black pt
 
 
 def test_contrast_curve_offsets_are_independent():
@@ -140,13 +152,14 @@ def test_contrast_curve_offsets_are_independent():
     # (pivot) contrast — the property that lets you shape a toe and a
     # shoulder separately for a film S.
     stage = ContrastCurveStage()
-    ramp = np.linspace(0.05, 0.95, 400)[:, None].repeat(3, axis=1)
+    ramp = np.linspace(0.0, 1.0, 400)[:, None].repeat(3, axis=1)
     below = ramp[:, 0] <= MID_GREY
     above = ramp[:, 0] >= MID_GREY
-    white = stage.apply(ramp, _with(stage, **{"White Offset": 1.4}))
-    black = stage.apply(ramp, _with(stage, **{"Black Offset": 1.4}))
-    np.testing.assert_allclose(white[below], ramp[below], atol=1e-9)  # shadows kept
-    np.testing.assert_allclose(black[above], ramp[above], atol=1e-9)  # highlights kept
+    base = stage.apply(ramp, _with(stage, Contrast=2.0))
+    white = stage.apply(ramp, _with(stage, Contrast=2.0, **{"White Offset": 1.4}))
+    black = stage.apply(ramp, _with(stage, Contrast=2.0, **{"Black Offset": 1.4}))
+    np.testing.assert_allclose(white[below], base[below], atol=1e-9)  # shadows kept
+    np.testing.assert_allclose(black[above], base[above], atol=1e-9)  # highlights kept
 
 
 def test_contrast_curve_flare_lifts_shadows_only():

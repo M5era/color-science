@@ -107,35 +107,46 @@ __DEVICE__ float softplusw(float x, float w) {
 }
 
 // ---- the scalar tone pipeline (per channel or on val) ---------------
+// Takes every control as an ARGUMENT — like the other helpers here, it
+// never reads a UI global (only transform() does). Some GPU backends
+// crash compiling a __DEVICE__ helper that touches DEFINE_UI_PARAMS.
 
-__DEVICE__ float tone(float v) {
+__DEVICE__ float tone(float v, float contrast, float white, float black,
+                      float mid_push, float comp, float sh_roll,
+                      float toe_roll, float flare, float exposure) {
     v = v + exposure * STOP;
     float shadow_w = 1.0f - ramp_window(v, MID_GREY, CC_FLARE_WIDTH * STOP);
     v = v + flare * CC_FLARE_SCALE * shadow_w;
     float s = (v - MID_GREY) / STOP;
 
-    float k_sh = CC_K0 * _powf(CC_K_RANGE, shoulder_rolloff);
-    float k_to = CC_K0 * _powf(CC_K_RANGE, toe_rolloff);
+    float k_sh = CC_K0 * _powf(CC_K_RANGE, sh_roll);
+    float k_to = CC_K0 * _powf(CC_K_RANGE, toe_roll);
     float shoulder = softplusw(s, k_sh) - k_sh * LN2;
     float toe = -(softplusw(-s, k_to) - k_to * LN2);
-    float curve = contrast * (s + (white_offset - 1.0f) * shoulder
-                                + (black_offset - 1.0f) * toe);
+    float curve = contrast * (s + (white - 1.0f) * shoulder
+                                + (black - 1.0f) * toe);
 
     float u = s / CC_MID_W;
     float g = _expf(-0.5f * u * u);
-    float shape = (1.0f - mid_compensate) * g + mid_compensate * (u * EXP_HALF * g);
+    float shape = (1.0f - comp) * g + comp * (u * EXP_HALF * g);
     float mid = mid_push * CC_MID_SCALE * shape;
 
     return MID_GREY + (curve + mid) * STOP;
 }
 
+// the UI controls tone() needs, in its argument order — expanded only
+// inside transform(), where the DEFINE_UI_PARAMS globals are in scope.
+#define TONE_ARGS contrast, white_offset, black_offset, mid_push, mid_compensate, shoulder_rolloff, toe_rolloff, flare, exposure
+
 __DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, float p_R, float p_G, float p_B)
 {
     float3 rgb = make_float3(p_R, p_G, p_B);
-    float3 rgb_out = make_float3(tone(rgb.x), tone(rgb.y), tone(rgb.z));
+    float3 rgb_out = make_float3(tone(rgb.x, TONE_ARGS),
+                                 tone(rgb.y, TONE_ARGS),
+                                 tone(rgb.z, TONE_ARGS));
 
     float3 rl = rgb_to_reuleaux(rgb);
-    float3 luma_out = reuleaux_to_rgb(make_float3(rl.x, rl.y, tone(rl.z)));
+    float3 luma_out = reuleaux_to_rgb(make_float3(rl.x, rl.y, tone(rl.z, TONE_ARGS)));
 
     float3 curved = make_float3(
         (1.0f - luma_blend) * rgb_out.x + luma_blend * luma_out.x,
@@ -169,12 +180,12 @@ __DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, float p
         if (_fabs(gy - gx) < 0.0025f) { rr += 0.22f; gg += 0.22f; bb += 0.22f; }
 
         // short tick at the mid-grey pivot
-        if (_fabs(gy - tone(MID_GREY)) < 0.0025f && _fabs(gx - MID_GREY) < 0.03f) {
+        if (_fabs(gy - tone(MID_GREY, TONE_ARGS)) < 0.0025f && _fabs(gx - MID_GREY) < 0.03f) {
             rr += 0.35f; gg += 0.35f; bb += 0.35f;
         }
 
         // the curve itself, in blue
-        if (_fabs(gy - tone(gx)) < 0.004f) { rr = 0.25f; gg = 0.45f; bb = 1.0f; }
+        if (_fabs(gy - tone(gx, TONE_ARGS)) < 0.004f) { rr = 0.25f; gg = 0.45f; bb = 1.0f; }
 
         return make_float3(rr, gg, bb);
     }

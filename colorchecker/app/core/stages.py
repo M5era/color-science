@@ -211,6 +211,7 @@ class ReuleauxFineStage(Stage):
     """
 
     name = "Reuleaux Fine"
+    local_tool = True  # single-hue zone: discounted by the search's broad_bias
 
     # flat cores that cover the whole working domain == mask off
     _LUMA_OPEN = (0.5, 2.0, 0.25)

@@ -88,6 +88,7 @@ def solve_parametric(
     backend: str = "scipy",
     init_params: list[np.ndarray] | None = None,
     display_transform=None,
+    frozen: int = 0,
 ) -> ParametricResult:
     """backend='torch' inserts a gradient (backprop) refinement pass —
     Adam over autograd mirrors of the stages, with multi-restart hue
@@ -106,7 +107,11 @@ def solve_parametric(
     directly — no LUT inversion, so NO pairs are dropped as
     unreachable and clipped targets still pull the fit the right way.
     Mutually exclusive with `output_transform` (the cube-inversion
-    sandwich). scipy backend only for now (no torch mirror yet)."""
+    sandwich). scipy backend only for now (no torch mirror yet).
+
+    `frozen`: the first N stages keep their init_params EXACTLY — they
+    are applied but never optimized (the chain search's grey-scale-
+    locked tone node). Requires init_params."""
     validate_backend(backend)
     source = np.asarray(source, dtype=np.float64)
     target = np.asarray(target, dtype=np.float64)
@@ -160,80 +165,95 @@ def solve_parametric(
     else:
         params = [stage.identity().astype(np.float64) for stage in stages]
 
+    if frozen and init_params is None:
+        raise ValueError("frozen stages need init_params")
+    frozen = max(0, min(frozen, len(stages)))
+    frozen_params = [p.copy() for p in params[:frozen]]
+    opt_stages = stages[frozen:]
+    opt_params = params[frozen:]
+    src_opt = source
+    for stage, p in zip(stages[:frozen], frozen_params):
+        src_opt = stage.apply(src_opt, p)
+
     def chain(x, plist):
         out = x
-        for stage, p in zip(stages, plist):
+        for stage, p in zip(opt_stages, plist):
             out = stage.apply(out, p)
         return out
 
-    # ---- pass 1: stagewise coordinate descent -------------------------
-    # Strongly anchored prep stages (high reg_scale) are fitted LAST in
-    # each sweep: the look stages get first claim on the residual, so
-    # prep only absorbs what the look genuinely cannot express (e.g. a
-    # real exposure/WB mismatch). Fitting chain-order instead lets a
-    # front prep stage greedily grab the look and park the solve in a
-    # bad valley. The identity reg below breaks remaining ties.
-    fit_order = sorted(range(len(stages)),
-                       key=lambda i: (stages[i].reg_scale, i))
-    for _ in range(sweeps):
-        for i in fit_order:
-            stage = stages[i]
-            lo, hi = stage.bounds()
-            x0 = np.clip(params[i], lo, hi)
-            stage_id = stage.identity()
-            stage_scale = np.maximum(hi - lo, 1e-6)
-            stage_reg = np.sqrt(regularization * stage.reg_scale)
+    if opt_stages:
+        # ---- pass 1: stagewise coordinate descent ---------------------
+        # Strongly anchored prep stages (high reg_scale) are fitted LAST
+        # in each sweep: the look stages get first claim on the residual,
+        # so prep only absorbs what the look genuinely cannot express
+        # (e.g. a real exposure/WB mismatch). Fitting chain-order instead
+        # lets a front prep stage greedily grab the look and park the
+        # solve in a bad valley. The identity reg breaks remaining ties.
+        fit_order = sorted(range(len(opt_stages)),
+                           key=lambda i: (opt_stages[i].reg_scale, i))
+        for _ in range(sweeps):
+            for i in fit_order:
+                stage = opt_stages[i]
+                lo, hi = stage.bounds()
+                x0 = np.clip(opt_params[i], lo, hi)
+                stage_id = stage.identity()
+                stage_scale = np.maximum(hi - lo, 1e-6)
+                stage_reg = np.sqrt(regularization * stage.reg_scale)
 
-            def residual(p, i=i, stage_id=stage_id,
-                         stage_scale=stage_scale, stage_reg=stage_reg):
-                trial = params[:i] + [p] + params[i + 1 :]
-                fit = (fwd(chain(source, trial)) - fit_target).ravel()
-                reg = stage_reg * (p - stage_id) / stage_scale
-                return np.concatenate([fit, reg])
+                def residual(p, i=i, stage_id=stage_id,
+                             stage_scale=stage_scale, stage_reg=stage_reg):
+                    trial = opt_params[:i] + [p] + opt_params[i + 1 :]
+                    fit = (fwd(chain(src_opt, trial)) - fit_target).ravel()
+                    reg = stage_reg * (p - stage_id) / stage_scale
+                    return np.concatenate([fit, reg])
 
-            sol = least_squares(
-                residual, x0, bounds=(lo, hi), method="trf",
-                xtol=1e-10, ftol=1e-10, max_nfev=200,
+                sol = least_squares(
+                    residual, x0, bounds=(lo, hi), method="trf",
+                    xtol=1e-10, ftol=1e-10, max_nfev=200,
+                )
+                opt_params[i] = sol.x
+
+        # ---- pass 1.5 (torch backend): backprop refine + placement ----
+        if backend == "torch":
+            from app.core.backprop import refine_backprop
+
+            opt_params = refine_backprop(
+                opt_stages, opt_params, src_opt, fit_target,
+                regularization=regularization,
             )
-            params[i] = sol.x
 
-    # ---- pass 1.5 (torch backend): backprop refine + zone placement ---
-    if backend == "torch":
-        from app.core.backprop import refine_backprop
+        # ---- pass 2: joint refine with identity regularization --------
+        sizes = [p.size for p in opt_params]
+        offsets = np.cumsum([0] + sizes)
+        lo_all = np.concatenate([s.bounds()[0] for s in opt_stages])
+        hi_all = np.concatenate([s.bounds()[1] for s in opt_stages])
+        identity_all = np.concatenate([s.identity() for s in opt_stages])
+        scale_all = np.maximum(hi_all - lo_all, 1e-6)
+        reg_weight = np.sqrt(regularization)
+        # per-stage anchoring: prep stages (high reg_scale) only move
+        # when it makes the fit a LOT easier
+        reg_scale_all = np.concatenate([
+            np.full(s.identity().size, np.sqrt(s.reg_scale))
+            for s in opt_stages
+        ])
 
-        params = refine_backprop(
-            stages, params, source, fit_target,
-            regularization=regularization,
+        def split(flat):
+            return [flat[offsets[i] : offsets[i + 1]]
+                    for i in range(len(opt_stages))]
+
+        def joint_residual(flat):
+            fit = fwd(chain(src_opt, split(flat))) - fit_target
+            reg = reg_weight * reg_scale_all * (flat - identity_all) / scale_all
+            return np.concatenate([fit.ravel(), reg])
+
+        x0 = np.clip(np.concatenate(opt_params), lo_all, hi_all)
+        sol = least_squares(
+            joint_residual, x0, bounds=(lo_all, hi_all), method="trf",
+            xtol=1e-10, ftol=1e-10, max_nfev=400,
         )
+        opt_params = [p.copy() for p in split(sol.x)]
 
-    # ---- pass 2: joint refine with identity regularization ------------
-    sizes = [p.size for p in params]
-    offsets = np.cumsum([0] + sizes)
-    lo_all = np.concatenate([s.bounds()[0] for s in stages])
-    hi_all = np.concatenate([s.bounds()[1] for s in stages])
-    identity_all = np.concatenate([s.identity() for s in stages])
-    scale_all = np.maximum(hi_all - lo_all, 1e-6)
-    reg_weight = np.sqrt(regularization)
-    # per-stage anchoring: prep stages (high reg_scale) only move when
-    # it makes the fit a LOT easier
-    reg_scale_all = np.concatenate([
-        np.full(s.identity().size, np.sqrt(s.reg_scale)) for s in stages
-    ])
-
-    def split(flat):
-        return [flat[offsets[i] : offsets[i + 1]] for i in range(len(stages))]
-
-    def joint_residual(flat):
-        fit = fwd(chain(source, split(flat))) - fit_target
-        reg = reg_weight * reg_scale_all * (flat - identity_all) / scale_all
-        return np.concatenate([fit.ravel(), reg])
-
-    x0 = np.clip(np.concatenate(params), lo_all, hi_all)
-    sol = least_squares(
-        joint_residual, x0, bounds=(lo_all, hi_all), method="trf",
-        xtol=1e-10, ftol=1e-10, max_nfev=400,
-    )
-    params = [p.copy() for p in split(sol.x)]
+    params = frozen_params + opt_params
 
     # ---- report -------------------------------------------------------
     model = ParametricModel(stages=stages, params=params, strength=strength)

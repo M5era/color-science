@@ -94,6 +94,8 @@ def search_lut_match(
     lut: CubeLUT,
     max_nodes: int = 10,
     min_gain: float = 0.005,
+    broad_bias: float = 0.15,
+    neutral_tone: bool = True,
     pool: list[type] | None = None,
     source_points: np.ndarray | None = None,
     n_samples: int = 1500,
@@ -119,6 +121,7 @@ def search_lut_match(
         return search_chain(
             source_points, display_targets,
             pool=pool, max_nodes=max_nodes, min_gain=min_gain,
+            broad_bias=broad_bias, neutral_tone=neutral_tone,
             backend=backend, regularization=regularization,
             display_transform=drt_math, verbose=verbose,
         )
@@ -127,11 +130,13 @@ def search_lut_match(
         return search_chain(
             source_points, display_targets,
             pool=pool, max_nodes=max_nodes, min_gain=min_gain,
+            broad_bias=broad_bias, neutral_tone=neutral_tone,
             backend=backend, regularization=regularization,
             output_transform=drt, verbose=verbose,
         )
     return search_chain(
         source_points, targets,
         pool=pool, max_nodes=max_nodes, min_gain=min_gain,
+        broad_bias=broad_bias, neutral_tone=neutral_tone,
         backend=backend, regularization=regularization, verbose=verbose,
     )

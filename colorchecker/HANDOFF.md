@@ -165,6 +165,24 @@ emissive overlays, CSV export, project save/load.
   solve_parametric warm start. Validated: recovers a hidden 4-tool
   chain exactly, in order, error 0.179 -> 0.002 after 4 nodes; ~40s
   for 8 nodes / 1500 samples / scipy on the cloud box.
+  - **broad_bias** (default 0.15, CLI --broad-bias): single-hue tools
+    (Sector family, Fine — `Stage.local_tool=True`) get their audition
+    gain discounted so BROAD tools win ties (Marc: "so much sector
+    stuff"). Acceptance/min_gain always use the real undiscounted gain,
+    and a stalled biased winner falls back to the raw best so the bias
+    can never prematurely stop the search.
+  - **neutral_tone / grey-locked tone** (default ON, CLI --free-tone
+    to disable; Marc: "contrast adjusted based on grey scale only"):
+    before the free search, ONE Contrast Boost is fitted on the
+    NEUTRAL samples only and FROZEN as node 1; Contrast Boost then
+    leaves the audition pool. Every other tool is neutral-safe by
+    construction, so the grey match is exact and can't be disturbed.
+    Implemented via solve_parametric's new `frozen=N` arg (first N
+    stages applied but never optimized).
+  - **crash insurance**: search mode writes a `<out>.chain.json`
+    (stages + params) as soon as the search finishes, and the drx
+    template is now opened BEFORE the solve (fail-fast on missing
+    zstandard) — a failed export can never cost the search again.
 - **Chain presets** incl. "Chromogen match (LGG prep -> Chromogen
   chain)" and "Chromogen film look (full stack)" (Marc's canonical
   order: sectors BEFORE Highlight Bleach; duplicates allowed).
@@ -183,23 +201,32 @@ bakes any stage by slider name for that).
 `python3 -m tools.lut_match --lut look.cube [--backend torch]
 [--drt drt.cube] [--target-is-display] [--out fitted.cube]
 [--drx-out fitted.drx] [--source-csv patches.csv]`
-- **--search --max-nodes N [--min-gain 0.005] --deliver**: the
-  free-order search mode (see above); --deliver drops the fitted
-  .cube AND .drx straight into ~/Downloads (for local runs on the
-  Mac). Search+drx: the .drx can only run the template's node order,
-  so if the discovered order differs the CLI REFITS the found stage
-  set in template order (warm start) and reports both errors; unused
-  template look-nodes are reset to identity so the exported grade is
-  exactly the fitted chain.
+- **--search --max-nodes N [--min-gain 0.005] [--broad-bias 0.15]
+  [--free-tone] --deliver**: the free-order search mode (see above);
+  --deliver drops the fitted .cube AND .drx into ~/Downloads (for
+  local runs on the Mac). Search+drx: the .drx can only run the
+  template's node order, so if the discovered order differs the CLI
+  REFITS the found stage set in template order (warm start) and
+  reports both errors; unused template look-nodes are reset to
+  identity so the exported grade is exactly the fitted chain.
+- **--drt-math** = the ANALYTIC openDRT (app/core/opendrt.py, Marc's
+  exact config) instead of a baked --drt cube: display-domain loss,
+  NO inversion, NO unreachable-dropping. This is what surfaced
+  Contrast Boost in the genesis match (the cube sandwich had been
+  deleting the tone evidence). scipy backend only (no torch mirror
+  yet). Recommended genesis command:
+  `python3 -m tools.lut_match --lut test_luts/genesis_e100_base.cube
+  --drt-math --target-is-display --search --max-nodes 20 --deliver`
 - --drt = display-referred sandwich (fit in log under the DRT, errors
   through it, unreachable targets dropped).
 - --target-is-display = the look LUT already renders to display
   (genesis!): solve DRT(chain(x)) ~= lut(x).
-- Real-world result (genesis e100 under openDRT): display error
-  0.224 -> 0.109 mean; residual is mostly TONE (two different
-  renderings); 484/1395 unreachable (cube inversion + gamut). See
-  ROADMAP "first real run" section. Bound-pinned params = wrong
-  composition smell.
+- Real-world result (genesis e100 under openDRT): OLD cube sandwich
+  0.224 -> 0.109 mean, 484/1395 unreachable. NEW analytic --drt-math
+  + free search (20 nodes, Marc's local run): 0 dropped, display error
+  0.199 -> 0.060, and Contrast Boost is now picked (node 2, +0.837).
+  Still bound-pinned sector params + a noise-gain spike (max ×457) =
+  next-session cleanup (noise-gain-aware search).
 
 ### PowerGrade (.drx) — GENERATION WORKS, VERIFIED IN MARC'S RESOLVE
 `app/core/drx.py`: XML wrapper -> prefix byte + zstd protobuf bodies;
@@ -240,10 +267,23 @@ a noise-gain penalty or cap in the search), several bound-pinned
 sector params, worst patch 0.335.
 
 ### Next steps (new priority order)
-1. Torch mirror of the openDRT port -> backprop with display loss
+1. **CONTRAST BOOST v2 — more shaping power (Marc, 2026-07-21, NOT yet
+   started).** The current ContrastBoostStage makes only a smooth,
+   SOFT S — never a strong S. Marc wants explicit TOE + SHOULDER
+   shaping and a MID-POINT control. Reference uploaded:
+   `reference/Film_Curve_1.dctl` (a density/Dmin/Dmax/gamma film-curve
+   model per channel — quite different approach, may inspire the
+   params). This is why the grey-locked tone still lands a bit softer
+   than genesis. New params likely: toe strength, shoulder strength,
+   pivot/mid. Keep identity = do-nothing and update torch mirror +
+   DCTL + the neutral-tone freeze path together.
+2. Torch mirror of the openDRT port -> backprop with display loss
    (currently --drt-math is scipy-only; --backend torch raises early).
-2. Noise-gain-aware search (penalize auditions that amplify noise).
-3. Matching-tab UI hookup for the chain search + drt-math.
+3. Noise-gain-aware search (penalize auditions that amplify noise) —
+   the genesis run still pins some sector params at bounds + spikes
+   noise gain.
+4. Matching-tab UI hookup for the chain search + drt-math + the new
+   toggles (broad-bias, grey-locked tone).
 
 ## 5b. (historical) the original port plan
 

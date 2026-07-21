@@ -544,6 +544,7 @@ class _SectorStage(Stage):
 
     # subclasses override index 1 with their tool's slider name
     param_names = ["Hue", "Amount", "Falloff", "Zone", "Pivot", "Chroma"]
+    local_tool = True
 
     _AMOUNT_ID = 0.0
     _AMOUNT_LO = -1.0

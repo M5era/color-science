@@ -19,6 +19,10 @@ class Stage(ABC):
     # deviating from identity as expensive — used for prep stages that
     # should only move when it makes the fit a LOT easier
     reg_scale: float = 1.0
+    # True for single-hue "surgical" tools (the Sector family, Fine
+    # zones): the chain search discounts their auditions by its
+    # broad_bias so broader adjustments get a slight preference
+    local_tool: bool = False
 
     @abstractmethod
     def identity(self) -> np.ndarray: ...

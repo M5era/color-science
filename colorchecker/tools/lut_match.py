@@ -52,6 +52,17 @@ def main() -> None:
                         help="search mode: minimum relative fit "
                              "improvement a new node must deliver "
                              "(0.005 = 0.5%%)")
+    parser.add_argument("--broad-bias", type=float, default=0.15,
+                        help="search mode: discount applied to "
+                             "single-hue (Sector) tool auditions so "
+                             "broad tools get a slight preference; "
+                             "0 disables (default 0.15)")
+    parser.add_argument("--free-tone", action="store_true",
+                        help="search mode: DISABLE the grey-scale-"
+                             "locked tone (by default one Contrast "
+                             "Boost is fitted on the neutral ramp "
+                             "only, frozen as node 1, and removed "
+                             "from the audition pool)")
     parser.add_argument("--deliver", action="store_true",
                         help="write the fitted .cube and .drx into "
                              "~/Downloads (implies --out/--drx-out)")
@@ -104,6 +115,15 @@ def main() -> None:
     if args.source_csv:
         source_points, _ = load_patch_csv(args.source_csv)
 
+    # fail fast on the export prerequisites BEFORE the expensive solve:
+    # a 20-node search once completed and then died at the drx step on
+    # a missing zstandard module
+    drx_template_obj = None
+    if args.drx_out:
+        from app.core.drx import DrxTemplate  # needs zstandard
+
+        drx_template_obj = DrxTemplate(args.drx_template)
+
     drt_math = None
     if args.drt_math:
         from app.core.opendrt import OpenDRTModel
@@ -121,6 +141,8 @@ def main() -> None:
             lut,
             max_nodes=args.max_nodes,
             min_gain=args.min_gain,
+            broad_bias=args.broad_bias,
+            neutral_tone=not args.free_tone,
             source_points=source_points,
             n_samples=args.samples,
             backend=args.backend,
@@ -129,6 +151,19 @@ def main() -> None:
             verbose=True,
             drt_math=drt_math,
         )
+        # insurance: persist the found chain immediately, so a failed
+        # export step can never cost the search
+        if args.out or args.drx_out:
+            import json
+
+            chain_path = Path(args.out or args.drx_out).with_suffix(
+                ".chain.json")
+            chain_path.write_text(json.dumps({
+                "lut": args.lut,
+                "stages": [s.name for s in result.model.stages],
+                "params": [p.tolist() for p in result.model.params],
+            }, indent=2))
+            print(f"wrote {chain_path} (chain spec)")
         print()
         print("Search log:")
         for entry in result.search_log:
@@ -183,10 +218,9 @@ def main() -> None:
         print(f"wrote {args.out} ({args.size}^3) — A/B against {args.lut}")
 
     if args.drx_out:
-        from app.core.drx import DrxTemplate
         from app.core.stages import STAGE_POOL as _POOL
 
-        drx = DrxTemplate(args.drx_template)
+        drx = drx_template_obj
 
         export_result = result
         if args.search and len(result.model.stages) > 1:

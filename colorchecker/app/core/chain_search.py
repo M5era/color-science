@@ -29,7 +29,7 @@ node was chosen because it reduced the residual best at its position.
 import numpy as np
 from scipy.optimize import least_squares
 
-from app.core.chromogen import CHROMOGEN_STAGES
+from app.core.chromogen import CHROMOGEN_STAGES, ContrastBoostStage
 from app.core.lut import CubeLUT
 from app.core.match import invert_lut_at
 from app.core.parametric import (
@@ -127,6 +127,8 @@ def search_chain(
     pool: list[type] | None = None,
     max_nodes: int = 10,
     min_gain: float = 0.005,
+    broad_bias: float = 0.15,
+    neutral_tone: bool = True,
     output_transform: CubeLUT | None = None,
     display_transform=None,
     regularization: float = 1e-3,
@@ -137,6 +139,22 @@ def search_chain(
     repetition) from `pool`, then polish + report via solve_parametric.
     `min_gain` is the relative fit-error improvement a new node must
     deliver to be accepted (0.005 = 0.5%).
+
+    `broad_bias` gives the BROAD tools a slight preference (Marc,
+    2026-07-21: "so much sector stuff"): auditions by single-hue tools
+    (stage.local_tool — the Sector family, Fine zones) have their gain
+    discounted by this fraction when picking the round's winner, so a
+    sector move must beat the best broad move by that margin to be
+    chosen. 0 disables; the ACCEPTANCE test (min_gain) always uses the
+    winner's real, undiscounted gain.
+
+    `neutral_tone` (Marc, 2026-07-21: "contrast adjusted based on grey
+    scale only"): before the free search, ONE Contrast Boost is fitted
+    against the NEUTRAL samples only and FROZEN as node 1 — the grey
+    scale sets the tone, the search explains color on top, and since
+    every other pool tool is neutral-safe by construction the grey
+    match can never be disturbed. Contrast Boost leaves the audition
+    pool in this mode.
 
     `display_transform` (callable) switches to the ANALYTIC
     display-referred mode: `target` is display values, every audition
@@ -173,35 +191,72 @@ def search_chain(
 
     stages: list[Stage] = []
     params: list[np.ndarray] = []
-    cur = src
-    err = _fit_err(fwd(cur), fit_target)
+    frozen_n = 0
     log = []
+    cur = src
+
+    # ---- grey-scale-locked tone: fit ONE Contrast Boost on the
+    # neutral samples only and freeze it as node 1
+    if neutral_tone:
+        neutral = np.all(src == src[:, :1], axis=1)
+        if neutral.sum() >= 8:
+            con = ContrastBoostStage()
+            p, _ = _fit_candidate(con, src[neutral], fit_target[neutral],
+                                  regularization, fwd, max_nfev=200)
+            stages.append(con)
+            params.append(p)
+            frozen_n = 1
+            pool = [cls for cls in pool
+                    if not issubclass(cls, ContrastBoostStage)]
+            cur = con.apply(src, p)
+            err0 = _fit_err(fwd(cur), fit_target)
+            log.append((1, "Contrast Boost [grey-scale-locked tone]", err0))
+            if verbose:
+                print(f"  node 1: + Contrast Boost (grey-scale-locked "
+                      f"tone)  fit error -> {err0:.5f}")
+        else:
+            log.append("neutral_tone skipped: no neutral samples in source")
+
+    src_after_frozen = cur
+    err = _fit_err(fwd(cur), fit_target)
 
     while len(stages) < max_nodes:
-        best = None  # (err, stage, params)
+        best = None       # winner by DISCOUNTED gain
+        best_real = None  # winner by real gain (fallback for the stop test)
         for cls in pool:
             stage = cls()
             p, e = _fit_candidate(stage, cur, fit_target, regularization, fwd)
-            if best is None or e < best[0]:
-                best = (e, stage, p)
+            gain = err - e
+            adj = gain * (1.0 - broad_bias) if stage.local_tool else gain
+            if best is None or adj > best[0]:
+                best = (adj, e, stage, p)
+            if best_real is None or gain > best_real[0]:
+                best_real = (gain, e, stage, p)
 
-        gain = (err - best[0]) / max(err, 1e-12)
+        if (err - best[1]) / max(err, 1e-12) < min_gain:
+            # the biased winner stalls — fall back to the raw best so
+            # the bias can never stop a search that still has real gains
+            best = (None, *best_real[1:])
+        gain = (err - best[1]) / max(err, 1e-12)
         if gain < min_gain:
-            log.append(f"stopped: best candidate ({best[1].name}) gains "
+            log.append(f"stopped: best candidate ({best[2].name}) gains "
                        f"{gain * 100.0:.2f}% < {min_gain * 100.0:.2f}%")
             break
 
-        stages.append(best[1])
-        params.append(best[2])
-        params = _joint_refine(stages, params, src, fit_target,
-                               regularization, fwd)
+        stages.append(best[2])
+        params.append(best[3])
+        # refine everything EXCEPT the frozen grey-locked tone node
+        refined = _joint_refine(stages[frozen_n:], params[frozen_n:],
+                                src_after_frozen, fit_target,
+                                regularization, fwd)
+        params = params[:frozen_n] + refined
         cur = src
         for stage, p in zip(stages, params):
             cur = stage.apply(cur, p)
         err = _fit_err(fwd(cur), fit_target)
-        log.append((len(stages), best[1].name, err))
+        log.append((len(stages), best[2].name, err))
         if verbose:
-            print(f"  node {len(stages)}: + {best[1].name}  "
+            print(f"  node {len(stages)}: + {best[2].name}  "
                   f"fit error -> {err:.5f}")
     else:
         log.append(f"stopped: max_nodes ({max_nodes}) reached")
@@ -220,6 +275,7 @@ def search_chain(
         regularization=regularization,
         backend=backend,
         init_params=params,
+        frozen=frozen_n,
     )
     result.search_log = log
     return result

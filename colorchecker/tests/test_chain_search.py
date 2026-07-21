@@ -96,6 +96,28 @@ def test_search_display_domain_analytic_drt_finds_contrast():
     assert result.pairs_unreachable == 0  # nothing is ever dropped
 
 
+def test_grey_locked_tone_matches_neutrals_exactly():
+    """Marc: 'contrast adjusted based on grey scale only'. The tone
+    node is fitted on neutrals, frozen, and no second Contrast Boost
+    enters the chain — so the grey-scale match is exact and stays."""
+    from app.core.opendrt import OpenDRTModel
+
+    drt = OpenDRTModel()
+    neutrals = np.linspace(0.02, 0.95, 40)[:, None].repeat(3, axis=1)
+    x = np.concatenate([_source(250), neutrals])
+    con = ContrastBoostStage()
+    target = drt(con.apply(x, _with(con, **{"Contrast Boost": 0.7})))
+
+    result = search_chain(x, target, max_nodes=4, min_gain=0.01,
+                          display_transform=drt)
+    assert isinstance(result.model.stages[0], ContrastBoostStage)
+    names = [s.name for s in result.model.stages]
+    assert names.count("Contrast Boost") == 1  # left the pool after node 1
+    mask = np.all(x == x[:, :1], axis=1)
+    fitted_display = drt(result.model(x[mask]))
+    np.testing.assert_allclose(fitted_display, target[mask], atol=5e-3)
+
+
 def test_search_refuses_identity_target():
     x = _source()
     with pytest.raises(ValueError, match="nothing worth adding"):
@@ -132,3 +154,19 @@ def test_cli_search_and_deliver(tmp_path, monkeypatch):
     # the default template has ColourSaturation nodes, so the drx side
     # must have been written too
     assert (downloads / "look_fit.drx").exists()
+    # the chain spec is persisted as crash insurance
+    import json
+    spec = json.loads((downloads / "look_fit.chain.json").read_text())
+    assert spec["stages"] and len(spec["params"]) == len(spec["stages"])
+
+
+def test_search_broad_bias_prefers_broad_tools():
+    """A global sat boost with a slight hue-local wrinkle: with a
+    heavy bias the search must explain it with broad tools only."""
+    x = _source(200)
+    sat = ColourSaturationStage()
+    target = sat.apply(x, _with(sat, **{"R/G": 1.5, "Y/B": 1.4}))
+    result = search_chain(x, target, max_nodes=3, min_gain=0.005,
+                          broad_bias=0.9)
+    assert all(not s.local_tool for s in result.model.stages)
+    assert result.error_after < result.error_before / 5

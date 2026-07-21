@@ -150,7 +150,7 @@ def _apply_chain(stages, params, x):
 
 
 def _refine_chain(stages, params, src, fit_target, regularization, fwd,
-                  frozen_n, grey_anchor, unfreeze_on_tint):
+                  frozen_n, grey_anchor, unfreeze_on_tint, max_nfev=150):
     """Joint-refine a chain. Normally the frozen tone prefix is held and
     only stages[frozen_n:] move. But once a Neutral Tint (which is NOT
     neutral-safe — it tints greys) is present and `unfreeze_on_tint` is
@@ -163,30 +163,50 @@ def _refine_chain(stages, params, src, fit_target, regularization, fwd,
         reg_scales = ([_TONE_ANCHOR_REG]
                       + [s.reg_scale for s in stages[frozen_n:]])
         return _joint_refine(stages, params, src, fit_target,
-                             regularization, fwd,
+                             regularization, fwd, max_nfev=max_nfev,
                              anchors=anchors, reg_scales=reg_scales)
     prefix = _apply_chain(stages[:frozen_n], params[:frozen_n], src)
     refined = _joint_refine(stages[frozen_n:], params[frozen_n:],
-                            prefix, fit_target, regularization, fwd)
+                            prefix, fit_target, regularization, fwd,
+                            max_nfev=max_nfev)
     return list(params[:frozen_n]) + refined
 
 
 def _prune_chain(stages, params, src, fit_target, regularization, fwd,
-                 frozen_n, grey_anchor, unfreeze_on_tint, prune_tol, log):
-    """Drop redundant nodes: greedily remove the node whose removal (after
-    re-refining the rest) keeps the fit within `prune_tol` of the current
-    error, choosing among droppable nodes the one that most REDUCES the
+                 frozen_n, grey_anchor, unfreeze_on_tint, prune_tol, log,
+                 prune_screen_k=4, verbose=False):
+    """Drop redundant nodes. Each round: CHEAP-screen every node by the
+    error its removal causes with NO re-fit (one forward pass), then
+    re-refine only the `prune_screen_k` most-redundant candidates and drop
+    the one that both stays within `prune_tol` and most REDUCES the
     chain's max noise gain (Marc: a node that barely helps the fit but
-    spikes noise is the prime candidate). Never prunes the frozen tone."""
+    spikes noise is the prime candidate). `prune_screen_k <= 0` disables
+    the screen — every candidate is fully re-refined every round (the
+    thorough, slow mode). Never prunes the frozen tone."""
     probe = src[:400]  # subsample for the noise-gain estimate (speed)
-    while len(stages) > frozen_n + 1:
+    full = prune_screen_k <= 0
+    refine_nfev = 150 if full else 60   # thorough vs fast per-candidate refit
+    rounds = 0
+    while len(stages) > frozen_n + 1 and rounds < len(stages):
+        rounds += 1
         base_err = _fit_err(fwd(_apply_chain(stages, params, src)), fit_target)
-        best = None  # (noise_max, err, idx, stages', params')
+        # cheap screen: no-refit error of removing each node
+        screen = []
         for i in range(frozen_n, len(stages)):
             ns = stages[:i] + stages[i + 1:]
             npar = params[:i] + params[i + 1:]
+            e = _fit_err(fwd(_apply_chain(ns, npar, src)), fit_target)
+            screen.append((e, i))
+        screen.sort()
+        candidates = screen if full else screen[:prune_screen_k]
+
+        best = None  # (noise_max, err, idx, stages', params')
+        for _, i in candidates:
+            ns = stages[:i] + stages[i + 1:]
+            npar = params[:i] + params[i + 1:]
             npar = _refine_chain(ns, npar, src, fit_target, regularization,
-                                 fwd, frozen_n, grey_anchor, unfreeze_on_tint)
+                                 fwd, frozen_n, grey_anchor,
+                                 unfreeze_on_tint, max_nfev=refine_nfev)
             err = _fit_err(fwd(_apply_chain(ns, npar, src)), fit_target)
             if err <= base_err * (1.0 + prune_tol):
                 ng = noise_gain(
@@ -196,8 +216,11 @@ def _prune_chain(stages, params, src, fit_target, regularization, fwd,
         if best is None:
             break
         _, err, i, ns, npar = best
-        log.append(f"pruned node {i + 1} ({stages[i].name}) — "
-                   f"fit {base_err:.5f} -> {err:.5f}, noise max -> {best[0]:.1f}")
+        msg = (f"pruned node {i + 1} ({stages[i].name}) — "
+               f"fit {base_err:.5f} -> {err:.5f}, noise max -> {best[0]:.1f}")
+        log.append(msg)
+        if verbose:
+            print(f"  {msg}  ({len(ns)} nodes left)")
         stages, params = ns, npar
     return stages, params
 
@@ -216,6 +239,7 @@ def search_chain(
     backend: str = "scipy",
     local_search: bool = False,
     prune_tol: float = 0.01,
+    prune_screen_k: int = 4,
     verbose: bool = False,
 ) -> ParametricResult:
     """Search a chain of at most `max_nodes` nodes drawn freely (with
@@ -252,7 +276,9 @@ def search_chain(
     PRUNE pass drops any node whose removal keeps the fit within
     `prune_tol` (default 1%), preferring the drop that most reduces the
     chain's max noise gain. Off by default so it can be A/B'd against
-    the pure greedy path."""
+    the pure greedy path. `prune_screen_k` bounds the prune cost: each
+    round only the K cheapest-to-drop nodes get the expensive re-refit
+    (default 4); 0 = thorough mode, re-refit EVERY node every round."""
     # fail BEFORE the expensive search, not at the final polish (a
     # 20-node run once died at the very end on a missing torch)
     validate_backend(backend)
@@ -354,9 +380,13 @@ def search_chain(
 
     # local search: drop nodes that went redundant now the chain is built
     if local_search and len(stages) > frozen_n + 1:
+        if verbose:
+            mode = "full" if prune_screen_k <= 0 else f"screen {prune_screen_k}"
+            print(f"  local search: pruning redundant nodes ({mode})...")
         stages, params = _prune_chain(
             stages, params, src, fit_target, regularization, fwd,
-            frozen_n, grey_anchor, local_search, prune_tol, log)
+            frozen_n, grey_anchor, local_search, prune_tol, log,
+            prune_screen_k=prune_screen_k, verbose=verbose)
 
     if not stages:
         raise ValueError(

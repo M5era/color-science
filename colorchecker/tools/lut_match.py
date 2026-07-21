@@ -69,6 +69,11 @@ def main() -> None:
                              "Neutral Tint (tinted neutrals / crossover), "
                              "and prune redundant nodes after building "
                              "(noise-gain-aware). Off by default")
+    parser.add_argument("--prune-full", action="store_true",
+                        help="local search: re-refine EVERY node each "
+                             "prune round (thorough, slow) instead of the "
+                             "default fast screen of the 4 cheapest-to-"
+                             "drop candidates")
     parser.add_argument("--deliver", action="store_true",
                         help="write the fitted .cube and .drx into "
                              "~/Downloads (implies --out/--drx-out)")
@@ -150,6 +155,7 @@ def main() -> None:
             broad_bias=args.broad_bias,
             neutral_tone=not args.free_tone,
             local_search=args.local_search,
+            prune_screen_k=0 if args.prune_full else 4,
             source_points=source_points,
             n_samples=args.samples,
             backend=args.backend,

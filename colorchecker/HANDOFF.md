@@ -263,7 +263,19 @@ port module must carry the license; fine for private use).
 5. Tone pre-curve option for LUT matching (bridging different
    renderings — roadmap).
 6. drx node-graph surgery: DONE + VERIFIED in Resolve (2026-07-20).
-   Neutral Tint v2 still needs Marc's on-footage judgement (dye
-   convergence + focus pivot — reinstall dctl/NeutralTint.dctl).
+7. **Neutral Tint v3 (NEXT):** Marc is still not happy with v2 ("not
+   organic"). His clue: "I always liked how log state offset behaves"
+   + he uploaded Thatcher's LGGO_Temperature_Tint.dctl (saved in
+   reference/, MIT — thatcherfreeman/utility-dctls). Design
+   direction: tint as OFFSET IN LOG STATE along a temp/tint hue axis
+   (printer-light behavior — rides the tone curve, breathes with
+   exposure) instead of v2's constant-val reuleaux-chroma
+   convergence. Thatcher's blueprint: temp/tint -> per-channel RGB
+   gains via HSV, normalized (luminance/mean/max/min) so the chosen
+   norm stays put, applied through LGGO controls; the OFFSET wheel
+   (his scaling: (offset-25)*(1.233137392-0.5)/100) is the move Marc
+   likes. Keep v2's focus-pivot/falloff masking idea if possible;
+   the val-preserving constraint is probably what kills the organic
+   feel — a log offset changes luma slightly and that is THE POINT.
 7. Transfer-function dropdown for stops calibration (LogC3-only now).
 8. Curves-in-DRX experiment (old thread, still unrun).

@@ -28,8 +28,8 @@
 // this file. The curve/tone math is original to this project.
 
 DEFINE_UI_PARAMS(contrast, Contrast, DCTLUI_SLIDER_FLOAT, 1.0, 0.2, 3.0, 0.001)
-DEFINE_UI_PARAMS(white_offset, White Offset, DCTLUI_SLIDER_FLOAT, 1.0, 0.0, 2.0, 0.001)
-DEFINE_UI_PARAMS(black_offset, Black Offset, DCTLUI_SLIDER_FLOAT, 1.0, 0.0, 2.0, 0.001)
+DEFINE_UI_PARAMS(white_offset, White Offset, DCTLUI_SLIDER_FLOAT, 1.0, 0.5, 1.5, 0.001)
+DEFINE_UI_PARAMS(black_offset, Black Offset, DCTLUI_SLIDER_FLOAT, 1.0, 0.5, 1.5, 0.001)
 DEFINE_UI_PARAMS(mid_push, Mid Push, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 1.0, 0.001)
 // a checkbox (like Diachromie's panel), NOT a float slider — so it is
 // not a sliderFloatParam and the sliders below keep their 0..9 order.
@@ -121,8 +121,10 @@ __DEVICE__ float tone(float v, float contrast, float white, float black,
 
     float k_sh = CC_K0 * _powf(CC_K_RANGE, sh_roll);
     float k_to = CC_K0 * _powf(CC_K_RANGE, toe_roll);
-    float shoulder = softplusw(s, k_sh) - k_sh * LN2;
-    float toe = -(softplusw(-s, k_to) - k_to * LN2);
+    // one-sided, flat at the pivot: White bends ONLY highlights, Black
+    // ONLY shadows, neither touches the mid (pivot) contrast.
+    float shoulder = (s > 0.0f) ? (s - k_sh * _tanhf(s / k_sh)) : 0.0f;
+    float toe = (s < 0.0f) ? (s - k_to * _tanhf(s / k_to)) : 0.0f;
     float curve = contrast * (s + (white - 1.0f) * shoulder
                                 + (black - 1.0f) * toe);
 

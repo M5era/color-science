@@ -134,6 +134,21 @@ def test_contrast_curve_offsets_set_toe_and_shoulder_slopes():
     assert abs(slope[v < 0.14].mean() - 1.5) < 0.2    # steepened shadows
 
 
+def test_contrast_curve_offsets_are_independent():
+    # White Offset must touch ONLY highlights (leave shadows exactly as
+    # input) and Black Offset ONLY shadows, with neither changing the mid
+    # (pivot) contrast — the property that lets you shape a toe and a
+    # shoulder separately for a film S.
+    stage = ContrastCurveStage()
+    ramp = np.linspace(0.05, 0.95, 400)[:, None].repeat(3, axis=1)
+    below = ramp[:, 0] <= MID_GREY
+    above = ramp[:, 0] >= MID_GREY
+    white = stage.apply(ramp, _with(stage, **{"White Offset": 1.4}))
+    black = stage.apply(ramp, _with(stage, **{"Black Offset": 1.4}))
+    np.testing.assert_allclose(white[below], ramp[below], atol=1e-9)  # shadows kept
+    np.testing.assert_allclose(black[above], ramp[above], atol=1e-9)  # highlights kept
+
+
 def test_contrast_curve_flare_lifts_shadows_only():
     stage = ContrastCurveStage()
     p = _with(stage, Flare=2.0)

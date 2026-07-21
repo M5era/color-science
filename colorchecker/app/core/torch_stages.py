@@ -258,7 +258,6 @@ def _contrast_curve_scalar(v, p, stage):
     """Differentiable mirror of ContrastCurveStage._tone (float64)."""
     mg = chromogen.MID_GREY
     st = chromogen.STOP
-    ln2 = float(np.log(2.0))
     contrast, white, black = p[0], p[1], p[2]
     mid_push = p[3]
     sh_roll, toe_roll = p[4], p[5]
@@ -273,8 +272,9 @@ def _contrast_curve_scalar(v, p, stage):
 
     k_sh = stage._K0 * stage._K_RANGE ** sh_roll
     k_to = stage._K0 * stage._K_RANGE ** toe_roll
-    shoulder = _softplus_t(s, k_sh) - k_sh * ln2
-    toe = -(_softplus_t(-s, k_to) - k_to * ln2)
+    zero = torch.zeros_like(s)
+    shoulder = torch.where(s > 0.0, s - k_sh * torch.tanh(s / k_sh), zero)
+    toe = torch.where(s < 0.0, s - k_to * torch.tanh(s / k_to), zero)
     curve = contrast * (s + (white - 1.0) * shoulder + (black - 1.0) * toe)
 
     u = s / stage._MID_W

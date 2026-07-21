@@ -274,10 +274,11 @@ class ContrastCurveStage(Stage):
     All tonal work is in LogC3 code values, measured in STOPS from
     mid-grey. The pivot is fixed at mid-grey; sliders:
       Contrast        purely LINEAR slope through the pivot (1 = identity)
-      White Offset    highlight-side slope (x Contrast); 1 = neutral,
-                      <1 compresses highlights (shoulder), >1 expands
-      Black Offset    shadow-side slope (x Contrast); 1 = neutral,
-                      >1 deepens/steepens shadows (toe), <1 lifts
+      White Offset    highlight-only slope; 1 = neutral, <1 compresses
+                      highlights (shoulder), >1 expands. Touches ONLY the
+                      highlights and never the mid contrast (see _curve).
+      Black Offset    shadow-only slope; 1 = neutral, >1 deepens shadows
+                      (toe), <1 lifts. Independent of White Offset.
       Mid Push        a midtone bump; + lifts mids, - drops them
       Mid Compensate  0 = the bump lifts the pivot (Push acts like a
                       midtone exposure); 1 = the pivot is held and the
@@ -322,23 +323,25 @@ class ContrastCurveStage(Stage):
                          0.0, 1.0, 0.0, 0.0, 0.0])
 
     def bounds(self):
-        lo = [0.2, 0.0, 0.0, -1.0, -1.0, -1.0, 0.0, 0.0, 0.0, -3.0, 0.0]
-        hi = [2.0, 2.0, 2.0,  1.0,  1.0,  1.0, 1.0, 1.0, 2.0,  3.0, 1.0]
+        lo = [0.2, 0.5, 0.5, -1.0, -1.0, -1.0, 0.0, 0.0, 0.0, -3.0, 0.0]
+        hi = [2.0, 1.5, 1.5,  1.0,  1.0,  1.0, 1.0, 1.0, 2.0,  3.0, 1.0]
         return np.asarray(lo), np.asarray(hi)
 
     # ---- the scalar tone pipeline, run on val or on each RGB channel --
 
     def _curve(self, s, contrast, white, black, sh_roll, toe_roll):
-        """Linear contrast (slope = contrast) plus smooth highlight and
-        shadow deviations that bend the slope to contrast*white / *black
-        at the extremes. The deviation is inert when its offset == 1, so
-        the rolloff (knee width) only matters once a shoulder/toe exists.
+        """Linear contrast (slope = `contrast` AT THE PIVOT) plus ONE-SIDED
+        highlight and shadow deviations. Each deviation is exactly 0 on
+        the far side of the pivot and has zero slope at the pivot (C1),
+        so White Offset bends only the highlights, Black Offset only the
+        shadows, the two never interact, and neither changes the mid
+        contrast. The far-end slope reaches contrast*white / contrast*
+        black; the rolloff sets the knee width (how fast it gets there).
         """
-        ln2 = np.log(2.0)
         k_sh = self._K0 * self._K_RANGE ** sh_roll
         k_to = self._K0 * self._K_RANGE ** toe_roll
-        shoulder = _softplus(s, k_sh) - k_sh * ln2      # 0 at pivot, ->s highs
-        toe = -(_softplus(-s, k_to) - k_to * ln2)       # 0 at pivot, ->s lows
+        shoulder = np.where(s > 0.0, s - k_sh * np.tanh(s / k_sh), 0.0)
+        toe = np.where(s < 0.0, s - k_to * np.tanh(s / k_to), 0.0)
         return contrast * (s + (white - 1.0) * shoulder + (black - 1.0) * toe)
 
     def _midterm(self, s, mid_push, comp):

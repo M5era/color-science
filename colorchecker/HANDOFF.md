@@ -82,6 +82,32 @@ pipeline (Marc: "get the whole ML + powergrade pipeline working"):**
   one Resolve import to bless a synthesized grade on his machine.**
 - Full gate green: 177 tests (14 new filmic + synthesis coverage).
 
+**2026-07-22 evening — Filmic tuning round (Marc grading on footage;
+ALL of these are toolkit deviations from stock, mirrored in port +
+torch + dctl/FilmicContrast.dctl — reinstall the DCTL again):**
+
+- **NaN guards shipped**: Black Point 0.0 / White Point 1.02 blacked
+  the whole image (stock formula divides by zero at the section-off
+  limit; guards return input). Roll ratio floored at 1e-3 (float32-safe)
+  — WP near top + high Shoulder took pow(negative) = NaN in stock.
+- **White Point extended DOWN** (slider min -0.15; the 0.5 and 0.7
+  sanitize floors relaxed to pivot*1.1): stock dead-zoned the slider
+  below ~0.42; the white ceiling now fades to just above mid-grey.
+- **Shoulder** slider step 0.1 -> 0.001 (stock had 8 coarse detents —
+  the "shoulder isn't doing anything" feel; it also only shapes when
+  WP is engaged). **Shoulder Falloff** max 9 -> 9.7 (softness floor).
+- **Toe Falloff remapped** in preserve-midgray: stock squashed the
+  whole slider into internal strength 1.48..2.95; now 0.25..3.35 with
+  the default (falloff 2 -> 2.65) EXACTLY unchanged (Marc: toe works
+  fine, wants more shape range).
+- **Pop Mids is mid-grey COMPENSATED** (Marc: "compensate exposure to
+  keep mid grey intact"): a global counter-gain re-anchors a mid-grey
+  pixel exactly where the tone block put it, for any Pop Mids value —
+  Pop Mids and Exposure are now fully DECOUPLED, so the ML needs no
+  special ordering for the pair (Marc floated "tweak all other params
+  first"; with the compensation that's unnecessary).
+- Gate: 180 green.
+
 **Open / next (in priority order):**
 
 1. **Marc verifies in Resolve**: (a) install the committed

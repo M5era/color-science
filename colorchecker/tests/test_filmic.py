@@ -135,12 +135,58 @@ def test_pin_ends_returns_extremes_to_input():
     assert err_pin[0, 0] < err_free[0, 0]
 
 
-def test_pop_mids_darkens_the_band_only():
+def test_pop_mids_darkens_the_band_and_holds_mid_grey_exactly():
+    """Marc 2026-07-22: 'compensate exposure to keep mid grey intact' —
+    the toolkit adds a global counter-gain so Pop Mids NEVER moves a
+    mid-grey pixel (stock drifted it via the band feather), fully
+    decoupling Pop Mids from Exposure in the fit."""
     s = FilmicContrastStage()
     x = np.array([[0.25] * 3, [MID_GREY] * 3])
+    for pop in (-0.8, 0.5, 1.0, 3.0):
+        out = s.apply(x, _with(s, **{"Pop Mids": pop}))
+        np.testing.assert_allclose(out[1], x[1], atol=1e-12,
+                                   err_msg=f"pop {pop}")  # mid EXACT
     out = s.apply(x, _with(s, **{"Pop Mids": 1.0}))
     assert out[0, 0] < x[0, 0] - 1e-4     # in the band: bitten down
-    np.testing.assert_allclose(out[1], x[1], atol=5e-3)  # mid ~held
+    # and it stays exact with the tone curve engaged (curved mid anchor)
+    p = _with(s, Contrast=1.6, **{"Pop Mids": 2.0, "White Point": 0.8})
+    base = s.apply(np.array([[MID_GREY] * 3]),
+                   _with(s, Contrast=1.6, **{"White Point": 0.8}))
+    popped = s.apply(np.array([[MID_GREY] * 3]), p)
+    np.testing.assert_allclose(popped, base, atol=1e-12)
+
+
+def test_white_point_extended_down_keeps_pulling():
+    """Marc 2026-07-22: extended range going down — the stock floors
+    dead-zoned the slider below ~0.42; the ceiling must now keep
+    dropping monotonically toward mid-grey."""
+    s = FilmicContrastStage()
+    top = np.array([[1.0, 1.0, 1.0]])
+    ceilings = [s.apply(top, _with(s, **{"White Point": wp}))[0, 0]
+                for wp in (0.8, 0.42, 0.2, 0.0, -0.15)]
+    assert all(b < a - 1e-3 for a, b in zip(ceilings, ceilings[1:])), ceilings
+    assert ceilings[-1] < 0.55            # a real fade at the bottom
+
+
+def test_shoulder_shapes_the_roll_when_wp_engaged():
+    s = FilmicContrastStage()
+    x = np.array([[0.7, 0.7, 0.7]])
+    early = s.apply(x, _with(s, **{"White Point": 0.6, "Shoulder": 0.45}))
+    late = s.apply(x, _with(s, **{"White Point": 0.6, "Shoulder": 0.95}))
+    # roll starting below 0.7 compresses it; starting above leaves it
+    assert late[0, 0] > early[0, 0] + 1e-3
+
+
+def test_toe_falloff_widened_range_changes_shape():
+    """The stock preserve-midgray squashed the whole falloff slider into
+    strength 1.48..2.95; the remap (0.25..3.35) must give visibly
+    different toes at the extremes while keeping the default anchored."""
+    s = FilmicContrastStage()
+    x = np.array([[0.12, 0.12, 0.12]])
+    bp = {"Black Point": 0.8}
+    sharp = s.apply(x, _with(s, **bp, **{"Toe Falloff": 0.0}))
+    soft = s.apply(x, _with(s, **bp, **{"Toe Falloff": 10.0}))
+    assert abs(sharp[0, 0] - soft[0, 0]) > 5e-3
 
 
 def test_flare_lifts_shadows():

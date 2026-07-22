@@ -12,6 +12,17 @@ mirrored in the Python port (app/core/filmic.py):
     slider past ~0.775 (Marc 2026-07-22: "extend the range to 1, maybe 1.5").
   * White Point slider max 1.02 (stock 1.018): 1.02 sanitizes to exactly
     1.0 = the section fully OFF, which is the solver's identity value.
+  * apply_white_point / apply_black_point return the input unchanged at
+    point >= 1.0 — the exact-identity limit; the stock formula divides
+    by zero there (Black Point 0.0 / White Point 1.02 blacked the image).
+  * the roll ratio is floored at 1e-3: with White Point near the top and
+    a high Shoulder the scaled point can fall BELOW the roll pivot and
+    the stock formula takes pow of a negative (NaN, image breaks); the
+    floored limit just flattens that end at the pivot instead.
+  * White Point extended DOWN: slider min -0.15 (stock 0.0) and the two
+    sanitize floors (0.5 pre, 0.7 in preserve-midgray) relaxed to the
+    pivot*1.1 safety limit — stock dead-zoned the slider below ~0.42;
+    now the white ceiling can pull down to just above mid-grey (fade).
 
 */
 DEFINE_UI_PARAMS(P_exposure,  Exposure 🌞, DCTLUI_SLIDER_FLOAT, 0.0, -4, 4.0, 0.001)
@@ -19,9 +30,9 @@ DEFINE_UI_PARAMS(contrast, Contrast 🌓 , DCTLUI_SLIDER_FLOAT, 1.0, 0.5, 3.0, 0
 DEFINE_UI_PARAMS(pivot, Relative Pivot 📌, DCTLUI_SLIDER_FLOAT, 0.0, -1, 1, 0.001)
 
 
-DEFINE_UI_PARAMS(p_white_point, ⚪ White Point  :⚪, DCTLUI_SLIDER_FLOAT, 1.015, 0.0, 1.02, 0.0001)
-DEFINE_UI_PARAMS(p_w_p_pivot, ├ Shoulder  ╭, DCTLUI_SLIDER_FLOAT, 0.6, 0.2, .997, 0.1)
-DEFINE_UI_PARAMS(p_shoulder_str,└ Fall off ╭   , DCTLUI_SLIDER_FLOAT, 6, 0.0, 9, 0.001)
+DEFINE_UI_PARAMS(p_white_point, ⚪ White Point  :⚪, DCTLUI_SLIDER_FLOAT, 1.015, -0.15, 1.02, 0.0001)
+DEFINE_UI_PARAMS(p_w_p_pivot, ├ Shoulder  ╭, DCTLUI_SLIDER_FLOAT, 0.6, 0.2, .997, 0.001)
+DEFINE_UI_PARAMS(p_shoulder_str,└ Fall off ╭   , DCTLUI_SLIDER_FLOAT, 6, 0.0, 9.7, 0.001)
 
 DEFINE_UI_PARAMS(p_black_point, ⚫ Black Point  :⚫, DCTLUI_SLIDER_FLOAT, 0.0001, 0.0, 1.5, 0.0001)
 DEFINE_UI_PARAMS(p_b_p_pivot, ├ Toe     ⌣  , DCTLUI_SLIDER_FLOAT, 0.5, 0.0, 0.8, 0.001)
@@ -928,9 +939,12 @@ __DEVICE__ float remapAsymSigned(float u, float negMin, float posMax) {
    
    float3 out = in; 
    float scale_factor;
+   // white_point == 1.0 is the exact-identity limit but the formula
+   // divides by zero there (reachable at the slider max 1.02) — return in
+   if (white_point >= 1.0f) { return in; }
    
    if (in.x > pivot) {
-    scale_factor = (1.0f - pivot) / _powf(_powf((white_point - pivot) / (1.0f - pivot), -1.0f*shoulder_strength) - 1.0f, 1.0f/shoulder_strength);
+    scale_factor = (1.0f - pivot) / _powf(_powf(_fmaxf((white_point - pivot) / (1.0f - pivot), 1e-3f), -1.0f*shoulder_strength) - 1.0f, 1.0f/shoulder_strength);
     
     out.x = pivot + scale_factor *((in.x - pivot) / scale_factor) / (_powf(1.0f + _powf((in.x - pivot) / scale_factor, shoulder_strength), 1.0f / shoulder_strength));
 
@@ -943,7 +957,7 @@ __DEVICE__ float remapAsymSigned(float u, float negMin, float posMax) {
         }
 
    if (in.y > pivot) {
-    scale_factor = (1.0f - pivot) / _powf(_powf((white_point - pivot) / (1.0f - pivot), -1.0f*shoulder_strength) - 1.0f, 1.0f/shoulder_strength);
+    scale_factor = (1.0f - pivot) / _powf(_powf(_fmaxf((white_point - pivot) / (1.0f - pivot), 1e-3f), -1.0f*shoulder_strength) - 1.0f, 1.0f/shoulder_strength);
     
     out.y = pivot + scale_factor *((in.y - pivot) / scale_factor) / (_powf(1.0f + _powf((in.y - pivot) / scale_factor, shoulder_strength), 1.0f / shoulder_strength));
 
@@ -956,7 +970,7 @@ __DEVICE__ float remapAsymSigned(float u, float negMin, float posMax) {
         }
 
    if (in.z > pivot) {
-    scale_factor = (1.0f - pivot) / _powf(_powf((white_point - pivot) / (1.0f - pivot), -1.0f*shoulder_strength) - 1.0f, 1.0f/shoulder_strength);
+    scale_factor = (1.0f - pivot) / _powf(_powf(_fmaxf((white_point - pivot) / (1.0f - pivot), 1e-3f), -1.0f*shoulder_strength) - 1.0f, 1.0f/shoulder_strength);
     
     out.z = pivot + scale_factor *((in.z - pivot) / scale_factor) / (_powf(1.0f + _powf((in.z - pivot) / scale_factor, shoulder_strength), 1.0f / shoulder_strength));
 
@@ -975,6 +989,9 @@ __DEVICE__ float remapAsymSigned(float u, float negMin, float posMax) {
   __DEVICE__ float3 apply_black_point (float3 in, float black_point, float pivot, float toe_str) {
 
       float3 out = in; 
+      // black_point == 1.0 is the exact-identity limit but the formula
+      // divides by zero there (reachable at Black Point slider 0.0) — return in
+      if (black_point >= 1.0f) { return in; }
       
       in.x = 1.0f - in.x;
       in.y = 1.0f - in.y ;
@@ -983,7 +1000,7 @@ __DEVICE__ float remapAsymSigned(float u, float negMin, float posMax) {
       float scale_factor;
       
     if (in.x > pivot) {
-    scale_factor = (1.0f - pivot) / _powf(_powf((black_point - pivot) / (1.0f - pivot), -1.0f*toe_str) - 1.0f, 1.0f/toe_str);
+    scale_factor = (1.0f - pivot) / _powf(_powf(_fmaxf((black_point - pivot) / (1.0f - pivot), 1e-3f), -1.0f*toe_str) - 1.0f, 1.0f/toe_str);
     
     out.x = pivot + scale_factor *((in.x - pivot) / scale_factor) / (_powf(1.0f + _powf((in.x - pivot) / scale_factor, toe_str), 1.0f / toe_str));
     }
@@ -996,7 +1013,7 @@ __DEVICE__ float remapAsymSigned(float u, float negMin, float posMax) {
     
     if (in.y > pivot) {
 
-    scale_factor = (1.0f - pivot) / _powf(_powf((black_point - pivot) / (1.0f - pivot), -1.0f*toe_str) - 1.0f, 1.0f/toe_str);
+    scale_factor = (1.0f - pivot) / _powf(_powf(_fmaxf((black_point - pivot) / (1.0f - pivot), 1e-3f), -1.0f*toe_str) - 1.0f, 1.0f/toe_str);
     
     out.y = pivot + scale_factor *((in.y - pivot) / scale_factor) / (_powf(1.0f + _powf((in.y - pivot) / scale_factor, toe_str), 1.0f / toe_str));
 
@@ -1009,7 +1026,7 @@ __DEVICE__ float remapAsymSigned(float u, float negMin, float posMax) {
         }
     
     if (in.z > pivot) {
-    scale_factor = (1.0f - pivot) / _powf(_powf((black_point - pivot) / (1.0f - pivot), -1.0f*toe_str) - 1.0f, 1.0f/toe_str);
+    scale_factor = (1.0f - pivot) / _powf(_powf(_fmaxf((black_point - pivot) / (1.0f - pivot), 1e-3f), -1.0f*toe_str) - 1.0f, 1.0f/toe_str);
     
     out.z = pivot + scale_factor *((in.z - pivot) / scale_factor) / (_powf(1.0f + _powf((in.z - pivot) / scale_factor, toe_str), 1.0f / toe_str));
 
@@ -1242,7 +1259,7 @@ __DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, float p
      p_black_point = 1.0f - p_black_point;
 
      p_b_p_pivot = _fminf((p_black_point - 0.05f) , p_b_p_pivot );
-     p_white_point = _fmaxf(p_white_point*.5f + 0.49f,0.5f);
+     p_white_point = p_white_point*.5f + 0.49f; // extended-down: floor 0.5 removed (pivot*1.1 + the 1e-3 ratio floor keep it safe)
      //p_white_point = _fmaxf(p_white_point , 0.5f);
      p_black_point = _fmaxf(p_black_point , 0.4f); // extended-range floor (stock 0.69)
 
@@ -1251,15 +1268,15 @@ __DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, float p
      if (preservemidgray_toggle == 1) {
        
        pivot = _fminf(0.90f, _fmaxf(0.05f, pivot));
-       p_white_point = _fmaxf(p_white_point, _fmaxf((pivot*1.1f), .7f));
+       p_white_point = _fmaxf(p_white_point, pivot*1.1f); // extended-down: hard 0.7 floor removed
        p_w_p_pivot = _fmaxf(_fmaxf(pivot*1.015f, p_w_p_pivot),p_w_p_pivot );
        p_b_p_pivot = _fmaxf((1.0f- _fmaxf(_fminf(0.6f,(1.0f-p_b_p_pivot)), pivot)), pivot);
        if (pivot > 0.7f) {
          p_b_p_pivot = _fminf(pivot, (1.0f - p_b_p_pivot) * pivot+0.5);
          }
        p_black_point = p_black_point* 0.45f +.55f;
-       p_toe_str = p_toe_str*.15f + (10.0f*.15f);
-       p_toe_str -= .05f;
+       p_toe_str = _fmaxf(p_toe_str*0.35f - 0.15f, 0.25f); // widened toe-shape range (stock 1.48..2.95 -> 0.25..3.35, default 2.65 unchanged)
+       
 
      } else {pivot = rememberPivot;}
 
@@ -1437,6 +1454,31 @@ float ramp_bandMask = saturate1(ramp_bigMask - ramp_smallMask);
 
  in_RGB = mixFloat3(bandMask, in_RGB, pop);
  ramp = mixFloat3(ramp_bandMask, ramp, popramp);
+
+// mid-grey compensation (toolkit addition, mirrored in app/core/filmic.py):
+// the band feather overlaps mid-grey, so Pop Mids alone drifts it; a global
+// counter-gain re-anchors mid-grey exactly where the tone curve put it,
+// decoupling Pop Mids from Exposure.
+if (p_popmid != 0.0f) {
+    float3 mg3 = LinToGamma(make_float3(0.18f, 0.18f, 0.18f), p_transfer_f);
+    float3 midpix = make_float3(mg3.x, mg3.x, mg3.x);
+    float3 mid_t = apply_white_point(midpix, p_white_point, p_w_p_pivot, p_shoulder_str);
+    mid_t = apply_black_point(mid_t, p_black_point, p_b_p_pivot, p_toe_str);
+    float3 mid_lin = apply_linear_contrastf3(mid_t, contrast, pivot);
+    mid_lin = mix_sat_lincon(mid_lin, mid_t, p_mix_sat, contrast, pivot);
+    float3 mid_roll = apply_rolling_contrastf3(mid_t, contrast, pivot);
+    mid_roll = mix_sat(mid_roll, mid_t, p_mix_sat, contrast, pivot);
+    float3 mid_pow = apply_power_sigmoid_contrastf3(mid_t, contrast, pivot);
+    mid_pow = mix_sat_powsig(mid_pow, mid_t, p_mix_sat, contrast, pivot);
+    float m0 = mid_lin.x * w_lin + mid_roll.x * w_roll + mid_pow.x * w_pow;
+    float bmid = _saturatef(HiLoMaskValue(midpix, pmask_big) - HiLoMaskValue(midpix, pmask_small));
+    float m0_lin = GammaToLin(make_float3(m0, m0, m0), p_transfer_f).x;
+    float mpop = LinToGamma(make_float3(m0_lin * powerf(2.0f, -p_popmid), 0.0f, 0.0f), p_transfer_f).x;
+    float vmid = m0 * (1.0f - bmid) + mpop * bmid;
+    float comp = m0_lin / GammaToLin(make_float3(vmid, vmid, vmid), p_transfer_f).x;
+    in_RGB = LinToGamma(GammaToLin(in_RGB, p_transfer_f) * comp, p_transfer_f);
+    ramp = LinToGamma(GammaToLin(ramp, p_transfer_f) * comp, p_transfer_f);
+}
 
 // exposure slider that works in linear
    if (exp_toggle == 0) {

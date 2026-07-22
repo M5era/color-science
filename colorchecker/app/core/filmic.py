@@ -25,6 +25,10 @@ produce NaNs):
     it. 1.02 sits just past the stock UI max 1.018 (== 0.999
     sanitized, visually identical); our themed DCTL copy widens the
     slider to match.
+  * White Point extended DOWN (slider min -0.15, stock 0.0): the two
+    sanitize floors (0.5 pre, 0.7 in preserve-midgray) relaxed to the
+    pivot*1.1 safety limit — stock dead-zoned the slider below ~0.42;
+    the white ceiling can now fade down to just above mid-grey.
   * Black Point slider range extended to 1.5 (stock caps at 0.5 —
     Marc, 2026-07-22: "extend the range to 1, maybe 1.5"). The stock
     sanitize floors the internal point at 0.69, which silently
@@ -34,10 +38,18 @@ produce NaNs):
     LogC3<->linear round-trips (a *1.0 gain / +0.0 offset changes
     nothing mathematically; skipping only avoids float round-trip
     noise so identity is exact).
-  * shoulder/toe scale bases are floored at 1e-9 before the fractional
-    power: where the stock tool would NaN (shoulder pivot beyond the
-    sanitized white point — reachable in the stock UI too), the port
-    returns the limit (the end flattens at the pivot).
+  * shoulder/toe roll ratios are floored at 1e-3 before the fractional
+    power (float32-safe at strength 10; same guard added to our DCTL):
+    where the stock tool NaNs (roll pivot beyond the scaled point) the
+    limit flattens that end at the pivot instead of breaking the image.
+  * Shoulder Falloff extended to 9.7 (reaches the softness floor) and
+    the Shoulder slider step fixed 0.1 -> 0.001; Toe Falloff remapped
+    in preserve-midgray from strength 1.48..2.95 to 0.25..3.35 (much
+    wider toe shapes, the default 2 -> 2.65 unchanged). Marc, 22 eve.
+  * Pop Mids is mid-grey COMPENSATED (not in the stock tool): a global
+    counter-gain re-anchors mid-grey exactly where the tone block put
+    it, decoupling Pop Mids from Exposure (Marc: "compensate exposure
+    to keep mid grey intact").
 """
 
 from __future__ import annotations
@@ -182,9 +194,11 @@ def apply_power_sigmoid_contrast(x, contrast, pivot):
 def _end_roll(v, point, pivot, strength):
     """The shared shoulder/toe compressor for values above `pivot`
     (mirror of the per-channel body of apply_white_point). `point` is
-    where the roll lands at input 1.0. Base floored at 1e-9: where the
-    stock DCTL NaNs (point <= pivot) the limit flattens at the pivot."""
-    base = max((point - pivot) / (1.0 - pivot), 1e-9)
+    where the roll lands at input 1.0. Base floored at 1e-3 (matching
+    the guard added to our DCTL copy — float32-safe at strength 10):
+    where the stock DCTL NaNs (point <= pivot) the limit flattens the
+    end at the pivot."""
+    base = max((point - pivot) / (1.0 - pivot), 1e-3)
     scale = (1.0 - pivot) / (base ** -strength - 1.0) ** (1.0 / strength)
     d = (v - pivot) / scale
     with np.errstate(invalid="ignore"):   # v < pivot -> NaN, discarded
@@ -327,48 +341,55 @@ def filmic_contrast(x: np.ndarray,
 
     black_point = 1.0 - black_point * 0.4
     b_p_pivot = min(black_point - 0.05, toe)
-    white_point = max(white_point * 0.5 + 0.49, 0.5)
+    # extended-down White Point: the stock 0.5 floor is removed (the
+    # pivot*1.1 limit below + the 1e-3 roll-ratio floor keep it safe)
+    white_point = white_point * 0.5 + 0.49
     # stock floor is 0.69 (dead-zones the slider past ~0.775); lowered
     # to 0.4 for the extended 1.5 range (see module docstring)
     black_point = max(black_point, 0.4)
 
     # --- Preserve Mid-gray (toggle ON, the default)
     pivot = min(0.90, max(0.05, pivot))
-    white_point = max(white_point, max(pivot * 1.1, 0.7))
+    # extended-down White Point: stock hard 0.7 floor removed
+    white_point = max(white_point, pivot * 1.1)
     w_p_pivot = max(max(pivot * 1.015, w_p_pivot), w_p_pivot)
     b_p_pivot = max(1.0 - max(min(0.6, 1.0 - b_p_pivot), pivot), pivot)
     if pivot > 0.7:
         b_p_pivot = min(pivot, (1.0 - b_p_pivot) * pivot + 0.5)
     black_point = black_point * 0.45 + 0.55
-    toe_str = toe_str * 0.15 + 10.0 * 0.15
-    toe_str -= 0.05
+    # widened toe-shape range (stock 1.48..2.95 -> 0.25..3.35; the
+    # default falloff 2 still maps to 2.65 exactly)
+    toe_str = max(toe_str * 0.35 - 0.15, 0.25)
 
     # --- flip Preserve Color for negative contrast (DCTL intuition fix)
     if contrast < 1.0:
         preserve_color = 1.0 - preserve_color
-
-    # --- white / black point compression
-    toned = apply_white_point(x, white_point, w_p_pivot, shoulder_str)
-    toned = apply_black_point(toned, black_point, b_p_pivot, toe_str)
-
-    # --- three contrast flavours, each with its CHEN sat-preserve mix
-    lin = apply_linear_contrast(toned, contrast, pivot)
-    lin = _mix_sat(lin, toned, preserve_color, contrast, pivot,
-                   apply_linear_contrast)
-    roll = apply_rolling_contrast(toned, contrast, pivot)
-    roll = _mix_sat(roll, toned, preserve_color, contrast, pivot,
-                    apply_rolling_contrast)
-    powsig = apply_power_sigmoid_contrast(toned, contrast, pivot)
-    powsig = _mix_sat(powsig, toned, preserve_color, contrast, pivot,
-                      apply_power_sigmoid_contrast)
 
     mix_n = float(np.clip(mix_contrast, 0.0, 1.0))
     w_lin = gauss_weight(mix_n, 0.00, 0.07)
     w_roll = gauss_weight(mix_n, 0.33, 0.18)
     w_pow = gauss_weight(mix_n, 1.00, 0.32)
     w_sum = max(w_lin + w_roll + w_pow, 1e-8)
-    out = (lin * (w_lin / w_sum) + roll * (w_roll / w_sum)
-           + powsig * (w_pow / w_sum))
+
+    def _tone_block(v):
+        """White/black rolls + the 3-way contrast blend (shared by the
+        image and the mid-grey reference pixel for the Pop Mids anchor)."""
+        toned = apply_white_point(v, white_point, w_p_pivot, shoulder_str)
+        toned = apply_black_point(toned, black_point, b_p_pivot, toe_str)
+        lin = apply_linear_contrast(toned, contrast, pivot)
+        lin = _mix_sat(lin, toned, preserve_color, contrast, pivot,
+                       apply_linear_contrast)
+        roll = apply_rolling_contrast(toned, contrast, pivot)
+        roll = _mix_sat(roll, toned, preserve_color, contrast, pivot,
+                        apply_rolling_contrast)
+        powsig = apply_power_sigmoid_contrast(toned, contrast, pivot)
+        powsig = _mix_sat(powsig, toned, preserve_color, contrast, pivot,
+                          apply_power_sigmoid_contrast)
+        return (lin * (w_lin / w_sum) + roll * (w_roll / w_sum)
+                + powsig * (w_pow / w_sum))
+
+    # --- white / black point compression + contrast
+    out = _tone_block(x)
 
     # --- pop mids: exposure bite in the band between two hi/lo masks,
     # measured on the CLEAN input
@@ -379,6 +400,25 @@ def filmic_contrast(x: np.ndarray,
         band = np.clip(big - small, 0.0, 1.0)[..., None]
         pop = lin_to_logc3(logc3_to_lin(out) * 2.0 ** -pop_mids)
         out = out * (1.0 - band) + pop * band
+
+        # mid-grey compensation (Marc, 2026-07-22, NOT in the stock
+        # tool): the band feather overlaps mid-grey slightly, so Pop
+        # Mids alone drifts it. A global counter-gain re-anchors a
+        # mid-grey pixel EXACTLY where the tone block put it, so Pop
+        # Mids and Exposure are fully decoupled — in the fit and on
+        # the desk. Mirrored in our DCTL copy.
+        midpix = np.full((1, 3), MID_GREY)
+        m0 = float(_tone_block(midpix)[0, 0])
+        b_mid = float(np.clip(
+            hi_lo_mask_value(midpix, 1.04, 1.85,
+                             lo_threshold + 1.61, lo_feather - 4.4)
+            - hi_lo_mask_value(midpix, 1.02, 1.51, -2.9, 4.5),
+            0.0, 1.0)[0])
+        m0_lin = float(logc3_to_lin(m0))
+        pop_mid = float(lin_to_logc3(m0_lin * 2.0 ** -pop_mids))
+        v_mid = m0 * (1.0 - b_mid) + pop_mid * b_mid
+        comp = m0_lin / float(logc3_to_lin(v_mid))
+        out = lin_to_logc3(logc3_to_lin(out) * comp)
 
     # --- exposure: linear gain at the end (exp_toggle == 0, default) —
     # achromatic in linear, moves mid-grey by exactly `exposure` stops
@@ -416,20 +456,30 @@ class FilmicContrastStage(Stage):
       Contrast          mid slope around the pivot (1 = identity)
       Pivot             relative to mid-grey (0 = mid-grey, LogC3)
       White Point       highlight compression target; 1.02 = OFF (the
-                        stock UI tops out at 1.018 ~= the same thing)
-      Shoulder          where the highlight roll starts (code value)
-      Shoulder Falloff  roll softness 0..9 (higher = softer knee)
+                        stock UI tops out at 1.018 ~= the same thing);
+                        extended DOWN to -0.15 — the ceiling can fade
+                        to just above mid-grey (stock floored at 0.7)
+      Shoulder          where the highlight roll starts (code value).
+                        NOTE it only shapes anything when White Point
+                        is engaged (< 1) — at WP ~1 the roll is
+                        invisible no matter where it starts
+      Shoulder Falloff  roll softness 0..9.7 (higher = softer knee;
+                        extended, stock stopped at 9)
       Black Point       shadow lift depth; 0 = OFF, extended range to
                         1.5 (stock 0.5; sanitize floor lowered, see
                         module docstring)
       Toe               where the shadow roll starts
-      Toe Falloff       toe softness 0..10
+      Toe Falloff       toe softness 0..10; remapped to a much wider
+                        internal range (0.25..3.35 vs stock 1.48..2.95,
+                        default unchanged)
       Linear Rolled     blends Linear -> Rolled -> PowerP contrast
       Preserve Color    0 = per-RGB (contrast moves saturation),
                         1 = luma-only via the CHEN model
       Pin Ends          pins extreme shadows/highlights back to the
                         untouched input (adaptive feather)
-      Pop Mids          darkens the off-mid band -> mids pop
+      Pop Mids          darkens the off-mid band -> mids pop; mid-grey
+                        compensated (toolkit addition), so it never
+                        moves mid-grey and is decoupled from Exposure
       Flare             signed milky-shadow linear offset
     """
 
@@ -460,12 +510,12 @@ class FilmicContrastStage(Stage):
 
     def bounds(self) -> tuple[np.ndarray, np.ndarray]:
         lo = np.array([-4.0, 0.5, -1.0,
-                       0.0, 0.2, 0.0,
+                       -0.15, 0.2, 0.0,
                        0.0, 0.0, 0.0,
                        0.0, 0.0, 0.0, -1.0,
                        -1.0])
         hi = np.array([4.0, 3.0, 1.0,
-                       1.02, 0.997, 9.0,
+                       1.02, 0.997, 9.7,
                        1.5, 0.8, 10.0,
                        1.0, 1.0, 1.0, 3.5,
                        1.0])

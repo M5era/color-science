@@ -657,11 +657,11 @@ def _filmic_contrast_apply(stage, x, p):
 
     black_point = 1.0 - black_point * 0.4
     b_p_pivot = torch.minimum(black_point - 0.05, toe)
-    white_point = torch.clamp(white_point * 0.5 + 0.49, min=0.5)
+    white_point = white_point * 0.5 + 0.49   # extended-down, no 0.5 floor
     black_point = torch.clamp(black_point, min=0.4)   # extended range floor
 
     pivot = torch.clamp(pivot, 0.05, 0.90)
-    white_point = torch.maximum(white_point, torch.clamp(pivot * 1.1, min=0.7))
+    white_point = torch.maximum(white_point, pivot * 1.1)  # no 0.7 floor
     w_p_pivot = torch.maximum(pivot * 1.015, w_p_pivot)
     b_p_pivot = torch.maximum(
         1.0 - torch.maximum(torch.clamp(1.0 - b_p_pivot, max=0.6), pivot),
@@ -669,37 +669,38 @@ def _filmic_contrast_apply(stage, x, p):
     if _v(pivot) > 0.7:
         b_p_pivot = torch.minimum(pivot, (1.0 - b_p_pivot) * pivot + 0.5)
     black_point = black_point * 0.45 + 0.55
-    toe_str = toe_str * 0.15 + 10.0 * 0.15
-    toe_str = toe_str - 0.05
+    toe_str = torch.clamp(toe_str * 0.35 - 0.15, min=0.25)  # widened range
 
     if _v(contrast) < 1.0:
         preserve_color = 1.0 - preserve_color
-
-    if _v(white_point) >= 1.0:
-        toned = x
-    else:
-        toned = _f_end_roll(x, white_point, w_p_pivot, shoulder_str)
-    if _v(black_point) < 1.0:
-        toned = 1.0 - _f_end_roll(1.0 - toned, black_point, b_p_pivot,
-                                  toe_str)
-
-    lin = _f_linear_contrast(toned, contrast, pivot)
-    lin = _f_mix_sat(lin, toned, preserve_color, contrast, pivot,
-                     _f_linear_contrast)
-    roll = _f_rolling_contrast(toned, contrast, pivot)
-    roll = _f_mix_sat(roll, toned, preserve_color, contrast, pivot,
-                      _f_rolling_contrast)
-    powsig = _f_power_sigmoid_contrast(toned, contrast, pivot)
-    powsig = _f_mix_sat(powsig, toned, preserve_color, contrast, pivot,
-                        _f_power_sigmoid_contrast)
 
     mix_n = torch.clamp(mix_contrast, 0.0, 1.0)
     w_lin = torch.exp(-0.5 * ((mix_n - 0.00) / 0.07) ** 2)
     w_roll = torch.exp(-0.5 * ((mix_n - 0.33) / 0.18) ** 2)
     w_pow = torch.exp(-0.5 * ((mix_n - 1.00) / 0.32) ** 2)
     w_sum = torch.clamp(w_lin + w_roll + w_pow, min=1e-8)
-    out = (lin * (w_lin / w_sum) + roll * (w_roll / w_sum)
-           + powsig * (w_pow / w_sum))
+
+    def _tone_block(v):
+        if _v(white_point) >= 1.0:
+            toned = v
+        else:
+            toned = _f_end_roll(v, white_point, w_p_pivot, shoulder_str)
+        if _v(black_point) < 1.0:
+            toned = 1.0 - _f_end_roll(1.0 - toned, black_point, b_p_pivot,
+                                      toe_str)
+        lin = _f_linear_contrast(toned, contrast, pivot)
+        lin = _f_mix_sat(lin, toned, preserve_color, contrast, pivot,
+                         _f_linear_contrast)
+        roll = _f_rolling_contrast(toned, contrast, pivot)
+        roll = _f_mix_sat(roll, toned, preserve_color, contrast, pivot,
+                          _f_rolling_contrast)
+        powsig = _f_power_sigmoid_contrast(toned, contrast, pivot)
+        powsig = _f_mix_sat(powsig, toned, preserve_color, contrast, pivot,
+                            _f_power_sigmoid_contrast)
+        return (lin * (w_lin / w_sum) + roll * (w_roll / w_sum)
+                + powsig * (w_pow / w_sum))
+
+    out = _tone_block(x)
 
     mid_log2 = float(np.log2(F.MID_GREY))
     if _v(pop_mids) != 0.0:
@@ -709,6 +710,20 @@ def _filmic_contrast_apply(stage, x, p):
         band = torch.clamp(big - small, 0.0, 1.0)[..., None]
         pop = _f_logc3_encode(_f_logc3_decode(out) * 2.0 ** -pop_mids)
         out = out * (1.0 - band) + pop * band
+
+        # mid-grey compensation (mirrors app/core/filmic.py)
+        midpix = torch.full((1, 3), F.MID_GREY, dtype=x.dtype)
+        m0 = _tone_block(midpix)[0, 0]
+        b_mid = torch.clamp(
+            _f_hi_lo_mask(midpix, 1.04, 1.85,
+                          -3.0 + 1.61, lo_feather - 4.4, mid_log2)
+            - _f_hi_lo_mask(midpix, 1.02, 1.51, -2.9, 4.5, mid_log2),
+            0.0, 1.0)[0]
+        m0_lin = _f_logc3_decode(m0)
+        pop_mid = _f_logc3_encode(m0_lin * 2.0 ** -pop_mids)
+        v_mid = m0 * (1.0 - b_mid) + pop_mid * b_mid
+        comp = m0_lin / _f_logc3_decode(v_mid)
+        out = _f_logc3_encode(_f_logc3_decode(out) * comp)
 
     if _v(exposure) != 0.0:
         out = _f_logc3_encode(_f_logc3_decode(out) * 2.0 ** exposure)

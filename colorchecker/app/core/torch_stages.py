@@ -666,6 +666,8 @@ def _filmic_contrast_apply(stage, x, p):
         b_p_pivot = torch.minimum(pivot, (1.0 - b_p_pivot) * pivot + 0.5)
     black_point = black_point * 0.45 + 0.55
     toe_str = torch.clamp(toe_str * 0.35 - 0.15, min=0.25)  # widened range
+    if _v(toe_falloff) < 0.0:
+        toe_str = 3.35 - toe_falloff       # 1:1 negative side, cont. at 0
 
     if _v(contrast) < 1.0:
         preserve_color = 1.0 - preserve_color

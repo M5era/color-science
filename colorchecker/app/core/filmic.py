@@ -369,8 +369,13 @@ def filmic_contrast(x: np.ndarray,
         b_p_pivot = min(pivot, (1.0 - b_p_pivot) * pivot + 0.5)
     black_point = black_point * 0.45 + 0.55
     # widened toe-shape range (stock 1.48..2.95 -> 0.25..3.35; the
-    # default falloff 2 still maps to 2.65 exactly)
+    # default falloff 2 still maps to 2.65 exactly). Negative falloff
+    # maps 1:1 (continuous at 0 -> 3.35) so the toe reaches the same
+    # near-rectangular strengths as the shoulder (Marc: "almost
+    # rectangular... not all the way")
     toe_str = max(toe_str * 0.35 - 0.15, 0.25)
+    if toe_falloff < 0.0:
+        toe_str = 3.35 - toe_falloff
 
     # --- flip Preserve Color for negative contrast (DCTL intuition fix)
     if contrast < 1.0:
@@ -477,15 +482,17 @@ class FilmicContrastStage(Stage):
                         NOTE it only shapes anything when White Point
                         is engaged (< 1) — at WP ~1 the roll is
                         invisible no matter where it starts
-      Shoulder Falloff  roll softness 0..9.7 (higher = softer knee;
-                        extended, stock stopped at 9)
+      Shoulder Falloff  roll softness -100..9.7: higher = softer
+                        knee, deep NEGATIVE = near-rectangular
+                        shoulder (strength to ~110; stock stopped
+                        at 9)
       Black Point       shadow lift depth; 0 = OFF, extended range to
                         1.5 (stock 0.5; sanitize floor lowered, see
                         module docstring)
       Toe               where the shadow roll starts
       Toe Falloff       toe softness; extended to -20..10 — negative
                         values give a MUCH sharper toe (internal
-                        strength up to ~38 — the roll math was rewritten overflow-free so the knee is effectively unbounded (stock capped at 3.35);
+                        strength up to ~103 (negative side maps 1:1) — the roll math is overflow-free so the knee is effectively unbounded (stock capped at 3.35);
                         Marc kept hitting the stock cap), positive is
                         the stock soft direction, default unchanged
       Linear Rolled     blends Linear -> Rolled -> PowerP contrast
@@ -526,7 +533,7 @@ class FilmicContrastStage(Stage):
 
     def bounds(self) -> tuple[np.ndarray, np.ndarray]:
         lo = np.array([-4.0, 0.5, -1.0,
-                       -0.15, 0.2, 0.0,
+                       -0.15, 0.2, -100.0,
                        0.0, 0.0, -100.0,
                        0.0, 0.0, 0.0, -1.0,
                        -1.0])

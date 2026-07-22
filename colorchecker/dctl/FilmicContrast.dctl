@@ -32,11 +32,11 @@ DEFINE_UI_PARAMS(pivot, Relative Pivot 📌, DCTLUI_SLIDER_FLOAT, 0.0, -1, 1, 0.
 
 DEFINE_UI_PARAMS(p_white_point, ⚪ White Point  :⚪, DCTLUI_SLIDER_FLOAT, 1.015, -0.15, 1.02, 0.0001)
 DEFINE_UI_PARAMS(p_w_p_pivot, ├ Shoulder  ╭, DCTLUI_SLIDER_FLOAT, 0.6, 0.2, .997, 0.001)
-DEFINE_UI_PARAMS(p_shoulder_str,└ Fall off ╭   , DCTLUI_SLIDER_FLOAT, 6, 0.0, 9.7, 0.001)
+DEFINE_UI_PARAMS(p_shoulder_str,└ Fall off ╭   , DCTLUI_SLIDER_FLOAT, 6, -100.0, 9.7, 0.001) // deep negative = REALLY tight shoulder (strength up to ~110, near-rectangular)
 
 DEFINE_UI_PARAMS(p_black_point, ⚫ Black Point  :⚫, DCTLUI_SLIDER_FLOAT, 0.0001, 0.0, 1.5, 0.0001)
 DEFINE_UI_PARAMS(p_b_p_pivot, ├ Toe     ⌣  , DCTLUI_SLIDER_FLOAT, 0.5, 0.0, 0.8, 0.001)
-DEFINE_UI_PARAMS(p_toe_str, └ Fall off   ⌣   , DCTLUI_SLIDER_FLOAT, 2.0, -100.0, 10.0, 0.001) // deep negative = REALLY tight toe (internal strength up to ~38; the roll math is overflow-free now)
+DEFINE_UI_PARAMS(p_toe_str, └ Fall off   ⌣   , DCTLUI_SLIDER_FLOAT, 2.0, -100.0, 10.0, 0.001) // deep negative = REALLY tight toe (strength up to ~103, near-rectangular)
 
 
 DEFINE_UI_PARAMS(p_mix_contrast, Linear / Rolled : , DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 1.0, 0.001)
@@ -1188,6 +1188,7 @@ __DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, float p
      
      //sanitize black and white points
      if (p_transfer_f == 15) {p_shoulder_str += 5.0f;}
+     float toe_falloff_raw = p_toe_str; // raw slider, for the 1:1 negative-side toe mapping
      p_w_p_pivot = _fminf(p_white_point, p_w_p_pivot );
      p_shoulder_str= _fmaxf((10.0f - p_shoulder_str), 0.3f);
      p_toe_str= _fmaxf((10.0f - p_toe_str), 0.17f);
@@ -1213,6 +1214,9 @@ __DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, float p
          }
        p_black_point = p_black_point* 0.45f +.55f;
        p_toe_str = _fmaxf(p_toe_str*0.35f - 0.15f, 0.25f); // widened toe-shape range (stock 1.48..2.95 -> 0.25..3.35, default 2.65 unchanged)
+       // negative falloff: 1:1 mapping (continuous at 0 -> 3.35) so the
+       // toe reaches the same near-rectangular strengths as the shoulder
+       if (toe_falloff_raw < 0.0f) { p_toe_str = 3.35f - toe_falloff_raw; }
        
 
      } else {pivot = rememberPivot;}

@@ -276,12 +276,12 @@ def _contrast_curve_scalar(v, p, stage):
         return u / torch.pow(1.0 + torch.pow(torch.abs(u), n), 1.0 / n)
 
     y = contrast * s
-    yk_hi = sh_len * wp
+    yk_hi = (1.0 - sh_len) * wp
     h_hi = wp - yk_hi + stage._EPS
     n_hi = 1.0 + stage._STR_GAIN * sh_str
     e_hi = torch.clamp(y - yk_hi, min=0.0)
     hi = yk_hi + h_hi * gsc(e_hi / h_hi, n_hi)
-    yk_lo = toe_len * bp
+    yk_lo = (1.0 - toe_len) * bp
     h_lo = bp - yk_lo - stage._EPS
     n_lo = 1.0 + stage._STR_GAIN * toe_str
     e_lo = torch.clamp(y - yk_lo, max=0.0)

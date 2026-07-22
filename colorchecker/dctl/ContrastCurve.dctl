@@ -31,8 +31,8 @@
 // this file. The curve/tone math is original to this project.
 
 DEFINE_UI_PARAMS(contrast, Contrast, DCTLUI_SLIDER_FLOAT, 1.0, 0.2, 3.0, 0.001)
-DEFINE_UI_PARAMS(black_point, Black Point, DCTLUI_SLIDER_FLOAT, -16.0, -20.0, -1.5, 0.01)
-DEFINE_UI_PARAMS(white_point, White Point, DCTLUI_SLIDER_FLOAT, 16.0, 1.5, 20.0, 0.01)
+DEFINE_UI_PARAMS(black_point, Black Point, DCTLUI_SLIDER_FLOAT, -6.0, -6.0, -1.5, 0.01)
+DEFINE_UI_PARAMS(white_point, White Point, DCTLUI_SLIDER_FLOAT, 12.0, 2.5, 12.0, 0.01)
 DEFINE_UI_PARAMS(toe_length, Toe Length, DCTLUI_SLIDER_FLOAT, 1.0, 0.0, 1.0, 0.001)
 DEFINE_UI_PARAMS(toe_strength, Toe Strength, DCTLUI_SLIDER_FLOAT, 0.5, 0.0, 1.0, 0.001)
 DEFINE_UI_PARAMS(shoulder_length, Shoulder Length, DCTLUI_SLIDER_FLOAT, 1.0, 0.0, 1.0, 0.001)
@@ -54,7 +54,7 @@ DEFINE_UI_PARAMS(draw_curve, Draw Curve, DCTLUI_CHECK_BOX, 0)
 #define LN2 0.693147180559945f
 #define EXP_HALF 1.648721270700128f
 #define CC_EPS 0.000001f
-#define CC_STR_GAIN 5.0f
+#define CC_STR_GAIN 8.0f
 #define CC_MID_W 2.0f
 #define CC_MID_SCALE 1.0f
 #define CC_FLARE_SCALE 0.045f
@@ -134,12 +134,12 @@ __DEVICE__ float tone(float v, float contrast, float bp, float wp,
     // each end rolls toward its Point (asymptote level) at a knee whose
     // position is Length and sharpness is Strength. C1, never hard-clips.
     float y = contrast * s;
-    float yk_hi = sh_len * wp;
+    float yk_hi = (1.0f - sh_len) * wp;
     float h_hi = wp - yk_hi + CC_EPS;
     float n_hi = 1.0f + CC_STR_GAIN * sh_str;
     float e_hi = _fmaxf(y - yk_hi, 0.0f);
     float hi = yk_hi + h_hi * gsc(e_hi / h_hi, n_hi);
-    float yk_lo = toe_len * bp;
+    float yk_lo = (1.0f - toe_len) * bp;
     float h_lo = bp - yk_lo - CC_EPS;
     float n_lo = 1.0f + CC_STR_GAIN * toe_str;
     float e_lo = _fminf(y - yk_lo, 0.0f);

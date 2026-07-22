@@ -292,20 +292,27 @@ class ContrastCurveStage(Stage):
       Preserve Color    0 = per-RGB (contrast raises saturation, the film
                         look), 1 = luma only (chromaticity preserved)
       Mid Push          a midtone bump; + lifts mids, - drops them
+      Mid Compensate    0 = the bump lifts the pivot (a midtone exposure);
+                        1 = the pivot is held and the bump becomes a local
+                        S — the touch of mid contrast film's 'straight
+                        line' really has (K64)
       Blend             master mix with the untouched input
       Flare             milky shadow lift, tapering to identity by the highs
       Exposure          overall shift in stops, applied AFTER the curve
                         (mid-grey referenced, achromatic — see _expose)
-      Mid Compensate    0 = the bump lifts the pivot (Push acts like a
-                        midtone exposure); 1 = the pivot is held and the
-                        bump becomes a local S (added mid contrast)
+
+    Black/White Point are the asymptote LEVELS in stops from mid-grey, kept
+    to a sensible visible range: -6 stops is ~code 0 (crushed), Marc's
+    baseline black is ~-4.2 (~code 0.08), -1.5 is milky; drive the toe
+    below the LogC3 floor and the shadows just clamp, so the range stops
+    there. Length is the roll's EXTENT: 0 = knee at the point (no roll in
+    range = identity), 1 = knee at the pivot (the whole end rolls).
     """
 
     name = "Contrast Curve"
-    # NOTE the order: the 12 FLOAT sliders come first (they map 1:1 onto
-    # the DCTL's sliderFloatParam0..11 and the .drx patch), and "Mid
-    # Compensate" is LAST because in the DCTL it is a CHECK_BOX (like
-    # Diachromie's panel) — a checkbox is not a sliderFloatParam, so
+    # NOTE the order: the 12 FLOAT sliders map 1:1 onto the DCTL's
+    # sliderFloatParam0..11 and the .drx patch; "Mid Compensate" is LAST
+    # because in the DCTL it is a CHECK_BOX (not a sliderFloatParam), so
     # keeping it out of the float run keeps every other slider aligned.
     param_names = [
         "Contrast", "Black Point", "White Point",
@@ -315,33 +322,35 @@ class ContrastCurveStage(Stage):
     ]
 
     # curve shape constants (stops unless noted)
-    _EPS = 1e-6         # guards the headroom divide when Length -> 1
-    _STR_GAIN = 5.0     # Strength 0->1 maps the knee exponent n 1..6
-    _MID_W = 2.0        # mid-push bump half-width
-    _MID_SCALE = 1.0    # mid-push max lift (stops) at Push = 1
+    _EPS = 1e-6         # guards the headroom divide when Length -> 0
+    _STR_GAIN = 8.0     # Strength 0->1 maps the knee exponent n 1..9 (sharp)
+    _MID_W = 2.0        # mid bump/S half-width
+    _MID_SCALE = 1.0    # Mid Push max lift (stops) at Push = 1
     _FLARE_SCALE = 0.045  # code-value shadow lift per Flare unit
     _FLARE_WIDTH = 3.0    # how far up (stops) the flare lift fades out
 
     def identity(self):
-        # Contrast, Black Point, White Point, Toe Len, Toe Str, Shoulder
-        # Len, Shoulder Str, Preserve Color, Mid Push, Blend, Flare,
-        # Exposure, Mid Compensate. The ±16-stop points + Length 1 put both
-        # knees well past any real LogC3 input, so identity is an EXACT
-        # line; the solver brings a point in to engage a toe / shoulder.
-        return np.array([1.0, -16.0, 16.0, 1.0, 0.5, 1.0, 0.5,
+        # Length 0 parks both knees AT the points (out of the working
+        # range), so identity is an EXACT straight line; the solver / a
+        # grade raises a Length to roll that end in.
+        return np.array([1.0, -6.0, 12.0, 0.0, 0.5, 0.0, 0.5,
                          0.0, 0.0, 1.0, 0.0, 0.0, 0.0])
 
     def init(self):
-        # Start the SOLVE with the toe & shoulder mid-engaged (knees at
-        # ~±3 stops, inside the working range) so the fit has a live
-        # gradient on the Point/Length/Strength controls. The reg still
-        # anchors at identity(), so an unneeded shoulder relaxes back out.
-        return np.array([1.0, -7.0, 7.0, 0.45, 0.5, 0.45, 0.5,
+        # Start the SOLVE with the toe & shoulder mid-engaged (Length 0.5)
+        # so the fit has a live gradient on the Point/Length/Strength
+        # controls (the reg still anchors at identity(), so an unneeded
+        # roll relaxes out). Black Point ~-4.5 seeds a sensible film black
+        # (toe lands ~code 0.06, near the LogC3 floor / Marc's baseline).
+        return np.array([1.0, -4.5, 8.0, 0.5, 0.5, 0.5, 0.5,
                          0.0, 0.0, 1.0, 0.0, 0.0, 0.0])
 
     def bounds(self):
-        lo = [0.2, -20.0,  1.5, 0.0, 0.0, 0.0, 0.0, 0.0, -2.0, 0.0, 0.0, -3.0, 0.0]
-        hi = [3.0,  -1.5, 20.0, 1.0, 1.0, 1.0, 1.0, 1.0,  2.0, 1.0, 2.0,  3.0, 1.0]
+        # Black/White Point clamped to the visible range (see class doc);
+        # driving them further just clamps shadows/highlights and the
+        # sliders would appear dead.
+        lo = [0.2, -6.0,  2.5, 0.0, 0.0, 0.0, 0.0, 0.0, -2.0, 0.0, 0.0, -3.0, 0.0]
+        hi = [3.0, -1.5, 12.0, 1.0, 1.0, 1.0, 1.0, 1.0,  2.0, 1.0, 2.0,  3.0, 1.0]
         return np.asarray(lo), np.asarray(hi)
 
     # ---- the scalar tone pipeline, run on val or on each RGB channel --
@@ -362,14 +371,15 @@ class ContrastCurveStage(Stage):
         an EXACT straight line, so contrast 1 is exact identity.
         """
         y = contrast * s
-        # shoulder (highlights): knee at sh_len of the way to the white point
-        yk_hi = sh_len * wp
+        # shoulder (highlights): Length 0 -> knee at the point (no roll in
+        # range), Length 1 -> knee at the pivot (the whole end rolls)
+        yk_hi = (1.0 - sh_len) * wp
         h_hi = wp - yk_hi + self._EPS                 # headroom (> 0)
         n_hi = 1.0 + self._STR_GAIN * sh_str
         e_hi = np.maximum(y - yk_hi, 0.0)
         hi = yk_hi + h_hi * self._gsc(e_hi / h_hi, n_hi)
         # toe (shadows): bp < 0, so the knee and headroom are negative
-        yk_lo = toe_len * bp
+        yk_lo = (1.0 - toe_len) * bp
         h_lo = bp - yk_lo - self._EPS                 # headroom (< 0)
         n_lo = 1.0 + self._STR_GAIN * toe_str
         e_lo = np.minimum(y - yk_lo, 0.0)
@@ -435,7 +445,9 @@ class ContrastCurveStage(Stage):
             bits.append("brighten" if exposure > 0 else "darken")
         if flare > 0.05:
             bits.append("lift shadows")
-        if bp > -4.0 and not bits:
+        if toe_len > 0.15 and bp > -3.0 and not bits:
+            bits.append("lift blacks")
+        elif toe_len > 0.15 and bp < -5.0 and not bits:
             bits.append("crush blacks")
         if not bits:
             return "contrast (idle)"

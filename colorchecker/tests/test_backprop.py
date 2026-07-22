@@ -79,6 +79,7 @@ def test_gradients_flow_and_are_finite():
         assert torch.isfinite(p.grad).all(), stage.name
 
 
+@pytest.mark.slow
 def test_torch_backend_finds_distant_zone():
     """The placement test: a Fine zone in the greens, far from the
     identity start at red. Scipy's finite differences see zero gradient
@@ -102,6 +103,7 @@ def test_torch_backend_finds_distant_zone():
     assert torch_result.error_after < torch_result.error_before / 10
 
 
+@pytest.mark.slow
 def test_torch_backend_matches_scipy_on_global_stages():
     """No Fine stage -> no placement problem; torch must not be worse
     than scipy alone (it feeds the same joint refine)."""

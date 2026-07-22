@@ -49,6 +49,7 @@ def test_default_pool_is_chromogen_without_lgg_or_neutral_tint():
     assert len(pool) == 10
 
 
+@pytest.mark.slow
 def test_search_recovers_simple_look_and_logs():
     x = _source()
     result = search_chain(x, _simple_look(x), max_nodes=4, min_gain=0.01)
@@ -60,6 +61,7 @@ def test_search_recovers_simple_look_and_logs():
     assert isinstance(result.search_log[-1], str)  # stop reason logged
 
 
+@pytest.mark.slow
 def test_search_respects_max_nodes():
     x = _source()
     tint = NeutralTintStage()
@@ -71,6 +73,7 @@ def test_search_respects_max_nodes():
     assert "max_nodes" in result.search_log[-1]
 
 
+@pytest.mark.slow
 def test_search_allows_reusing_a_stage_type():
     """Two sat boosts compose to more than one slider-max can do —
     the search must be free to pick the same tool twice."""
@@ -88,6 +91,7 @@ def test_search_allows_reusing_a_stage_type():
     assert result.error_after < result.error_before / 5
 
 
+@pytest.mark.slow
 def test_search_display_domain_analytic_drt_finds_contrast():
     """The genesis lesson: with the analytic DRT and a display-domain
     loss, a contrasty look must surface Contrast Curve — no cube
@@ -106,6 +110,7 @@ def test_search_display_domain_analytic_drt_finds_contrast():
     assert result.pairs_unreachable == 0  # nothing is ever dropped
 
 
+@pytest.mark.slow
 def test_grey_locked_tone_matches_neutrals_exactly():
     """Marc: 'contrast adjusted based on grey scale only'. The tone
     node is fitted on neutrals, frozen, and no second Contrast Curve
@@ -128,6 +133,7 @@ def test_grey_locked_tone_matches_neutrals_exactly():
     np.testing.assert_allclose(fitted_display, target[mask], atol=5e-3)
 
 
+@pytest.mark.slow
 def test_local_search_drops_redundant_node():
     """A one-tool look with a permissive min_gain tempts the greedy build
     to bolt on marginal extra nodes; local_search's prune pass drops them
@@ -143,6 +149,7 @@ def test_local_search_drops_redundant_node():
     assert local.error_after < local.error_before / 5
 
 
+@pytest.mark.slow
 def test_local_search_unfreezes_tone_and_prunes_on_tint():
     """A look whose NEUTRALS are tinted (crossover): the frozen tone can't
     tint, so local_search must un-freeze it to co-adapt with the Split
@@ -180,6 +187,7 @@ def test_search_refuses_identity_target():
         search_chain(x, x.copy(), max_nodes=3)
 
 
+@pytest.mark.slow
 def test_cli_search_and_deliver(tmp_path, monkeypatch):
     from pathlib import Path
 
@@ -216,6 +224,7 @@ def test_cli_search_and_deliver(tmp_path, monkeypatch):
     assert spec["stages"] and len(spec["params"]) == len(spec["stages"])
 
 
+@pytest.mark.slow
 def test_search_broad_bias_prefers_broad_tools():
     """A global sat boost with a slight hue-local wrinkle: with a
     heavy bias the search must explain it with broad tools only."""

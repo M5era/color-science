@@ -9,6 +9,13 @@ layer. (Refreshed 2026-07-21 end-of-session; supersedes prior handoff.)
 
 ## 0. Latest session (2026-07-22)
 
+**Housekeeping (later same day): test suite fast/slow split.** The
+suite had grown to ~5 min; ~95% was 21 end-to-end solver tests.
+`pytest` is now the ~10 s dev loop (slow tests skipped, visibly);
+`pytest --full -n auto` is the pre-push gate (~3.5 min). No test
+content changed — only markers + conftest + pytest.ini +
+requirements-dev.txt. Details in section 7.
+
 Curve + split-tone overhaul, driven by Marc grading in Resolve:
 
 - **Contrast Curve exposure** is now achromatic AND applied AFTER the
@@ -142,7 +149,8 @@ colorchecker/
                                wiggle it once + re-save to make it patchable.
                                Older: contrast_boost_1.6.4.T.drx + 1.6.1/1.6.2
   reference/OpenDRT.dctl       openDRT source (Jed Smith, GPLv3) for the port
-  tests/                       146 green offscreen (torch tests auto-skip w/o torch)
+  tests/                       158 offscreen (torch auto-skips w/o torch);
+                               fast/slow split — see section 7 Tests
 ```
 
 Tests drive REAL interaction paths (canvas signals, mocked dialogs).
@@ -429,9 +437,19 @@ port module must carry the license; fine for private use).
 - **Run on Mac:** `python3 main.py` from `colorchecker/`; deps
   `python3 -m pip install -r requirements.txt` (NOT pip3 — path has
   spaces). torch is OPTIONAL (backprop); zstandard required (drx).
-- **Tests:** `QT_QPA_PLATFORM=offscreen python3 -m pytest tests/` —
-  146 green, ~2-3 min. Cloud container may need
-  `apt-get install libegl1 libgl1 libxkbcommon0` for Qt.
+- **Tests (fast/slow split, 2026-07-22):**
+  `QT_QPA_PLATFORM=offscreen python3 -m pytest` — the DEV LOOP, ~10 s:
+  skips the 21 tests marked `slow` (end-to-end solver/search runs; the
+  skip count is shown, never silent). The GATE before every commit/push:
+  `python3 -m pytest --full -n auto` (~3.5 min on the 4-core cloud box,
+  vs ~5 min serial; needs pytest-xdist — `pip install -r
+  requirements-dev.txt`). conftest.py pins BLAS to 1 thread per xdist
+  worker (without it, parallel = serial from core thrashing). 155 green
+  + 3 torch-skips on the cloud box (torch optional). Slow-marking
+  policy: any test ≥2 s (real scipy/Adam optimization) gets
+  `@pytest.mark.slow`; keep at least an import-level smoke test of each
+  module in the fast set. Cloud container may need `apt-get update &&
+  apt-get install libegl1 libgl1 libxkbcommon0` for Qt.
 - **Detection code is Marc-blessed** — don't touch without cause.
 - **Commit trailers:** Co-Authored-By + Claude-Session lines; never
   put the model identifier in commits.

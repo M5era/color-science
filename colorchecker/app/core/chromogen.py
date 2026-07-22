@@ -559,7 +559,11 @@ class NeutralTintStage(Stage):
         return np.array([0.0, 0.0, 0.0, 1.0, 1.0])
 
     def bounds(self):
-        lo = [0.0, -1.0, -6.0, 0.1, 0.0]
+        # Falloff floor 1.0 stop and Pivot floor -4 (Marc, 2026-07-22:
+        # "limit where this can go" — falloff below ~1 stop turns the
+        # ramp into a visible step, and pivots below ~-4.2 stops sit in
+        # sub-black code values; both only ever produced artifacts)
+        lo = [0.0, -1.0, -4.0, 1.0, 0.0]
         hi = [360.0, 1.0, 8.0, 16.0, 2.0]
         return np.asarray(lo), np.asarray(hi)
 

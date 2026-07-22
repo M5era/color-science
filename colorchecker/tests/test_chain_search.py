@@ -45,11 +45,11 @@ def test_default_pool_is_chromogen_without_lgg_or_neutral_tint():
     assert LiftGammaGainStage not in pool
     names = {cls.name for cls in pool}
     assert "Brilliance Reduction" in names
-    assert "Split Tone" in names            # replaces Neutral Tint for fitting
-    assert "Neutral Tint" not in names      # out of the ML audition (Marc)
+    assert "Split Tone" in names
+    assert "Neutral Tint" in names          # re-admitted after the falloff fix
     assert "Filmic Contrast" in names       # replaces Contrast Curve as tone
     assert "Contrast Curve" not in names    # retired from the ML audition
-    assert len(pool) == 10
+    assert len(pool) == 11
 
 
 @pytest.mark.slow

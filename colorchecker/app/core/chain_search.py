@@ -59,15 +59,14 @@ _TONE_ANCHOR_REG = 250.0
 
 def default_pool() -> list[type]:
     """The searchable node types: the Chromogen-family tools, NO Lift
-    Gamma Gain, NO Neutral Tint (Split Tone replaces it for fitting —
-    Marc, 2026-07-22) and NO Contrast Curve — Filmic Contrast replaces
-    it as the tone tool (Marc, same day: "for the contrast, lets just
-    use this for now, this really works"). Both retirees stay in
-    STAGE_POOL for presets / manual use, just out of the ML audition."""
-    from app.core.chromogen import NeutralTintStage
+    Gamma Gain and NO Contrast Curve — Filmic Contrast replaces it as
+    the tone tool (Marc, 2026-07-22: "for the contrast, lets just use
+    this for now, this really works"; it stays in STAGE_POOL for
+    presets / manual use). Neutral Tint was out for a day in favour of
+    Split Tone, then re-admitted alongside it once its falloff/pivot
+    floors were fixed (Marc, same evening: "add it back in the ML")."""
     pool = [cls for cls in CHROMOGEN_STAGES
-            if cls is not NeutralTintStage
-            and cls is not ContrastCurveStage]
+            if cls is not ContrastCurveStage]
     return pool + [FilmicContrastStage]
 
 

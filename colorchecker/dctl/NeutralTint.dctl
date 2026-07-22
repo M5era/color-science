@@ -23,8 +23,8 @@
 
 DEFINE_UI_PARAMS(hue, Hue, DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 360.0, 0.1)
 DEFINE_UI_PARAMS(amount, Amount, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 1.0, 0.001)
-DEFINE_UI_PARAMS(pivot, Pivot, DCTLUI_SLIDER_FLOAT, 0.0, -6.0, 8.0, 0.01)
-DEFINE_UI_PARAMS(falloff, Falloff, DCTLUI_SLIDER_FLOAT, 1.0, 0.1, 16.0, 0.01)
+DEFINE_UI_PARAMS(pivot, Pivot, DCTLUI_SLIDER_FLOAT, 0.0, -4.0, 8.0, 0.01)   // floor raised -6 -> -4 (below ~-4.2 stops is sub-black code)
+DEFINE_UI_PARAMS(falloff, Falloff, DCTLUI_SLIDER_FLOAT, 1.0, 1.0, 16.0, 0.01) // floor raised 0.1 -> 1.0 stop (below that the ramp is a step artifact)
 DEFINE_UI_PARAMS(chroma, Chroma, DCTLUI_SLIDER_FLOAT, 1.0, 0.0, 2.0, 0.001)
 
 #define PI_LOCAL 3.141592653589f

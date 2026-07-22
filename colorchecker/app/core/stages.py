@@ -211,6 +211,7 @@ class ReuleauxFineStage(Stage):
     """
 
     name = "Reuleaux Fine"
+    local_tool = True  # single-hue zone: discounted by the search's broad_bias
 
     # flat cores that cover the whole working domain == mask off
     _LUMA_OPEN = (0.5, 2.0, 0.25)
@@ -355,14 +356,14 @@ CHAIN_PRESETS = {
     "Matrix + Reuleaux Broad": ["Matrix", "Reuleaux Broad"],
     "Reuleaux Broad + Fine": ["Reuleaux Broad", "Reuleaux Fine"],
     "Chromogen broad (Sat → Crosstalk → Contrast → Bleach → Tint)": [
-        "Colour Saturation", "Colour Crosstalk", "Contrast Boost",
+        "Colour Saturation", "Colour Crosstalk", "Contrast Curve",
         "Highlight Bleach", "Neutral Tint",
     ],
     # the solve MODE for matching: safe prep (strongly anchored at
     # identity) in front of the chromogen look chain
     "Chromogen match (LGG prep → Chromogen chain)": [
         "Lift Gamma Gain", "Colour Saturation", "Colour Crosstalk",
-        "Contrast Boost", "Highlight Bleach", "Neutral Tint",
+        "Contrast Curve", "Highlight Bleach", "Neutral Tint",
     ],
     # the canonical full stack, in the order of Marc's real Chromogen
     # film look (and Andy's demo): broad first, sector tools BEFORE
@@ -372,7 +373,7 @@ CHAIN_PRESETS = {
     "Chromogen film look (full stack)": [
         "Lift Gamma Gain",
         "Colour Saturation", "Colour Saturation",
-        "Colour Crosstalk", "Contrast Boost",
+        "Colour Crosstalk", "Contrast Curve",
         "Sector Squash", "Sector Saturation",
         "Sector Brightness", "Sector Skew",
         "Highlight Bleach",

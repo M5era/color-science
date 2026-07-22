@@ -19,9 +19,22 @@ class Stage(ABC):
     # deviating from identity as expensive — used for prep stages that
     # should only move when it makes the fit a LOT easier
     reg_scale: float = 1.0
+    # True for single-hue "surgical" tools (the Sector family, Fine
+    # zones): the chain search discounts their auditions by its
+    # broad_bias so broader adjustments get a slight preference
+    local_tool: bool = False
 
     @abstractmethod
     def identity(self) -> np.ndarray: ...
+
+    def init(self) -> np.ndarray:
+        """Solver START point (NOT the reg anchor, which stays identity()).
+        Defaults to identity(); a stage overrides this when identity sits
+        in a dead-gradient region — e.g. a filmic curve whose toe/shoulder
+        knee is parked far outside the working range at identity, so the
+        fit has no gradient to discover it from. Starting mid-engaged lets
+        the solve shape it, while the reg still prefers 'do nothing'."""
+        return self.identity()
 
     @abstractmethod
     def bounds(self) -> tuple[np.ndarray, np.ndarray]: ...
@@ -55,6 +68,7 @@ _WORDS = {
     "colors": "Col", "zone": "Zn", "shift": "Shf", "prep": "Prep",
     "dark": "Dk", "bright": "Br", "saturation": "Sat", "sector": "Sec",
     "contrast": "Con", "crosstalk": "XT", "tint": "Tnt",
+    "reduce": "Rdc", "brilliance": "Brill",
     "red": "Red", "reds": "Red", "orange": "Org", "oranges": "Org",
     "yellow": "Yel", "yellows": "Yel", "lime": "Lim", "limes": "Lim",
     "green": "Grn", "greens": "Grn", "teal": "Teal", "teals": "Teal",

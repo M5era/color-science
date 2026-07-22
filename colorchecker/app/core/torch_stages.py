@@ -18,15 +18,17 @@ import torch
 
 from app.core import chromogen
 from app.core.chromogen import (
+    BrillianceReductionStage,
     ColourCrosstalkStage,
     ColourSaturationStage,
-    ContrastBoostStage,
+    ContrastCurveStage,
     HighlightBleachStage,
     NeutralTintStage,
     SectorBrightnessStage,
     SectorSaturationStage,
     SectorSkewStage,
     SectorSquashStage,
+    SplitToneStage,
 )
 from app.core.stages import (
     LiftGammaGainStage,
@@ -253,23 +255,59 @@ def _colour_saturation_apply(stage, x, p):
     return _reuleaux_to_rgb(hue2, sat2, val)
 
 
-def _contrast_curve(v, boost, pivot, highlight, width):
-    return v + boost * (
-        (v - pivot)
-        - _softplus_t(v - highlight, width)
-        + _softplus_t(pivot - highlight, width)
-    )
+def _contrast_curve_scalar(v, p, stage):
+    """Differentiable mirror of ContrastCurveStage._tone (float64)."""
+    mg = chromogen.MID_GREY
+    st = chromogen.STOP
+    contrast, bp, wp = p[0], p[1], p[2]
+    toe_len, toe_str = p[3], p[4]
+    sh_len, sh_str = p[5], p[6]
+    mid_push = p[8]
+    flare = p[10]
+    comp = p[12]
+
+    # exposure (p[11]) is applied achromatically in _contrast_curve_apply,
+    # NOT here — a per-channel exposure shift would tint through the curve.
+    fw = torch.as_tensor(stage._FLARE_WIDTH * st, dtype=v.dtype)
+    shadow_w = 1.0 - _ramp(v, mg, fw)
+    v = v + flare * stage._FLARE_SCALE * shadow_w
+    s = (v - mg) / st
+
+    def gsc(u, n):
+        return u / torch.pow(1.0 + torch.pow(torch.abs(u), n), 1.0 / n)
+
+    y = contrast * s
+    yk_hi = (1.0 - sh_len) * wp
+    h_hi = wp - yk_hi + stage._EPS
+    n_hi = 1.0 + stage._STR_GAIN * sh_str
+    e_hi = torch.clamp(y - yk_hi, min=0.0)
+    hi = yk_hi + h_hi * gsc(e_hi / h_hi, n_hi)
+    yk_lo = (1.0 - toe_len) * bp
+    h_lo = bp - yk_lo - stage._EPS
+    n_lo = 1.0 + stage._STR_GAIN * toe_str
+    e_lo = torch.clamp(y - yk_lo, max=0.0)
+    lo = yk_lo + h_lo * gsc(e_lo / h_lo, n_lo)
+    curve = torch.where(y > yk_hi, hi, torch.where(y < yk_lo, lo, y))
+
+    u = s / stage._MID_W
+    g = torch.exp(-0.5 * u * u)
+    shape = (1.0 - comp) * g + comp * (u * float(np.exp(0.5)) * g)
+    mid = mid_push * stage._MID_SCALE * shape
+
+    return mg + (curve + mid) * st
 
 
-def _contrast_boost_apply(stage, x, p):
-    w = stage._SHOULDER
-    grey_abs = chromogen.MID_GREY + p[1] * chromogen.STOP
-    highlight_abs = chromogen.MID_GREY + p[2] * chromogen.STOP
+def _contrast_curve_apply(stage, x, p):
+    preserve, blend = p[7], p[9]
+    rgb_out = _contrast_curve_scalar(x, p, stage)
     hue, sat, val = _rgb_to_reuleaux(x)
-    val_mode = _reuleaux_to_rgb(hue, sat,
-                                _contrast_curve(val, p[0], grey_abs, highlight_abs, w))
-    rgb_mode = _contrast_curve(x, p[0], grey_abs, highlight_abs, w)
-    return (1.0 - p[3]) * val_mode + p[3] * rgb_mode
+    luma_out = _reuleaux_to_rgb(hue, sat, _contrast_curve_scalar(val, p, stage))
+    curved = (1.0 - preserve) * rgb_out + preserve * luma_out
+    # achromatic exposure AFTER the curve: slide the Reuleaux value axis
+    # (mid-grey referenced), preserve chroma
+    ch, cs, cv = _rgb_to_reuleaux(curved)
+    curved = _reuleaux_to_rgb(ch, cs, cv + p[11] * chromogen.STOP)
+    return (1.0 - blend) * x + blend * curved
 
 
 def _highlight_bleach_apply(stage, x, p):
@@ -288,24 +326,35 @@ def _neutral_tint_apply(stage, x, p):
     r = _ramp(val, chromogen.MID_GREY + p[2] * chromogen.STOP, p[3] * chromogen.STOP)
     side = torch.where(p[1] >= 0.0, r, 1.0 - r)
     zero = p[4] * 0.0
-    m = side * _modulation(val, sat, zero, zero, p[4])
+    m = side * _modulation(val, sat, zero, zero, 1.0 - p[4])
 
     strength = torch.abs(p[1]) * stage.TINT_SCALE
     ang = (p[0] / 360.0) * (2.0 * torch.pi)
-    c1, c2 = _to_chroma_vec(hue, sat)
-    c1 = c1 + strength * m * torch.cos(ang)
-    c2 = c2 + strength * m * torch.sin(ang)
-    hue2, sat2 = _from_chroma_vec(c1, c2)
-    return _reuleaux_to_rgb(hue2, sat2, val)
+    s2, s6, s3 = float(np.sqrt(2.0)), float(np.sqrt(6.0)), float(np.sqrt(3.0))
+    d = torch.stack([
+        s2 * torch.cos(ang),
+        (s6 * torch.sin(ang) - s2 * torch.cos(ang)) / 2.0,
+        (-s6 * torch.sin(ang) - s2 * torch.cos(ang)) / 2.0,
+    ]) / s3
+    return x + (strength * m)[..., None] * d
+
+
+def _brilliance_reduction_apply(stage, x, p):
+    hue, sat, val = _rgb_to_reuleaux(x)
+    w = p[1] * _ramp(sat, p[2], p[3])
+    val2 = val * 2.0 ** (-stage.REDUCTION_STOPS * p[0] * w)
+    return _reuleaux_to_rgb(hue, sat, val2)
 
 
 def _colour_crosstalk_apply(stage, x, p):
     hue, sat, val = _rgb_to_reuleaux(x)
     m = _modulation(val, sat, p[4], p[5], p[6])
+    az = torch.abs(p[4])
+    inherent = (1.0 - az) * val + az
     c1, c2 = _to_chroma_vec(hue, sat)
     eye = torch.eye(4, dtype=x.dtype)
     for i in range(4):
-        w = _rygb_interp(hue, eye[i]) * sat * val * m * p[i]
+        w = _rygb_interp(hue, eye[i]) * sat * inherent * m * p[i]
         ang = stage._AXES[i] * 2.0 * np.pi
         c1 = c1 + w * float(np.cos(ang))
         c2 = c2 + w * float(np.sin(ang))
@@ -359,6 +408,39 @@ def _sector_squash_apply(stage, x, p):
     return _reuleaux_to_rgb(hue2, sat, val)
 
 
+def _split_tone_apply(stage, x, p):
+    """Differentiable mirror of SplitToneStage.apply (per-channel Bezier)."""
+    mg = chromogen.MID_GREY
+    pivot = mg + p[12]
+    pm = 1.0 - pivot
+    third = stage._THIRD
+    scale = stage._CTRL_SCALE
+
+    def bez(r, p0, p1, p2, p3):
+        ir = 1.0 - r
+        return p0 * ir ** 3 + 3.0 * p1 * ir ** 2 * r \
+            + 3.0 * p2 * ir * r * r + p3 * r ** 3
+
+    chans = []
+    for ci in range(3):
+        blk = p[0 + ci] * scale
+        shd = p[3 + ci] * scale
+        hil = p[6 + ci] * scale
+        wht = p[9 + ci]
+        level = pivot + p[13 + ci]
+        v = x[..., ci]
+        r = torch.clamp(v / pivot, 0.0, 1.0)
+        sh = bez(r, blk, shd, shd + third, level / pivot) * pivot
+        rr = torch.clamp((1.0 - v) / pm, 0.0, 1.0)
+        lm = 1.0 - level
+        hi = 1.0 - bez(rr, 1.0 - wht, 1.0 - (hil + third),
+                       1.0 - hil, lm / pm) * pm
+        res = torch.where(v <= pivot, sh, hi)
+        res = torch.where((v < 0.0) | (v > 1.0), v, res)
+        chans.append(res)
+    return torch.stack(chans, dim=-1)
+
+
 _APPLY = {
     LiftGammaGainStage: _lgg_apply,
     LinearMatrixStage: _matrix_apply,
@@ -367,14 +449,16 @@ _APPLY = {
     ReuleauxBroadStage: _broad_apply,
     ReuleauxFineStage: _fine_apply,
     ColourSaturationStage: _colour_saturation_apply,
-    ContrastBoostStage: _contrast_boost_apply,
+    ContrastCurveStage: _contrast_curve_apply,
     HighlightBleachStage: _highlight_bleach_apply,
     NeutralTintStage: _neutral_tint_apply,
+    BrillianceReductionStage: _brilliance_reduction_apply,
     ColourCrosstalkStage: _colour_crosstalk_apply,
     SectorSkewStage: _sector_skew_apply,
     SectorBrightnessStage: _sector_brightness_apply,
     SectorSaturationStage: _sector_saturation_apply,
     SectorSquashStage: _sector_squash_apply,
+    SplitToneStage: _split_tone_apply,
 }
 
 

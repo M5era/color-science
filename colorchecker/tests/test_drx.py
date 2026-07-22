@@ -57,31 +57,46 @@ def test_unknown_slider_rejected():
         drx.set_slider(node, 99, 1.0)
 
 
-def test_lut_match_to_drx_end_to_end(tmp_path, monkeypatch, capsys):
-    """The full Plan C pipeline: LUT in -> fitted PowerGrade out."""
-    import sys
+KITCHEN_SINK = (Path(__file__).resolve().parents[1]
+                / "templates" / "all_nodes_1.10.3.T.drx")
 
-    import numpy as np
 
+def test_build_grade_from_scratch_with_labels(tmp_path):
+    """From-scratch PowerGrade generation (the export deliverable path):
+    build_grade clones EXACTLY the requested chain (+ DRT) out of the
+    kitchen-sink template, in order, each node carrying its label. Node
+    types repeat as often as asked. This is what the CLI --drx-out path
+    calls under the hood."""
     from app.core.drx import DrxTemplate
-    from tests.test_lut_match import _chromogen_look_cube
-    from tools import lut_match as cli
+    from app.core.drx_build import build_grade
 
-    _chromogen_look_cube(tmp_path)
+    if not KITCHEN_SINK.exists():
+        pytest.skip("kitchen-sink template not present")
+
     out_drx = tmp_path / "fitted.drx"
-    monkeypatch.setattr(sys, "argv", [
-        "lut_match", "--lut", str(tmp_path / "look.cube"),
-        "--samples", "500",
-        "--drx-out", str(out_drx), "--drx-template", str(TEMPLATE),
-    ])
-    cli.main()
-    text = capsys.readouterr().out
-    assert "drx node ColourSaturation#0" in text
-    assert "NO NODE IN TEMPLATE" in text  # LGG/Contrast not in template
+    names = ["ContrastCurve", "ColourSaturation", "SectorBrightness",
+             "SectorBrightness"]
+    labels = ["Con", "BstYB", "DrkBlu", "BrtOrg"]
+    build_grade(KITCHEN_SINK, names, out_drx, labels=labels + ["OpenDRT"])
 
     fitted = DrxTemplate(out_drx)
-    sat = next(n for n in fitted.nodes if n.dctl_name == "ColourSaturation")
-    # the fit recovers the baked look's Y/B boost (1.45): the patched
-    # node must carry a clearly-raised Y/B slider, not the default
-    assert sat.sliders[1] > 1.2
-    assert abs(sat.sliders[0] - 1.15) < 0.2
+    dnames = [n.dctl_name for n in fitted.nodes]
+    # exactly the requested chain + DRT, in order — no leftover template nodes
+    assert dnames == names + ["OpenDRT"]
+    # every generated node carries a non-empty display label (field 6)
+    body = _node_container(fitted)
+    got = [n.as_message().find(6) for n in body.find(7)]
+    assert [g[0].value.decode() for g in got] == labels + ["OpenDRT"]
+
+
+def _node_container(fitted):
+    """The body-1 container holding the node stack (field 7 + field 8)."""
+    from app.core.protobuf import Message
+
+    for _prefix, payload in fitted.bodies:
+        body = Message.parse(bytes(payload))
+        for cont in body.find(1):
+            contm = cont.as_message()
+            if contm.find(7) and contm.find(8):
+                return contm
+    raise AssertionError("no node-stack container found")

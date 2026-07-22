@@ -15,15 +15,17 @@ from app.core.chromogen import (
     CHROMOGEN_STAGES,
     MID_GREY,
     STOP,
+    BrillianceReductionStage,
     ColourCrosstalkStage,
     ColourSaturationStage,
-    ContrastBoostStage,
+    ContrastCurveStage,
     HighlightBleachStage,
     NeutralTintStage,
     SectorBrightnessStage,
     SectorSaturationStage,
     SectorSkewStage,
     SectorSquashStage,
+    SplitToneStage,
     modulation,
 )
 from app.core.reuleaux import rgb_to_reuleaux
@@ -110,31 +112,139 @@ def test_colour_saturation_chroma_gate_desats_only_extremes():
     assert extreme_loss > 5 * muted_loss
 
 
-# ------------------------------------------------------ contrast boost
+# ------------------------------------------------------ contrast curve
 
-def test_contrast_boost_steepens_mids_rolls_highlights():
-    stage = ContrastBoostStage()
-    p = _with(stage, **{"Contrast Boost": 0.8})
-    ramp = np.linspace(0.05, 2.5, 800)[:, None].repeat(3, axis=1)
+def test_contrast_curve_is_identity_at_defaults():
+    stage = ContrastCurveStage()
+    x = np.random.default_rng(0).uniform(0.02, 1.2, (200, 3))
+    np.testing.assert_allclose(stage.apply(x, stage.identity()), x, atol=1e-12)
+
+
+def test_contrast_curve_is_bounded_asymptotic_not_clipped():
+    # With the White/Black Point brought in and a shoulder/toe engaged, a
+    # high-contrast curve rolls off toward the point levels — steep in the
+    # mid, flattening (asymptotic) at the ends — and NEVER hard-clips
+    # (stays strictly monotonic, no dead-flat run).
+    stage = ContrastCurveStage()
+    ramp = np.linspace(0.0, 1.0, 800)[:, None].repeat(3, axis=1)
+    p = _with(stage, Contrast=2.5, **{"White Point": 4.0, "Black Point": -4.0,
+                                      "Shoulder Length": 0.2, "Toe Length": 0.2})
     out = stage.apply(ramp, p)[:, 0]
+    # bounded by the ±4-stop points (~MID_GREY ± 4*STOP), never leaves them
+    assert out.min() > MID_GREY - 4.0 * STOP - 0.01
+    assert out.max() < MID_GREY + 4.0 * STOP + 0.01
+    assert np.all(np.diff(out) > 0)                    # strictly monotonic (no clip)
     slope = np.gradient(out, ramp[:, 0])
-    mid = np.abs(ramp[:, 0] - 0.4) < 0.1
-    high = ramp[:, 0] > 2.0
-    assert slope[mid].mean() > 1.5          # boosted midtones
-    assert abs(slope[high].mean() - 1.0) < 0.1  # rolled back to slope 1
+    v = ramp[:, 0]
+    mid = np.abs(v - MID_GREY) < 0.05
+    toe = v < 0.12
+    assert slope[mid].mean() > 1.3                     # contrast added at mid
+    assert slope[mid].mean() > slope[toe].mean() + 0.5  # ends roll off
 
 
-def test_contrast_boost_chroma_modes():
-    stage = ContrastBoostStage()
+def test_contrast_curve_points_move_white_black_levels():
+    # With a shoulder/toe engaged (Length < 1), the White/Black Point sets
+    # the asymptote LEVEL: pulling the point in lowers the reachable
+    # white / raises the reachable black.
+    stage = ContrastCurveStage()
+    ramp = np.linspace(0.0, 1.0, 400)[:, None].repeat(3, axis=1)
+    lo_w = stage.apply(ramp, _with(stage, Contrast=2.0,
+                                   **{"Shoulder Length": 0.3, "White Point": 3.0}))[:, 0]
+    hi_w = stage.apply(ramp, _with(stage, Contrast=2.0,
+                                   **{"Shoulder Length": 0.3, "White Point": 8.0}))[:, 0]
+    assert lo_w.max() < hi_w.max()                     # white point moves the white
+    shallow_b = stage.apply(ramp, _with(stage, Contrast=2.0,
+                                        **{"Toe Length": 0.3, "Black Point": -3.0}))[:, 0]
+    deep_b = stage.apply(ramp, _with(stage, Contrast=2.0,
+                                     **{"Toe Length": 0.3, "Black Point": -8.0}))[:, 0]
+    assert shallow_b.min() > deep_b.min()              # black point moves the black
+
+
+def test_contrast_curve_toe_shoulder_are_independent():
+    # The shoulder shapes ONLY highlights (leaves shadows exactly as input)
+    # and the toe ONLY shadows — the property that lets you shape a toe and
+    # a shoulder separately for a film S.
+    stage = ContrastCurveStage()
+    ramp = np.linspace(0.0, 1.0, 400)[:, None].repeat(3, axis=1)
+    below = ramp[:, 0] <= MID_GREY
+    above = ramp[:, 0] >= MID_GREY
+    base = stage.apply(ramp, _with(stage, Contrast=2.0,
+                                   **{"Toe Length": 0.3, "Shoulder Length": 0.3}))
+    sh = stage.apply(ramp, _with(stage, Contrast=2.0,
+                                 **{"Toe Length": 0.3, "Shoulder Length": 0.3,
+                                    "Shoulder Strength": 1.0}))
+    to = stage.apply(ramp, _with(stage, Contrast=2.0,
+                                 **{"Toe Length": 0.3, "Shoulder Length": 0.3,
+                                    "Toe Strength": 1.0}))
+    np.testing.assert_allclose(sh[below], base[below], atol=1e-9)  # shadows kept
+    np.testing.assert_allclose(to[above], base[above], atol=1e-9)  # highlights kept
+
+
+def test_contrast_curve_flare_lifts_shadows_only():
+    stage = ContrastCurveStage()
+    p = _with(stage, Flare=2.0)
+    v = np.array([[0.05, 0.05, 0.05], [0.95, 0.95, 0.95]])
+    out = stage.apply(v, p)
+    assert out[0, 0] - 0.05 > 0.02             # shadows milked up
+    assert abs(out[1, 0] - 0.95) < 1e-3        # highlights untouched
+
+
+def test_contrast_curve_preserve_color_preserves_chroma():
+    stage = ContrastCurveStage()
     x = np.array([[0.55, 0.35, 0.25]])
-    keep = stage.apply(x, _with(stage, **{"Contrast Boost": 0.8, "Chroma": 0.0}))
-    film = stage.apply(x, _with(stage, **{"Contrast Boost": 0.8, "Chroma": 1.0}))
-    # chroma 0: chromaticity untouched (reuleaux sat constant)
-    np.testing.assert_allclose(_sat_of(keep), _sat_of(x), atol=1e-6)
-    # chroma 1: exactly the per-channel curve -> sat rises here
-    curve = stage._curve(x, 0.8, MID_GREY, MID_GREY + 6.0 * STOP)
-    np.testing.assert_allclose(film, curve, atol=1e-12)
-    assert _sat_of(film)[0] > _sat_of(x)[0]
+    rgb_mode = stage.apply(x, _with(stage, Contrast=1.8, **{"Preserve Color": 0.0}))
+    luma_mode = stage.apply(x, _with(stage, Contrast=1.8, **{"Preserve Color": 1.0}))
+    # per-RGB contrast raises saturation (the film look); luma-only keeps
+    # chromaticity (reuleaux sat constant)
+    np.testing.assert_allclose(_sat_of(luma_mode), _sat_of(x), atol=1e-6)
+    assert _sat_of(rgb_mode)[0] > _sat_of(x)[0]
+
+
+def test_split_tone_identity_at_defaults():
+    stage = SplitToneStage()
+    x = np.random.default_rng(0).uniform(-0.05, 1.1, (400, 3))
+    np.testing.assert_allclose(stage.apply(x, stage.identity()), x, atol=1e-12)
+
+
+def test_split_tone_splits_shadows_and_highlights_per_channel():
+    stage = SplitToneStage()
+
+    def _w(**kw):
+        p = stage.identity().copy()
+        for k, v in kw.items():
+            p[stage.param_names.index(k)] = v
+        return p
+
+    ramp = np.linspace(0.02, 0.98, 11)[:, None].repeat(3, axis=1)
+    # teal shadows (lower R, raise B low) + warm highlights (raise R, lower B high)
+    out = stage.apply(ramp, _w(**{"Black R": -0.4, "Black B": 0.3,
+                                  "White R": 1.2, "White B": 0.85}))
+    shadow, high = out[1], out[9]
+    assert shadow[0] < shadow[2]          # shadows lean blue/teal (R < B)
+    assert high[0] > high[2]              # highlights lean warm (R > B)
+
+
+def test_split_tone_crossover_pins_then_floats():
+    stage = SplitToneStage()
+    pivot = np.full((1, 3), MID_GREY)
+    p = stage.identity().copy()
+    p[stage.param_names.index("Black R")] = -0.4   # a shadow move
+    # default: every channel still lands exactly on the pivot (neutral)
+    np.testing.assert_allclose(stage.apply(pivot, p)[0], MID_GREY, atol=1e-9)
+    # a Crossover offset floats just that channel at the pivot (a mid tint)
+    p[stage.param_names.index("Crossover R")] = 0.05
+    out = stage.apply(pivot, p)[0]
+    assert abs(out[0] - (MID_GREY + 0.05)) < 1e-6
+    assert abs(out[1] - MID_GREY) < 1e-9
+
+
+def test_contrast_curve_mid_compensate_holds_pivot():
+    stage = ContrastCurveStage()
+    grey = np.array([[MID_GREY, MID_GREY, MID_GREY]])
+    off = stage.apply(grey, _with(stage, **{"Mid Push": 0.6, "Mid Compensate": 0.0}))
+    on = stage.apply(grey, _with(stage, **{"Mid Push": 0.6, "Mid Compensate": 1.0}))
+    assert off[0, 0] - MID_GREY > 0.02             # compensate off: pivot lifts
+    np.testing.assert_allclose(on, grey, atol=1e-9)  # compensate on: pivot held
 
 
 # ----------------------------------------------------- highlight bleach
@@ -164,21 +274,52 @@ def test_highlight_bleach_unganged_spares_a_sector():
 
 # -------------------------------------------------------- neutral tint
 
-def test_neutral_tint_signed_amount_picks_side_and_keeps_val():
+def test_neutral_tint_signed_amount_picks_side_in_log():
+    """v3: sum-preserving RGB offset in log; + = highlights, - = shadows."""
     stage = NeutralTintStage()
     highs = np.array([[0.9, 0.9, 0.9]])
     lows = np.array([[0.12, 0.12, 0.12]])
     warm_high = _with(stage, Hue=40.0, Amount=0.3)
     for x in (highs, lows):
         out = stage.apply(x, warm_high)
-        # val (contrast) untouched by construction
-        np.testing.assert_allclose(out.max(axis=1), x.max(axis=1), atol=1e-9)
-    assert _sat_of(stage.apply(highs, warm_high))[0] > 0.05   # tinted
-    assert _sat_of(stage.apply(lows, warm_high))[0] < 0.02    # spared
+        # channel mean (log exposure) untouched by construction
+        np.testing.assert_allclose(out.mean(axis=1), x.mean(axis=1),
+                                   atol=1e-12)
+    assert _sat_of(stage.apply(highs, warm_high))[0] > 0.015  # tinted
+    assert _sat_of(stage.apply(lows, warm_high))[0] < 1e-6    # spared
 
     cold_low = _with(stage, Hue=220.0, Amount=-0.3)
     assert _sat_of(stage.apply(lows, cold_low))[0] > 0.05
-    assert _sat_of(stage.apply(highs, cold_low))[0] < 0.02
+    assert _sat_of(stage.apply(highs, cold_low))[0] < 1e-6
+
+
+def test_neutral_tint_offset_direction_matches_picked_hue():
+    """The RGB offset direction reads back as the picked reuleaux hue."""
+    grey = np.array([[0.391, 0.391, 0.391]])
+    stage = NeutralTintStage()
+    for hue_deg in (0.0, 60.0, 137.0, 240.0, 313.0):
+        out = stage.apply(grey, _with(stage, Hue=hue_deg, Amount=0.5))
+        got = rgb_to_reuleaux(out)[0, 0] * 360.0
+        assert abs((got - hue_deg + 180.0) % 360.0 - 180.0) < 1e-6, hue_deg
+
+
+def test_neutral_tint_chroma_is_baselight_sat_mask():
+    """Chroma slider: 1 = everything, 2 = only neutrals, 0 = only
+    saturated colors."""
+    stage = NeutralTintStage()
+    grey = np.array([[0.12, 0.12, 0.12]])
+    saturated = np.array([[0.3, 0.06, 0.05]])
+
+    neutrals_only = _with(stage, Hue=220.0, Amount=-0.5, Chroma=2.0)
+    np.testing.assert_allclose(stage.apply(saturated, neutrals_only),
+                               saturated, atol=1e-9)
+    assert np.abs(stage.apply(grey, neutrals_only) - grey).max() > 0.01
+
+    saturated_only = _with(stage, Hue=220.0, Amount=-0.5, Chroma=0.0)
+    np.testing.assert_allclose(stage.apply(grey, saturated_only),
+                               grey, atol=1e-9)
+    assert np.abs(stage.apply(saturated, saturated_only)
+                  - saturated).max() > 0.01
 
 
 # ---------------------------------------------------- colour crosstalk
@@ -194,6 +335,81 @@ def test_crosstalk_luminance_weighted_and_neutral_safe():
     assert move_bright > 5 * max(move_dark, 1e-9)  # stronger when brighter
     grays = np.array([[0.8, 0.8, 0.8], [0.2, 0.2, 0.2]])
     np.testing.assert_allclose(stage.apply(grays, p), grays, atol=1e-9)
+
+
+def test_crosstalk_full_zone_still_has_an_effect():
+    """At full Zone throw the zone mask takes over the inherent
+    brightness weighting — shadow-zoned crosstalk must still visibly
+    move dark saturated colors (it used to do ~nothing there)."""
+    stage = ColourCrosstalkStage()
+
+    def p(zone):
+        return _with(stage, **{"R -> Y/B": 0.7, "Y -> R/G": 0.7,
+                               "G -> Y/B": 0.7, "B -> R/G": 0.7,
+                               "Zone": zone})
+
+    dark_red = np.array([[0.18, 0.07, 0.06]])
+    bright = np.array([[0.55, 0.35, 0.30]])
+    move_everywhere = np.abs(stage.apply(dark_red, p(0.0)) - dark_red).max()
+    move_shadow_zone = np.abs(stage.apply(dark_red, p(-1.0)) - dark_red).max()
+    assert move_shadow_zone > 3.0 * move_everywhere
+    # and the zone still SELECTS: bright pixels barely move at zone -1
+    move_bright_at_lo = np.abs(stage.apply(bright, p(-1.0)) - bright).max()
+    assert move_bright_at_lo < move_shadow_zone / 3.0
+    # highlight zone keeps working too
+    move_bright_at_hi = np.abs(stage.apply(bright, p(1.0)) - bright).max()
+    assert move_bright_at_hi > np.abs(stage.apply(bright, p(0.0)) - bright).max() * 0.9
+
+
+# ------------------------------------------------- brilliance reduction
+
+def test_brilliance_reduction_darkens_by_saturation():
+    stage = BrillianceReductionStage()
+    p = _with(stage, Amount=0.7)  # identity is Amount 0 — raise to reduce
+    saturated = np.array([[0.8, 0.25, 0.2]])
+    mild = np.array([[0.5, 0.42, 0.4]])
+    grey = np.array([[0.5, 0.5, 0.5]])
+
+    out_sat = stage.apply(saturated, p)
+    assert out_sat.max() < saturated.max() * 0.8          # darkened
+    # chromaticity untouched: a pure luminance scale per pixel
+    ratio = out_sat / saturated
+    np.testing.assert_allclose(ratio, np.full_like(ratio, ratio[0, 0]),
+                               atol=1e-9)
+    # mild colors sit below the default sat pivot: spared
+    np.testing.assert_allclose(stage.apply(mild, p), mild, atol=1e-9)
+    np.testing.assert_allclose(stage.apply(grey, p), grey, atol=1e-9)
+
+
+def test_brilliance_reduction_can_never_crush_to_black():
+    """Marc's report: amount+chroma at 1 with pivot/falloff at 0 made
+    the image fully black. The stops-based scale bounds the darkening
+    at 2^-REDUCTION_STOPS for ANY slider combination."""
+    stage = BrillianceReductionStage()
+    worst = _with(stage, Amount=1.0, Chroma=1.0, Pivot=0.0, Falloff=0.01)
+    x = np.random.default_rng(8).uniform(0.05, 0.95, (200, 3))
+    out = stage.apply(x, worst)
+    floor = 2.0 ** (-stage.REDUCTION_STOPS)
+    assert (out.max(axis=1) >= x.max(axis=1) * floor - 1e-9).all()
+    assert out.max() > 0.01  # nowhere near black
+
+
+def test_brilliance_reduction_mask_sliders():
+    stage = BrillianceReductionStage()
+    saturated = np.array([[0.8, 0.25, 0.2]])
+    # chroma 0 kills the mask -> identity even at full reduction
+    np.testing.assert_allclose(
+        stage.apply(saturated, _with(stage, Amount=1.0, Chroma=0.0)),
+        saturated, atol=1e-9)
+    # raising the pivot above the color's sat spares it
+    np.testing.assert_allclose(
+        stage.apply(saturated, _with(stage, Amount=1.0, Pivot=1.0,
+                                     Falloff=0.2)),
+        saturated, atol=1e-9)
+    # lower pivot bites harder than the default
+    lo = stage.apply(saturated, _with(stage, Amount=0.7, Pivot=0.1))
+    hi = stage.apply(saturated, _with(stage, Amount=0.7, Pivot=0.6))
+    assert lo.max() < hi.max()
 
 
 # ------------------------------------------------------- sector family

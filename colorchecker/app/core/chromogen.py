@@ -12,6 +12,10 @@ sliders:
            - = only neutrals/desaturated (Marc's intuitive convention)
 Falloff appears as a fourth slider only where Chromogen exposes one
 (Highlight Bleach, Neutral Tint ramps; the sector tools' hue falloff).
+Two tools deviate from the standard block, copied from Baselight's own
+panels: Neutral Tint's Chroma is 0..2 with 1 = everything (2 = only
+neutrals, 0 = only saturated), and Brilliance Reduction's Chroma/
+Pivot/Falloff all live in the saturation domain.
 
 Shared geometric primitive: the OPPONENT view of the reuleaux chroma
 plane. Yellow (60 deg) and Blue (240 deg) are exactly antipodal in
@@ -139,8 +143,11 @@ class ColourSaturationStage(Stage):
         return np.array([1.0, 1.0, 0.0, 0.0, 0.0])
 
     def bounds(self):
+        # R/G and Y/B are 0..2 with the 1.0 identity dead-centre, as on
+        # the Chromogen panel (Baselight's Extended Ranges would go
+        # further; 2x sat is already a lot)
         lo = [0.0, 0.0, -1.0, -6.0, -1.0]
-        hi = [3.0, 3.0, 1.0, 8.0, 1.0]
+        hi = [2.0, 2.0, 1.0, 8.0, 1.0]
         return np.asarray(lo), np.asarray(hi)
 
     def apply(self, x, params):
@@ -196,6 +203,12 @@ class ColourCrosstalkStage(Stage):
     param_names = ["R -> Y/B", "Y -> R/G", "G -> Y/B", "B -> R/G",
                    "Zone", "Pivot", "Chroma"]
 
+    # The inherent brightness weighting yields to the Zone mask as
+    # |Zone| rises: at full zone the luma selection comes ONLY from the
+    # mask. Without this, zoning to the shadows multiplied the (tiny)
+    # shadow val into the effect exactly where the mask pointed and the
+    # tool visibly did nothing at full throw (Marc, 2026-07-21).
+
     # sector index -> displacement axis (R, G along Y/B; Y, B along R/G)
     _AXES = (YB_AXIS_TURNS, RG_AXIS_TURNS, YB_AXIS_TURNS, RG_AXIS_TURNS)
 
@@ -213,11 +226,12 @@ class ColourCrosstalkStage(Stage):
         hue, sat, val = reuleaux[..., 0], reuleaux[..., 1], reuleaux[..., 2]
 
         m = modulation(val, sat, zone, pivot, chroma)
+        inherent = (1.0 - abs(zone)) * val + abs(zone)
         c1, c2 = to_chroma_vec(hue, sat)
         for i in range(4):
             one_hot = np.zeros(4)
             one_hot[i] = 1.0
-            w = rygb_interp(hue, one_hot) * sat * val * m * amounts[i]
+            w = rygb_interp(hue, one_hot) * sat * inherent * m * amounts[i]
             d1, d2 = _axis_dir(self._AXES[i])
             c1 = c1 + w * d1
             c2 = c2 + w * d2
@@ -248,65 +262,211 @@ class ColourCrosstalkStage(Stage):
         ])
 
 
-class ContrastBoostStage(Stage):
-    """Chromogen Contrast Boost: analytic smooth contrast — slope
-    (1 + boost) around the grey pivot, smoothly returning to slope 1
-    above the highlight pivot (filmic shoulder; push Highlight Pivot to
-    max to disable it). Both pivots are in STOPS from mid-grey. The
-    Chroma mix blends val-only application (0 = chromaticity untouched)
-    with per-RGB-channel (1 = sat rises with contrast); default 0.5."""
+class ContrastCurveStage(Stage):
+    """Parametric film contrast curve (replaces the old soft-S "Contrast
+    Boost"): a real toe + shoulder S with independent shadow/highlight
+    shaping, a movable mid-point, and pre-curve exposure/flare. Modelled
+    on the [1D] CONTRAST panel Marc grades with (Diachromie) — a
+    behavioral reimplementation from his screenshots, not a source port.
+    Built to sit UNDER the DRT (which carries its own curve), so every
+    control is gentle and the defaults are an EXACT identity.
 
-    name = "Contrast Boost"
-    param_names = ["Contrast Boost", "Grey Pivot", "Highlight Pivot", "Chroma"]
+    All tonal work is in LogC3 code values, measured in STOPS from
+    mid-grey. The pivot is fixed at mid-grey; sliders (Contour "Curve"
+    model — independent toe & shoulder Length + Strength):
+      Contrast          mid slope at the pivot (1 = identity, a straight
+                        line; >1 steepens the mid, the ends roll toward the
+                        white/black points and never hard-clip)
+      Black Point       shadow asymptote LEVEL, in stops below mid-grey —
+                        the curve approaches it, never reaches it. Identity
+                        is far out (-10, no toe in range); bring it in for
+                        deeper (or, above -~5, lifted) blacks.
+      White Point       highlight asymptote level, in stops above mid-grey
+      Toe Length        how long the mid stays linear before the toe rolls:
+                        1 = knee at the black point (no toe in range),
+                        lower starts the toe earlier
+      Toe Strength      toe knee sharpness: 0 = a gentle round, 1 = stays
+                        straight longer then a tighter corner
+      Shoulder Length   the same, for the highlight shoulder
+      Shoulder Strength shoulder knee sharpness
+      Preserve Color    0 = per-RGB (contrast raises saturation, the film
+                        look), 1 = luma only (chromaticity preserved)
+      Mid Push          a midtone bump; + lifts mids, - drops them
+      Mid Compensate    0 = the bump lifts the pivot (a midtone exposure);
+                        1 = the pivot is held and the bump becomes a local
+                        S — the touch of mid contrast film's 'straight
+                        line' really has (K64)
+      Blend             master mix with the untouched input
+      Flare             milky shadow lift, tapering to identity by the highs
+      Exposure          overall shift in stops, applied AFTER the curve
+                        (mid-grey referenced, achromatic — see _expose)
 
-    _SHOULDER = 0.15  # softplus width of the highlight return, val units
+    Black/White Point are the asymptote LEVELS in stops from mid-grey, kept
+    to a sensible visible range: -6 stops is ~code 0 (crushed), Marc's
+    baseline black is ~-4.2 (~code 0.08), -1.5 is milky; drive the toe
+    below the LogC3 floor and the shadows just clamp, so the range stops
+    there. Length is the roll's EXTENT: 0 = knee at the point (no roll in
+    range = identity), 1 = knee at the pivot (the whole end rolls).
+    """
+
+    name = "Contrast Curve"
+    # NOTE the order: the 12 FLOAT sliders map 1:1 onto the DCTL's
+    # sliderFloatParam0..11 and the .drx patch; "Mid Compensate" is LAST
+    # because in the DCTL it is a CHECK_BOX (not a sliderFloatParam), so
+    # keeping it out of the float run keeps every other slider aligned.
+    param_names = [
+        "Contrast", "Black Point", "White Point",
+        "Toe Length", "Toe Strength", "Shoulder Length", "Shoulder Strength",
+        "Preserve Color", "Mid Push", "Blend", "Flare", "Exposure",
+        "Mid Compensate",
+    ]
+
+    # curve shape constants (stops unless noted)
+    _EPS = 1e-6         # guards the headroom divide when Length -> 0
+    _STR_GAIN = 8.0     # Strength 0->1 maps the knee exponent n 1..9 (sharp)
+    _MID_W = 2.0        # mid bump/S half-width
+    _MID_SCALE = 1.0    # Mid Push max lift (stops) at Push = 1
+    _FLARE_SCALE = 0.045  # code-value shadow lift per Flare unit
+    _FLARE_WIDTH = 3.0    # how far up (stops) the flare lift fades out
 
     def identity(self):
-        return np.array([0.0, 0.0, 6.0, 0.5])
+        # Length 0 parks both knees AT the points (out of the working
+        # range), so identity is an EXACT straight line; the solver / a
+        # grade raises a Length to roll that end in.
+        return np.array([1.0, -6.0, 12.0, 0.0, 0.5, 0.0, 0.5,
+                         0.0, 0.0, 1.0, 0.0, 0.0, 0.0])
+
+    def init(self):
+        # Start the SOLVE with the toe & shoulder mid-engaged (Length 0.5)
+        # so the fit has a live gradient on the Point/Length/Strength
+        # controls (the reg still anchors at identity(), so an unneeded
+        # roll relaxes out). Black Point ~-4.5 seeds a sensible film black
+        # (toe lands ~code 0.06, near the LogC3 floor / Marc's baseline).
+        return np.array([1.0, -4.5, 8.0, 0.5, 0.5, 0.5, 0.5,
+                         0.0, 0.0, 1.0, 0.0, 0.0, 0.0])
 
     def bounds(self):
-        return (np.asarray([-0.9, -4.0, 0.5, 0.0]),
-                np.asarray([2.0, 4.0, 14.0, 1.0]))
+        # Black/White Point clamped to the visible range (see class doc);
+        # driving them further just clamps shadows/highlights and the
+        # sliders would appear dead.
+        lo = [0.2, -6.0,  2.5, 0.0, 0.0, 0.0, 0.0, 0.0, -2.0, 0.0, 0.0, -3.0, 0.0]
+        hi = [3.0, -1.5, 12.0, 1.0, 1.0, 1.0, 1.0, 1.0,  2.0, 1.0, 2.0,  3.0, 1.0]
+        return np.asarray(lo), np.asarray(hi)
 
-    def _curve(self, v, boost, grey_abs, highlight_abs):
-        w = self._SHOULDER
-        return v + boost * (
-            (v - grey_abs)
-            - _softplus(v - highlight_abs, w)
-            + _softplus(grey_abs - highlight_abs, w)
-        )
+    # ---- the scalar tone pipeline, run on val or on each RGB channel --
+
+    @staticmethod
+    def _gsc(u, n):
+        """Generalized soft-clip: slope 1 at 0, asymptotes to +-1, with a
+        knee sharpness `n` (n->1 round, large n -> linear then a corner)."""
+        return u / np.power(1.0 + np.power(np.abs(u), n), 1.0 / n)
+
+    def _curve(self, s, contrast, bp, wp, toe_len, toe_str, sh_len, sh_str):
+        """A BOUNDED film S with INDEPENDENT toe & shoulder (Contour model).
+        Mid slope at the pivot is `contrast`; each end then rolls smoothly
+        toward its asymptote — the White/Black Point level in stops — with
+        the roll starting at a knee whose POSITION is set by Length and
+        whose SHARPNESS by Strength. C1-continuous, never hard-clips. With
+        the knees past the working range (Length 1, ±10-stop points) it is
+        an EXACT straight line, so contrast 1 is exact identity.
+        """
+        y = contrast * s
+        # shoulder (highlights): Length 0 -> knee at the point (no roll in
+        # range), Length 1 -> knee at the pivot (the whole end rolls)
+        yk_hi = (1.0 - sh_len) * wp
+        h_hi = wp - yk_hi + self._EPS                 # headroom (> 0)
+        n_hi = 1.0 + self._STR_GAIN * sh_str
+        e_hi = np.maximum(y - yk_hi, 0.0)
+        hi = yk_hi + h_hi * self._gsc(e_hi / h_hi, n_hi)
+        # toe (shadows): bp < 0, so the knee and headroom are negative
+        yk_lo = (1.0 - toe_len) * bp
+        h_lo = bp - yk_lo - self._EPS                 # headroom (< 0)
+        n_lo = 1.0 + self._STR_GAIN * toe_str
+        e_lo = np.minimum(y - yk_lo, 0.0)
+        lo = yk_lo + h_lo * self._gsc(e_lo / h_lo, n_lo)
+        return np.where(y > yk_hi, hi, np.where(y < yk_lo, lo, y))
+
+    def _midterm(self, s, mid_push, comp):
+        u = s / self._MID_W
+        g = np.exp(-0.5 * u * u)
+        hump = g                             # symmetric: lifts the pivot
+        scurve = u * np.exp(0.5) * g         # antisymmetric: holds the pivot
+        shape = (1.0 - comp) * hump + comp * scurve
+        return mid_push * self._MID_SCALE * shape
+
+    @staticmethod
+    def _expose(x, exposure):
+        """A purely tonal (greyscale) exposure move, mid-grey referenced:
+        slide every pixel along the Reuleaux value axis by `exposure` stops
+        (so mid-grey moves by exactly that many stops) and preserve its
+        hue/chroma, so exposure NEVER recolours. Applied AFTER the tone
+        curve — the curve is free to reshape tonality; exposure just
+        repositions the result on the luma axis."""
+        if exposure == 0.0:
+            return x
+        r = rgb_to_reuleaux(x).copy()
+        r[..., 2] = r[..., 2] + exposure * STOP
+        return reuleaux_to_rgb(r)
+
+    def _tone(self, v, params):
+        (contrast, bp, wp, toe_len, toe_str, sh_len, sh_str,
+         _preserve, mid_push, _blend, flare, _exposure, comp) = params
+        # exposure is handled achromatically AFTER the curve in apply()
+        # (see _expose), NOT here — the per-channel curve would tint it.
+        shadow_w = 1.0 - ramp_window(v, MID_GREY, self._FLARE_WIDTH * STOP)
+        v = v + flare * self._FLARE_SCALE * shadow_w
+        s = (v - MID_GREY) / STOP
+        y = (self._curve(s, contrast, bp, wp, toe_len, toe_str, sh_len, sh_str)
+             + self._midterm(s, mid_push, comp))
+        return MID_GREY + y * STOP
 
     def apply(self, x, params):
-        boost, grey_pivot, highlight_pivot, mix = params
-        grey_abs = MID_GREY + grey_pivot * STOP
-        highlight_abs = MID_GREY + highlight_pivot * STOP
+        preserve, blend = params[7], params[9]     # Preserve Color = luma blend
+        rgb_out = self._tone(x, params)
         reuleaux = rgb_to_reuleaux(x)
         hue, sat, val = reuleaux[..., 0], reuleaux[..., 1], reuleaux[..., 2]
-
-        val_mode = reuleaux_to_rgb(np.stack(
-            [hue, sat, self._curve(val, boost, grey_abs, highlight_abs)],
-            axis=-1,
-        ))
-        rgb_mode = self._curve(x, boost, grey_abs, highlight_abs)
-        return (1.0 - mix) * val_mode + mix * rgb_mode
+        luma_out = reuleaux_to_rgb(np.stack(
+            [hue, sat, self._tone(val, params)], axis=-1))
+        curved = (1.0 - preserve) * rgb_out + preserve * luma_out
+        curved = self._expose(curved, params[11])  # exposure AFTER the curve
+        return (1.0 - blend) * x + blend * curved
 
     def label(self, params):
-        boost, grey, highlight, mix = params
-        if abs(boost) < 0.05:
+        (contrast, bp, wp, toe_len, toe_str, sh_len, sh_str,
+         preserve, mid_push, blend, flare, exposure, comp) = params
+        if blend < 0.02:
             return "contrast (idle)"
-        verb = "add contrast" if boost > 0 else "flatten contrast"
-        if mix < 0.25:
-            return f"{verb} (silvery)"
-        if mix > 0.75:
-            return f"{verb} (rich)"
-        return verb
+        bits = []
+        if contrast > 1.05:
+            bits.append("add contrast")
+        elif contrast < 0.95:
+            bits.append("flatten contrast")
+        if abs(exposure) > 0.05:
+            bits.append("brighten" if exposure > 0 else "darken")
+        if flare > 0.05:
+            bits.append("lift shadows")
+        if toe_len > 0.15 and bp > -3.0 and not bits:
+            bits.append("lift blacks")
+        elif toe_len > 0.15 and bp < -5.0 and not bits:
+            bits.append("crush blacks")
+        if not bits:
+            return "contrast (idle)"
+        note = " (rich)" if preserve < 0.25 else (
+            " (clean)" if preserve > 0.75 else "")
+        return bits[0] + note
 
     def describe(self, params):
-        boost, grey, highlight, mix = params
+        (contrast, bp, wp, toe_len, toe_str, sh_len, sh_str,
+         preserve, mid_push, blend, flare, exposure, comp) = params
         return "\n".join([
-            "Contrast Boost (paste into dctl/ContrastBoost.dctl):",
-            f"  Contrast Boost {boost:+.3f}   Grey Pivot {grey:+.3f}   "
-            f"Highlight Pivot {highlight:+.3f}   Chroma {mix:.3f}",
+            "Contrast Curve (paste into dctl/ContrastCurve.dctl):",
+            f"  Contrast {contrast:.3f}  Black Point {bp:+.3f}  "
+            f"White Point {wp:+.3f}",
+            f"  Toe Length {toe_len:.3f}  Toe Strength {toe_str:.3f}  "
+            f"Shoulder Length {sh_len:.3f}  Shoulder Strength {sh_str:.3f}",
+            f"  Preserve Color {preserve:.3f}  Mid Push {mid_push:+.3f}  "
+            f"Blend {blend:.3f}  Flare {flare:.3f}  Exposure {exposure:+.3f}",
+            f"  Mid Compensate (checkbox) {comp:.0f}",
         ])
 
 
@@ -321,10 +481,14 @@ class HighlightBleachStage(Stage):
     param_names = ["R", "Y", "G", "B", "Pivot", "Falloff", "Chroma"]
 
     def identity(self):
-        return np.array([0.0, 0.0, 0.0, 0.0, -2.0, 4.0, 0.0])
+        # Chromogen panel defaults: Pivot -2.00 (stops below mid-grey,
+        # confirmed by the knob position on the panel's grey bar) and
+        # Falloff 0.500 — a soft-kneed threshold: everything above ~2
+        # stops under mid-grey bleaches once an amount is raised
+        return np.array([0.0, 0.0, 0.0, 0.0, -2.0, 0.5, 0.0])
 
     def bounds(self):
-        lo = [0.0, 0.0, 0.0, 0.0, -6.0, 0.5, -1.0]
+        lo = [0.0, 0.0, 0.0, 0.0, -6.0, 0.1, -1.0]
         hi = [1.0, 1.0, 1.0, 1.0, 8.0, 16.0, 1.0]
         return np.asarray(lo), np.asarray(hi)
 
@@ -363,45 +527,69 @@ class HighlightBleachStage(Stage):
 
 
 class NeutralTintStage(Stage):
-    """Chromogen Neutral Tint: tint toward a picked hue with a SIGNED
-    amount (+ = highlights, - = shadows) at constant val — contrast
-    untouched by construction. Pivot/Falloff are in stops; the
-    Chroma gate defaults protective (only-neutrals) so saturated colors
-    aren't pushed toward a gamut edge. Two instances = warm highs +
-    cold lows."""
+    """Neutral Tint v3 — Baselight-style, applied in LOG RGB (Marc,
+    2026-07-21): a SUM-PRESERVING RGB offset toward the picked hue,
+    NOT a reuleaux chroma push. The offset direction is the picked
+    hue's chroma-plane direction mapped back to RGB (zero-sum, so the
+    channel mean — log exposure — is untouched; being a fixed log
+    offset it tints shadows harder than highlights, printer-light
+    style).
+
+    Amount is SIGNED with 0 (identity) in the middle: right tints the
+    highlights, left the shadows. Pivot (stops from mid-grey, 0 = mid
+    grey) and Falloff (ramp width in stops) shape the luma mask — drop
+    the pivot with Amount right to tint mids + highs. Chroma is the
+    Baselight sat mask: 1 = everything (default), down to 0 = only
+    saturated colors, up to 2 = only neutrals. (NOTE: this differs
+    from the signed 0-centred Chroma of the other tools — copied from
+    Baselight's Neutral Tint panel deliberately.)"""
 
     name = "Neutral Tint"
     param_names = ["Hue", "Amount", "Pivot", "Falloff", "Chroma"]
 
-    # slider +-1.0 maps to +-TINT_SCALE in reuleaux sat units — a raw
-    # sat push of 0.5 was WAY too aggressive (Marc); mid-slider should
-    # be a subtle tint, full throw strong but usable
-    TINT_SCALE = 0.25
+    # slider +-1.0 maps to an RGB offset of TINT_SCALE (L2, code
+    # values): full throw on deep shadows separates channels by up to
+    # ~1.6 stops — strong but usable; mid-slider is a subtle tint
+    TINT_SCALE = 0.15
 
     def identity(self):
-        return np.array([0.0, 0.0, 0.0, 4.0, -0.5])
+        # Baselight defaults: Pivot at mid-grey, Falloff 1.0 (stop) — a
+        # near-clean shadows/highlights split at mid-grey that the
+        # falloff then widens/softens
+        return np.array([0.0, 0.0, 0.0, 1.0, 1.0])
 
     def bounds(self):
-        lo = [0.0, -1.0, -6.0, 0.5, -1.0]
-        hi = [360.0, 1.0, 8.0, 16.0, 1.0]
+        lo = [0.0, -1.0, -6.0, 0.1, 0.0]
+        hi = [360.0, 1.0, 8.0, 16.0, 2.0]
         return np.asarray(lo), np.asarray(hi)
+
+    @staticmethod
+    def _tint_direction(hue_deg):
+        """Unit (L2) zero-sum RGB direction whose reuleaux hue is
+        hue_deg — the inverse of the rgb->rot rotation restricted to
+        the chroma plane; the un-normalized vector has norm sqrt(3)
+        for every hue."""
+        ang = (hue_deg / 360.0) * _TWO_PI
+        s2, s6 = np.sqrt(2.0), np.sqrt(6.0)
+        d = np.array([
+            s2 * np.cos(ang),
+            (s6 * np.sin(ang) - s2 * np.cos(ang)) / 2.0,
+            (-s6 * np.sin(ang) - s2 * np.cos(ang)) / 2.0,
+        ])
+        return d / np.sqrt(3.0)
 
     def apply(self, x, params):
         hue_deg, amount, pivot, falloff, chroma = params
+        x = np.asarray(x, dtype=np.float64)
         reuleaux = rgb_to_reuleaux(x)
-        hue, sat, val = reuleaux[..., 0], reuleaux[..., 1], reuleaux[..., 2]
+        sat, val = reuleaux[..., 1], reuleaux[..., 2]
 
         r = ramp_window(val, MID_GREY + pivot * STOP, falloff * STOP)
         side = r if amount >= 0.0 else 1.0 - r
-        m = side * modulation(val, sat, 0.0, 0.0, chroma)
+        m = side * modulation(val, sat, 0.0, 0.0, 1.0 - chroma)
 
         strength = abs(amount) * self.TINT_SCALE
-        d1, d2 = _axis_dir(hue_deg / 360.0)
-        c1, c2 = to_chroma_vec(hue, sat)
-        c1 = c1 + strength * m * d1
-        c2 = c2 + strength * m * d2
-        hue2, sat2 = from_chroma_vec(c1, c2)
-        return reuleaux_to_rgb(np.stack([hue2, sat2, val], axis=-1))
+        return x + (strength * m)[..., None] * self._tint_direction(hue_deg)
 
     def label(self, params):
         hue_deg, amount, pivot, falloff, chroma = params
@@ -422,7 +610,67 @@ class NeutralTintStage(Stage):
         return "\n".join([
             "Neutral Tint (paste into dctl/NeutralTint.dctl):",
             f"  Hue {hue_deg:.1f}°  Amount {amount:+.3f} (tints {where})",
-            f"  Pivot {pivot:+.3f}  Falloff {falloff:.3f}  Chroma {chroma:+.3f}",
+            f"  Pivot {pivot:+.3f}  Falloff {falloff:.3f}  "
+            f"Chroma {chroma:.3f} (1 = all, 0 = saturated, 2 = neutrals)",
+        ])
+
+
+class BrillianceReductionStage(Stage):
+    """Baselight Brilliance Reduction (the last Chromogen-family tool):
+    darken colors ACCORDING TO their saturation — a plain luminance
+    scale (chromaticity untouched), weighted by a sat-domain ramp.
+    Chroma, Pivot and Falloff all live in the SATURATION domain
+    (reuleaux sat units, not stops): Pivot is where the ramp starts
+    biting, Falloff its width, Chroma the overall mask strength.
+
+    Amount 0.0 (LEFT end) is the identity — raise it to reduce. The
+    reduction is an EXPOSURE scale in stops, 2^(-REDUCTION_STOPS *
+    amount * mask): even the most pathological settings (amount 1,
+    chroma 1, pivot 0, falloff 0 = mask everywhere) bottom out at
+    -REDUCTION_STOPS, never black — a linear scale could hit exactly 0
+    and crushed the image (Marc, 2026-07-21). (Amount correction same
+    day: the first screenshot showed a non-default grade with Amount
+    at 1.0; Baselight's true default is 0 and identity-at-1 read as a
+    dead panel.) Defaults Chroma 0.6 / Pivot 0.35 / Falloff 0.5 shape
+    the mask but do nothing while Amount stays at 0."""
+
+    name = "Brilliance Reduction"
+    param_names = ["Amount", "Chroma", "Pivot", "Falloff"]
+
+    # full throw with a fully-open mask darkens by exactly this many
+    # stops — the ceiling that keeps the tool gentle by construction
+    REDUCTION_STOPS = 2.0
+
+    def identity(self):
+        return np.array([0.0, 0.6, 0.35, 0.5])
+
+    def bounds(self):
+        lo = [0.0, 0.0, 0.0, 0.01]
+        hi = [1.0, 1.0, 1.0, 1.0]
+        return np.asarray(lo), np.asarray(hi)
+
+    def apply(self, x, params):
+        amount, chroma, pivot, falloff = params
+        reuleaux = rgb_to_reuleaux(x)
+        hue, sat, val = reuleaux[..., 0], reuleaux[..., 1], reuleaux[..., 2]
+
+        w = chroma * ramp_window(sat, pivot, falloff)
+        val2 = val * 2.0 ** (-self.REDUCTION_STOPS * amount * w)
+        return reuleaux_to_rgb(np.stack([hue, sat, val2], axis=-1))
+
+    def label(self, params):
+        amount = params[0]
+        if amount < 0.05:
+            return "brilliance (idle)"
+        return "reduce brilliance"
+
+    def describe(self, params):
+        amount, chroma, pivot, falloff = params
+        return "\n".join([
+            "Brilliance Reduction (paste into dctl/BrillianceReduction.dctl):",
+            f"  Amount {amount:.3f}",
+            f"  Chroma {chroma:.3f}  Pivot {pivot:.3f}  Falloff {falloff:.3f}"
+            "  (all in the sat domain)",
         ])
 
 
@@ -436,6 +684,7 @@ class _SectorStage(Stage):
 
     # subclasses override index 1 with their tool's slider name
     param_names = ["Hue", "Amount", "Falloff", "Zone", "Pivot", "Chroma"]
+    local_tool = True
 
     _AMOUNT_ID = 0.0
     _AMOUNT_LO = -1.0
@@ -581,14 +830,127 @@ class SectorSquashStage(_SectorStage):
         return reuleaux_to_rgb(np.stack([hue2, sat, val], axis=-1))
 
 
+class SplitToneStage(Stage):
+    """Split Tone — a per-channel cubic-Bezier shadow/highlight shaper,
+    ported from Marc's Bezier_Split_Tone_V2.dctl. Each RGB channel gets a
+    Bezier over the shadows (input <= pivot) and another over the
+    highlights (input > pivot); moving one channel's shadow/highlight
+    against another's IS the split tone (subtractive, per-channel, in log
+    code values — exactly the RGB split we agreed on).
+
+    Per channel: Black (the black level), Shadow (the shadow curve),
+    Highlight (the highlight curve), White (the white level). Defaults
+    Black 0 / Shadow 1 / Highlight 1 / White 1 are an EXACT identity (the
+    Beziers reduce to the straight line, the .333 offsets do the framing).
+
+    Pivot Offset moves the shadow<->highlight crossover (default mid-grey).
+    In the stock tool ALL three channels are pinned to converge at the
+    pivot (neutral mid-grey, a hard crossover Marc found limiting), so
+    each channel also gets a Crossover offset: 0 keeps it pinned (neutral),
+    non-zero floats that channel's crossover LEVEL so the channels need not
+    meet at one point — a mid-grey tint / no forced convergence.
+    """
+
+    name = "Split Tone"
+    param_names = [
+        "Black R", "Black G", "Black B",
+        "Shadow R", "Shadow G", "Shadow B",
+        "Highlight R", "Highlight G", "Highlight B",
+        "White R", "White G", "White B",
+        "Pivot Offset", "Crossover R", "Crossover G", "Crossover B",
+    ]
+
+    _THIRD = 1.0 / 3.0
+    # the stock DCTL scales Black/Shadow/Highlight by 0.333; we use an
+    # EXACT 1/3 so the default Bezier is a perfectly straight identity
+    # (0.333 left a ~1e-4 residual). The updated SplitTone.dctl matches.
+    _CTRL_SCALE = 1.0 / 3.0
+
+    def identity(self):
+        return np.array([0.0, 0.0, 0.0,   # Black RGB
+                         1.0, 1.0, 1.0,   # Shadow RGB
+                         1.0, 1.0, 1.0,   # Highlight RGB
+                         1.0, 1.0, 1.0,   # White RGB
+                         0.0,             # Pivot Offset
+                         0.0, 0.0, 0.0])  # Crossover RGB
+
+    def bounds(self):
+        lo = ([-1.0] * 3 + [0.0] * 3 + [0.0] * 3 + [0.0] * 3
+              + [-0.25] + [-0.2] * 3)
+        hi = ([1.0] * 3 + [2.0] * 3 + [2.0] * 3 + [2.0] * 3
+              + [0.25] + [0.2] * 3)
+        return np.asarray(lo), np.asarray(hi)
+
+    @staticmethod
+    def _bez(r, p0, p1, p2, p3):
+        """Cubic Bezier value at parameter r (control VALUES p0..p3)."""
+        ir = 1.0 - r
+        return p0 * ir ** 3 + 3.0 * p1 * ir ** 2 * r \
+            + 3.0 * p2 * ir * r * r + p3 * r ** 3
+
+    def apply(self, x, params):
+        x = np.asarray(x, dtype=np.float64)
+        pivot = MID_GREY + params[12]
+        pm = 1.0 - pivot
+        out = np.empty_like(x)
+        for ci in range(3):
+            blk = params[0 + ci] * self._CTRL_SCALE
+            shd = params[3 + ci] * self._CTRL_SCALE
+            hil = params[6 + ci] * self._CTRL_SCALE
+            wht = params[9 + ci]                       # used as 1 - wht
+            level = pivot + params[13 + ci]            # per-channel crossover
+            v = x[..., ci]
+            # shadow half (v <= pivot): Bezier [blk, shd, shd+1/3, level]
+            r = np.clip(v / pivot, 0.0, 1.0)
+            sh = self._bez(r, blk, shd, shd + self._THIRD, level / pivot) * pivot
+            # highlight half (v > pivot): mirror about 1
+            rr = np.clip((1.0 - v) / pm, 0.0, 1.0)
+            lm = 1.0 - level
+            hi = 1.0 - self._bez(rr, 1.0 - wht, 1.0 - (hil + self._THIRD),
+                                 1.0 - hil, lm / pm) * pm
+            res = np.where(v <= pivot, sh, hi)
+            # pass through out-of-[0,1] so identity is exact everywhere
+            res = np.where((v < 0.0) | (v > 1.0), v, res)
+            out[..., ci] = res
+        return out
+
+    def label(self, params):
+        blk = params[0:3]
+        wht = np.asarray(params[9:12]) - 1.0
+        if np.max(np.abs(blk)) < 0.03 and np.max(np.abs(wht)) < 0.03 \
+                and np.max(np.abs(params[13:16])) < 0.01:
+            return "split (idle)"
+        # crude warm/cool read from the R-vs-B black balance
+        lo = params[0] - params[2]           # black R - black B
+        return "warm lows" if lo > 0 else "cool lows"
+
+    def describe(self, params):
+        p = np.round(np.asarray(params, dtype=float), 3)
+        return "\n".join([
+            "Split Tone (paste into dctl/SplitTone.dctl):",
+            f"  Black   R {p[0]}  G {p[1]}  B {p[2]}",
+            f"  Shadow  R {p[3]}  G {p[4]}  B {p[5]}",
+            f"  Highlight R {p[6]}  G {p[7]}  B {p[8]}",
+            f"  White   R {p[9]}  G {p[10]}  B {p[11]}",
+            f"  Pivot Offset {p[12]}  Crossover R {p[13]} G {p[14]} B {p[15]}",
+        ])
+
+
 CHROMOGEN_STAGES = [
     ColourSaturationStage,
     ColourCrosstalkStage,
-    ContrastBoostStage,
+    ContrastCurveStage,
     HighlightBleachStage,
+    SplitToneStage,
     NeutralTintStage,
+    BrillianceReductionStage,
     SectorSkewStage,
     SectorBrightnessStage,
     SectorSaturationStage,
     SectorSquashStage,
 ]
+
+# NeutralTintStage stays a known stage (STAGE_POOL: presets, manual bake,
+# .drx node mapping) but is EXCLUDED from the ML search's audition pool —
+# Split Tone replaces it for fitting (Marc, 2026-07-22). See
+# chain_search.default_pool().

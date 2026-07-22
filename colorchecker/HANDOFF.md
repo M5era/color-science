@@ -3,7 +3,67 @@
 Read this first in a new session. It is the map: what the tool is, what
 is built, the non-negotiable decisions, the resources, and where we
 left off. Deep design lives in `ROADMAP.md`; this is the orientation
-layer. (Refreshed 2026-07-20 end-of-session; supersedes prior handoff.)
+layer. (Refreshed 2026-07-21 end-of-session; supersedes prior handoff.)
+
+---
+
+## 0. Latest session (2026-07-22)
+
+Curve + split-tone overhaul, driven by Marc grading in Resolve:
+
+- **Contrast Curve exposure** is now achromatic AND applied AFTER the
+  curve, mid-grey referenced: dialling ±N stops moves mid-grey by exactly
+  ±N stops, preserves hue/chroma (~1e-13 drift). It no longer recolours.
+  (`_expose` in chromogen.py; mirrored in torch + DCTL.)
+- **Contrast Curve toe/shoulder rebuilt on Contour's model**: Black/White
+  Point (asymptote LEVELS, capped to the visible range — black -6..-1.5
+  stops ≈ code 0..0.28, baseline ~code 0.08 at -4.2), Toe/Shoulder Length
+  (roll EXTENT: 0=knee at point/identity, 1=knee at pivot), Toe/Shoulder
+  Strength (knee sharpness n 1..9), Preserve Color (= old Luma Blend),
+  Mid Push + Mid Compensate (Compensate ON = the mid-S). Solver `init()`
+  hook seeds the toe/shoulder engaged (identity is a dead-gradient
+  region). All exact-identity + numpy/torch parity.
+- **Split Tone stage NEW** (`SplitToneStage`, chromogen.py + torch mirror
+  + dctl/SplitTone.dctl): per-channel cubic-Bezier shadow/highlight
+  (Black/Shadow/Highlight/White ×RGB), ported from Marc's Bezier split
+  tone. RGB/log per-channel (the subtractive split we agreed on). Added
+  **per-channel Crossover offset**: 0 pins the channel to the pivot
+  (neutral mid, as the stock tool forced all 3), non-zero floats its
+  crossover LEVEL so channels need NOT converge at one point (mid tint).
+  Uses exact 1/3 framing (stock DCTL's 0.333 left ~1e-4 non-identity).
+- **Neutral Tint is OUT of the ML search pool** (Marc): Split Tone
+  replaces it for fitting. It stays in STAGE_POOL (presets / manual /
+  .drx mapping). See `chain_search.default_pool()`. local_search's
+  tone-unfreeze now triggers on Split Tone OR Neutral Tint.
+- **DCTLs renamed to theme**: Bezier_Split_Tone_V2 → SplitTone.dctl,
+  ME_Filmic_Contrast_v1.3 → FilmicContrast.dctl. Both default to LogC3.
+- **New kitchen-sink template** `1.5.3.T.drx` (scratchpad) has
+  FilmicContrast + SplitTone + sectors + OpenDRT — but NO ContrastCurve /
+  ColourSaturation. NOT yet wired as the export default because the fit
+  still uses ContrastCurve (see next).
+
+**Open / next (in priority order):**
+
+1. **Port ME_Filmic_Contrast (FilmicContrast.dctl) as a stage.** Marc: "for
+   the contrast, lets just use this for now, this really works." Its
+   **Exposure must be mid-grey-balanced only** (same principle as our fix
+   — balance the LUT mid-grey to the target mid-grey, achromatic). Once
+   ported, retire ContrastCurve from the ML pool and swap the export
+   default to the 1.5.3.T template (which has FilmicContrast + SplitTone).
+   Also needs ColourSaturation in that template (or drop it from the pool).
+2. **Contrast curve: one extra FREE control point** (Marc, 2026-07-22),
+   for model flexibility. Params: an **x coordinate** (where on the curve)
+   and a **y ± offset** from where the curve currently is at that x —
+   maybe a spline/tension param if needed, but PREFER leaving it out and
+   finding a smooth way (fewer knobs for the same functionality is the
+   explicit goal). A single movable point that bumps the curve locally
+   and smoothly. Whether this lands on ContrastCurve or FilmicContrast
+   depends on (1).
+3. Split Tone crossover: Marc floated a "disable crossover" TOGGLE too;
+   we shipped per-channel Crossover OFFSETS (0 = pinned) which subsume it
+   and are fittable. Confirm that covers his intent or add a hard toggle.
+4. Powergrade export needs a template containing EVERY fittable node type;
+   Marc's working templates don't. Resolve once the pool is settled (1).
 
 ---
 
@@ -70,15 +130,19 @@ colorchecker/
     drx.py                     .drx parse/patch: zstd bodies, DCTL nodes, slider doubles
                                (fixed-width patch), combo/checkbox READ
   app/ui/                      PySide6; three tabs (Processing/Matching/LUT Inspector)
-  dctl/                        11 companion DCTLs (paste-parity with solver reports)
+  dctl/                        12 companion DCTLs (paste-parity with solver reports)
   tools/                       reuleaux_bake, reuleaux_fine_bake, stage_bake,
                                lut_match (CLI), drx_export
-  templates/                   Marc's powergrades: contrast_boost_1.6.4.T.drx
-                               (DEFAULT: 8 Chromogen nodes + ContrastBoost +
-                               openDRT + genesis cube node; only LiftGammaGain
-                               still missing), plus the older 1.6.1/1.6.2 ones
+  templates/                   Marc's powergrades. DEFAULT (2026-07-21):
+                               brilliance_red_1.4.1.T.drx — 12 look nodes incl.
+                               BrillianceReduction, LGG, 2x NeutralTint, all 4
+                               Sectors + 2x OpenDRT (which one is live?
+                               unverified). Its BrillianceReduction node has NO
+                               stored double for Pivot (slider 2) — Marc must
+                               wiggle it once + re-save to make it patchable.
+                               Older: contrast_boost_1.6.4.T.drx + 1.6.1/1.6.2
   reference/OpenDRT.dctl       openDRT source (Jed Smith, GPLv3) for the port
-  tests/                       135 green offscreen (torch tests auto-skip w/o torch)
+  tests/                       146 green offscreen (torch tests auto-skip w/o torch)
 ```
 
 Tests drive REAL interaction paths (canvas signals, mocked dialogs).
@@ -106,30 +170,105 @@ emissive overlays, CSV export, project save/load.
   360-degree zone + sat/luma masks), Lift Gamma Gain (prep: master
   lift+gamma, per-channel gain; reg_scale=25, fitted LAST in stagewise
   init — only moves if it makes the fit a LOT easier; verified both
-  ways), and the **Chromogen family**: Colour Saturation (R/G+Y/B
-  opponent axes; Y/B is a native reuleaux axis), Colour Crosstalk
-  (inherent luminance-weighted tilt), Contrast Boost (grey/highlight
-  pivots + chroma mix 0=val-only..1=per-RGB), Highlight Bleach (RYGB
-  sectors x highlight ramp), Neutral Tint (signed amount +-highs/lows,
-  val-preserving, x0.25 internal scale), Sector Skew/Brightness/
-  Saturation/Squash (single picked hue; squash signed, foldover-proof;
-  sector SATURATION IS LINEAR — the power law amplified noise).
+  ways), and the **Chromogen family** (now 10): Colour Saturation
+  (R/G+Y/B opponent axes; Y/B is a native reuleaux axis), Colour
+  Crosstalk (inherent luminance-weighted tilt; the inherent val
+  weighting FADES OUT as |Zone| rises so full-zone throw still has an
+  effect — Marc 2026-07-21), **Contrast Curve v2** (NEW 2026-07-21,
+  replaces the old soft-S "Contrast Boost": a real toe+shoulder film S
+  modelled on Diachromie's [1D] CONTRAST panel — Contrast (linear
+  slope), White/Black Offset (highlight/shadow slope, the smooth
+  shoulder/toe), Mid Push + Mid Compensate (midtone bump that lifts the
+  pivot, or holds it and adds local S), Shoulder/Toe Rolloff (knee
+  sharpness, -1≈linear, inert while its offset=1), Luma Blend
+  (0=per-RGB/raises sat, 1=luma only), Blend, plus pre-curve Flare
+  (milky shadows) and Exposure; all in LogC3 stops, pivot fixed at
+  mid-grey, identity=do-nothing; the DCTL has a Draw Curve checkbox that
+  scopes the live curve on screen), Highlight Bleach (RYGB
+  sectors x highlight ramp), **Neutral Tint v3** (Baselight-style,
+  2026-07-21: SUM-PRESERVING offset in LOG RGB — not a reuleaux chroma
+  push; signed amount 0-centred, right=highs/left=lows; Chroma slider
+  is Baselight's 0..2 sat mask, 1=all/0=saturated/2=neutrals;
+  TINT_SCALE=0.15), **Brilliance Reduction** (NEW 2026-07-21, the last
+  missing Chromogen tool: luminance scale weighted by a SAT-domain
+  ramp; Amount 1.0=identity at right end, pull DOWN to reduce;
+  Chroma/Pivot/Falloff all in sat units, defaults 0.6/0.35/0.5;
+  CORRECTED same day: identity is Amount 0 at the LEFT end, raise to
+  reduce — the first screenshot's Amount 1.0 was a graded value, and
+  the identity-at-1 first version read as a dead panel),
+  Sector Skew/Brightness/Saturation/Squash (single picked hue; squash
+  signed, foldover-proof; sector SATURATION IS LINEAR — the power law
+  amplified noise).
 - **Modulation block everywhere:** Zone (signed, middle=all), Pivot
   (IN STOPS from mid-grey; LogC3 calibration MID_GREY=0.391,
   STOP=0.0741), Chroma (signed: right=saturated, left=neutrals).
-  Falloff (stops) only where Chromogen exposes it.
+  Falloff (stops) only where Chromogen exposes it. EXCEPTIONS (copied
+  from Baselight's own panels): Neutral Tint's Chroma is 0..2 with
+  1=everything; Brilliance Reduction's Chroma/Pivot/Falloff are in the
+  sat domain.
+- **Panel calibration source:** `reference/chromogen_panels.md` (repo
+  root) — full transcription of Marc's Baselight panel screenshots
+  (ALL 10 tools covered incl. the four Sector panels) with per-slider
+  defaults/ranges/bar graphics, the pivot=stops evidence, Marc's
+  answers (Baselight hue 0 = yellow, ours stays red-at-0; Extended
+  Ranges ~doubles effect; keep our Chroma sign), and the remaining
+  open questions (tooltip texts "later", falloff units). 2026-07-21
+  recalibration from it: Colour Saturation R/G+Y/B range 0..2
+  (identity centred), Contrast Boost floor 0.0 (no negative), Bleach
+  falloff default 0.5 stops, Tint falloff default 1.0 stops (falloff
+  lower bounds now 0.1). Baselight panel default pivots (Bleach -2.00,
+  Tint -0.70~mid-grey) CONFIRM our stops convention.
 - **Solvers:** RBF (unchanged) and Parametric — stagewise coordinate
   descent (prep stages last, per-stage identity reg) -> optional
   **backprop** (torch optional dep; Adam over sigmoid-bounded params;
   multi-restart hue placement for Fine zones) -> scipy joint refine.
   Output: error waterfall + **noise-gain KPI** per stage/chain +
-  labels + paste-ready reports.
+  labels + paste-ready reports. solve_parametric now takes
+  `init_params` (warm start).
+- **FREE-ORDER CHAIN SEARCH** (Marc's 2026-07-21 pipeline rework,
+  `app/core/chain_search.py`): no preset, no LGG, no prescribed
+  order — greedy forward construction auditions every Chromogen tool
+  each round (hue multi-seeded), appends the winner, jointly refines
+  the whole chain, stops at --max-nodes or when the best candidate
+  gains < min_gain (0.5% default); final polish+report via
+  solve_parametric warm start. Validated: recovers a hidden 4-tool
+  chain exactly, in order, error 0.179 -> 0.002 after 4 nodes; ~40s
+  for 8 nodes / 1500 samples / scipy on the cloud box.
+  - **broad_bias** (default 0.15, CLI --broad-bias): single-hue tools
+    (Sector family, Fine — `Stage.local_tool=True`) get their audition
+    gain discounted so BROAD tools win ties (Marc: "so much sector
+    stuff"). Acceptance/min_gain always use the real undiscounted gain,
+    and a stalled biased winner falls back to the raw best so the bias
+    can never prematurely stop the search.
+  - **neutral_tone / grey-locked tone** (default ON, CLI --free-tone
+    to disable; Marc: "contrast adjusted based on grey scale only"):
+    before the free search, ONE Contrast Boost is fitted on the
+    NEUTRAL samples only and FROZEN as node 1; Contrast Boost then
+    leaves the audition pool. Every other tool is neutral-safe by
+    construction, so the grey match is exact and can't be disturbed.
+    Implemented via solve_parametric's new `frozen=N` arg (first N
+    stages applied but never optimized).
+  - **crash insurance**: search mode writes a `<out>.chain.json`
+    (stages + params) as soon as the search finishes, and the drx
+    template is now opened BEFORE the solve (fail-fast on missing
+    zstandard) — a failed export can never cost the search again.
 - **Chain presets** incl. "Chromogen match (LGG prep -> Chromogen
   chain)" and "Chromogen film look (full stack)" (Marc's canonical
   order: sectors BEFORE Highlight Bleach; duplicates allowed).
 
-### DCTLs — 11 files, sliders EXACTLY = solver report units
-ReuleauxFine + 9 Chromogen tools + LiftGammaGain. Resolve quirk:
+### DCTLs — 12 files, sliders EXACTLY = solver report units
+ReuleauxFine + 10 Chromogen tools + LiftGammaGain (ContrastBoost.dctl
+renamed → ContrastCurve.dctl: 10 float sliders + TWO checkboxes — Mid
+Push Compensate (right after Mid Push, like Diachromie) and Draw Curve
+(scopes the live curve on screen). Because a checkbox is NOT a
+sliderFloatParam, "Mid Compensate" is the LAST entry in the stage's
+param_names so the 10 float sliders stay contiguous (sliderFloatParam
+0..9) for the .drx patch; its fitted 0/1 value is exported as a template
+gap, not auto-patched. DCTL overlay math is per-component only — this
+compiler rejects float3+scalar). NOTE: the
+NeutralTint.dctl sliders CHANGED 2026-07-21 (Chroma now 0..2 default
+1; log-RGB math) — Marc must reinstall it, and NeutralTint nodes saved
+in the powergrade templates carry old-convention values. Resolve quirk:
 transform() signature must be ONE LINE. Chromogen-family DCTLs carry
 the reuleaux no-license warning (private use only). Marc: "it fucking
 works". NOT yet formally A/B-verified vs Python (tools/stage_bake
@@ -139,15 +278,32 @@ bakes any stage by slider name for that).
 `python3 -m tools.lut_match --lut look.cube [--backend torch]
 [--drt drt.cube] [--target-is-display] [--out fitted.cube]
 [--drx-out fitted.drx] [--source-csv patches.csv]`
+- **--search --max-nodes N [--min-gain 0.005] [--broad-bias 0.15]
+  [--free-tone] --deliver**: the free-order search mode (see above);
+  --deliver drops the fitted .cube AND .drx into ~/Downloads (for
+  local runs on the Mac). Search+drx: the .drx can only run the
+  template's node order, so if the discovered order differs the CLI
+  REFITS the found stage set in template order (warm start) and
+  reports both errors; unused template look-nodes are reset to
+  identity so the exported grade is exactly the fitted chain.
+- **--drt-math** = the ANALYTIC openDRT (app/core/opendrt.py, Marc's
+  exact config) instead of a baked --drt cube: display-domain loss,
+  NO inversion, NO unreachable-dropping. This is what surfaced
+  the tone tool in the genesis match (the cube sandwich had been
+  deleting the tone evidence). scipy backend only (no torch mirror
+  yet). Recommended genesis command:
+  `python3 -m tools.lut_match --lut test_luts/genesis_e100_base.cube
+  --drt-math --target-is-display --search --max-nodes 20 --deliver`
 - --drt = display-referred sandwich (fit in log under the DRT, errors
   through it, unreachable targets dropped).
 - --target-is-display = the look LUT already renders to display
   (genesis!): solve DRT(chain(x)) ~= lut(x).
-- Real-world result (genesis e100 under openDRT): display error
-  0.224 -> 0.109 mean; residual is mostly TONE (two different
-  renderings); 484/1395 unreachable (cube inversion + gamut). See
-  ROADMAP "first real run" section. Bound-pinned params = wrong
-  composition smell.
+- Real-world result (genesis e100 under openDRT): OLD cube sandwich
+  0.224 -> 0.109 mean, 484/1395 unreachable. NEW analytic --drt-math
+  + free search (20 nodes, Marc's local run): 0 dropped, display error
+  0.199 -> 0.060, and Contrast Boost is now picked (node 2, +0.837).
+  Still bound-pinned sector params + a noise-gain spike (max ×457) =
+  next-session cleanup (noise-gain-aware search).
 
 ### PowerGrade (.drx) — GENERATION WORKS, VERIFIED IN MARC'S RESOLVE
 `app/core/drx.py`: XML wrapper -> prefix byte + zstd protobuf bodies;
@@ -163,7 +319,63 @@ nodes are leftover pool junk — ignore.
 
 ---
 
-## 5. IMMEDIATE NEXT TASK: the openDRT port
+## 5. openDRT port: DONE (2026-07-21) — and it fixed genesis
+
+`app/core/opendrt.py`: 1:1 float64 port of Marc's EXACT installed
+OpenDRT v1.1.0b50 (`reference/OpenDRT_installed.dctl`, GPLv3), preset
+tables resolved for his confirmed config (AWG3 / LogC3 / Standard /
+Low Contrast / sRGB 2.2, cwp D65, Lp 100). **VALIDATION GATE PASSED
+first try**: mean abs err 7e-6 / max 6e-5 vs the Resolve-baked 65^3
+cube (`test_luts/`, committed) — float32 quantization territory.
+
+**Display-domain loss shipped**: `display_transform=` in
+solve_parametric / search_chain / lut_match (`--drt-math` CLI flag) —
+residual = openDRT(chain(x)) - display_target, computed analytically.
+No cube inversion, no unreachable-dropping. That dropping was the bug
+that hid Contrast Boost from the genesis search (the contrasty
+shadow/highlight pairs were exactly the ones deleted; a synthetic
+sandwich with few drops picked Contrast Boost immediately).
+
+**Genesis verification (cloud, 12 nodes, 1200 samples, scipy):**
+Contrast Boost appears as node 2 at +0.809; display error 0.064
+(old cube-sandwich baseline: 0.109). Caveats for next session:
+chain noise gain max x4188 (a squash/skew pinned at bounds — consider
+a noise-gain penalty or cap in the search), several bound-pinned
+sector params, worst patch 0.335.
+
+### Next steps (new priority order)
+1. **CONTRAST CURVE v2 — DONE (Marc, 2026-07-21).** Replaced the old
+   soft-S "Contrast Boost" with `ContrastCurveStage`, a full film S
+   modelled behaviorally on Diachromie's [1D] CONTRAST panel (Marc's
+   six curve screenshots pinned every slider). Sliders: Contrast
+   (linear log slope), White/Black Offset (highlight/shadow slope = the
+   smooth shoulder/toe; 1=neutral), Mid Push + Mid Compensate (midtone
+   bump: off lifts the pivot, on holds it and adds local S),
+   Shoulder/Toe Rolloff (knee sharpness; -1≈linear, inert while the
+   matching offset=1), Luma Blend (0=per-RGB raises sat, 1=luma-only
+   chroma-preserving), Blend, Flare (milky shadows), Exposure (stops).
+   Identity = do-nothing; pivot fixed at mid-grey; validated to machine
+   epsilon against all six screenshots (slopes, flare, mid-push pivot
+   hold). numpy + torch mirror (parity 1e-9) + ContrastCurve.dctl
+   (with a Draw Curve on-screen scope, à la Film_Curve_1.dctl) + the
+   neutral-tone freeze path all updated together; presets renamed.
+   NOTE the deliberate overlap: per-RGB contrast also moves saturation,
+   so in a pool WITH neutrals the neutral_tone freeze pulls one Contrast
+   Curve out and removes it from the audition (no double-dip); the two
+   synthetic search tests that build sat looks now exclude it / cap the
+   contrast to stay unambiguous. STILL TO EYEBALL ON FOOTAGE (Marc): the
+   guessed shape constants — rolloff knee width/range (_K0=1.2,
+   _K_RANGE=6), mid-push width/scale (_MID_W=2, _MID_SCALE=1), flare
+   scale/width (0.045/3 stops) — and whether Contrast should cap at 2.0.
+2. Torch mirror of the openDRT port -> backprop with display loss
+   (currently --drt-math is scipy-only; --backend torch raises early).
+3. Noise-gain-aware search (penalize auditions that amplify noise) —
+   the genesis run still pins some sector params at bounds + spikes
+   noise gain.
+4. Matching-tab UI hookup for the chain search + drt-math + the new
+   toggles (broad-bias, grey-locked tone).
+
+## 5b. (historical) the original port plan
 
 Goal: replace the baked openDRT cube with exact math
 (`app/core/opendrt.py` + torch mirror) -> exact/cheap inversion (fewer
@@ -210,13 +422,15 @@ port module must carry the license; fine for private use).
 
 ## 7. Dev workflow / gotchas
 
-- **Branch:** `claude/color-checker-handoff-91whob` (PRs #1/#2 merged
-  long ago; this branch carries the whole Chromogen/backprop/drx era).
+- **Branch:** `claude/color-tools-crosstalk-tint-d6pbl7` (current;
+  crosstalk-zone fix + Neutral Tint v3 + Brilliance Reduction). The
+  Chromogen/backprop/drx era lived on `claude/color-checker-handoff-
+  91whob`, merged via PRs #3-#5.
 - **Run on Mac:** `python3 main.py` from `colorchecker/`; deps
   `python3 -m pip install -r requirements.txt` (NOT pip3 — path has
   spaces). torch is OPTIONAL (backprop); zstandard required (drx).
 - **Tests:** `QT_QPA_PLATFORM=offscreen python3 -m pytest tests/` —
-  135 green, ~2-3 min. Cloud container may need
+  146 green, ~2-3 min. Cloud container may need
   `apt-get install libegl1 libgl1 libxkbcommon0` for Qt.
 - **Detection code is Marc-blessed** — don't touch without cause.
 - **Commit trailers:** Co-Authored-By + Claude-Session lines; never
@@ -231,10 +445,21 @@ port module must carry the license; fine for private use).
 2. Marc's real-footage validation: Fine-zone DCTL pixel A/B, the
    fitted genesis .drx on footage, stops-calibrated pivots feel.
 3. Order-search option for chain order (roadmap, soft preference).
-4. Sector Saturation linear range 0-2: Marc may want it tighter.
+4. ~~Sector Saturation linear range 0-2~~ RESOLVED 2026-07-21: the
+   Baselight panel shows 1.00 dead-centre of 0..2 — our range is right.
 5. Tone pre-curve option for LUT matching (bridging different
    renderings — roadmap).
 6. drx node LABEL patching (variable-length strings -> needs generic
    protobuf re-serialize; short_label() names exist already).
 7. Transfer-function dropdown for stops calibration (LogC3-only now).
 8. Curves-in-DRX experiment (old thread, still unrun).
+9. Brilliance Reduction is still absent from the "Chromogen film look
+   (full stack)" preset (search mode makes order moot, but preset
+   mode users should know). The NEW template has its node, but with
+   Pivot unpatchable (see templates/ note) and saved with old-DCTL
+   values (identity reset on export handles that). Matching-tab UI
+   does not expose the chain search yet — CLI only.
+10. Marc to eyeball the 2026-07-21 changes on footage: crosstalk
+    shadow-zone strength, Neutral Tint v3 feel (TINT_SCALE=0.15 max
+    throw), Brilliance Reduction slider ranges (all guessed 0..1 from
+    the Baselight screenshot knob positions).

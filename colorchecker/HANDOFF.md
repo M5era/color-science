@@ -131,6 +131,18 @@ torch + dctl/FilmicContrast.dctl — reinstall the DCTL again):**
   lows" Split Tones smell like one tool doing gradual descent — the
   re-admitted Neutral Tint may consolidate those in the next run.
 
+**Neutral Tint falloff v4 — Marc's design sketch (2026-07-22, for
+later):** the floor fix helped the highlight side but "it is still
+funky in the bottom". Marc's replacement model: imagine ONE bell-shaped
+weight curve (gaussian-FEELING, "doesn't need to be mathematically"
+gaussian) laid over the whole log range. **Amount** shifts the whole
+bell left (shadows) / right (highlights) from centre; **Pivot** is the
+predefined middle anchor (mid-grey); **Falloff** sets the bell's width
+AND its smoothness in one move. This replaces the current one-sided
+ramp (whose hard saturation below the ramp is what misbehaves in the
+bottom). Not implemented yet — waiting until the current match loop
+settles.
+
 **Open / next (in priority order):**
 
 1. **Marc verifies in Resolve**: (a) install the committed

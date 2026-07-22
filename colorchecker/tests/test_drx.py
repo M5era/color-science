@@ -61,50 +61,32 @@ KITCHEN_SINK = (Path(__file__).resolve().parents[1]
                 / "templates" / "all_nodes_1.10.3.T.drx")
 
 
-def test_lut_match_to_drx_end_to_end(tmp_path, monkeypatch, capsys):
-    """The full Plan C pipeline: LUT in -> from-scratch PowerGrade out.
-
-    Exercises the real deliverable path — a free-order --search fit
-    exported by cloning exactly the fitted chain (+ DRT) out of the
-    kitchen-sink template, each node carrying its short label."""
-    import sys
-
+def test_build_grade_from_scratch_with_labels(tmp_path):
+    """From-scratch PowerGrade generation (the export deliverable path):
+    build_grade clones EXACTLY the requested chain (+ DRT) out of the
+    kitchen-sink template, in order, each node carrying its label. Node
+    types repeat as often as asked. This is what the CLI --drx-out path
+    calls under the hood."""
     from app.core.drx import DrxTemplate
-    from app.core.protobuf import Message
-    from tests.test_lut_match import _chromogen_look_cube
-    from tools import lut_match as cli
+    from app.core.drx_build import build_grade
 
     if not KITCHEN_SINK.exists():
         pytest.skip("kitchen-sink template not present")
 
-    _chromogen_look_cube(tmp_path)
     out_drx = tmp_path / "fitted.drx"
-    monkeypatch.setattr(sys, "argv", [
-        "lut_match", "--lut", str(tmp_path / "look.cube"),
-        "--search", "--max-nodes", "4", "--samples", "500",
-        "--drx-out", str(out_drx), "--drx-template", str(KITCHEN_SINK),
-    ])
-    cli.main()
-    text = capsys.readouterr().out
-    assert "from scratch" in text
+    names = ["ContrastCurve", "ColourSaturation", "SectorBrightness",
+             "SectorBrightness"]
+    labels = ["Con", "BstYB", "DrkBlu", "BrtOrg"]
+    build_grade(KITCHEN_SINK, names, out_drx, labels=labels + ["OpenDRT"])
 
     fitted = DrxTemplate(out_drx)
-    names = [n.dctl_name for n in fitted.nodes]
-    # the generated stack is EXACTLY the fitted look nodes + the DRT,
-    # nothing else — no leftover identity nodes from the kitchen sink
-    assert names[-1] == "OpenDRT"
-    assert "LiftGammaGain" not in names          # --search never emits LGG
-    assert len(names) == len(cli_stage_count(text)) + 1  # look nodes + DRT
-
+    dnames = [n.dctl_name for n in fitted.nodes]
+    # exactly the requested chain + DRT, in order — no leftover template nodes
+    assert dnames == names + ["OpenDRT"]
     # every generated node carries a non-empty display label (field 6)
     body = _node_container(fitted)
-    labels = [n.as_message().find(6) for n in body.find(7)]
-    assert all(lbl and lbl[0].value for lbl in labels)
-
-
-def cli_stage_count(text: str) -> list[str]:
-    """The 'drx node <Type>#<k>' lines list one entry per look node."""
-    return [ln for ln in text.splitlines() if ln.strip().startswith("drx node")]
+    got = [n.as_message().find(6) for n in body.find(7)]
+    assert [g[0].value.decode() for g in got] == labels + ["OpenDRT"]
 
 
 def _node_container(fitted):

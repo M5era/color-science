@@ -7,6 +7,66 @@ layer. (Refreshed 2026-07-21 end-of-session; supersedes prior handoff.)
 
 ---
 
+## 0. Latest session (2026-07-22)
+
+Curve + split-tone overhaul, driven by Marc grading in Resolve:
+
+- **Contrast Curve exposure** is now achromatic AND applied AFTER the
+  curve, mid-grey referenced: dialling ±N stops moves mid-grey by exactly
+  ±N stops, preserves hue/chroma (~1e-13 drift). It no longer recolours.
+  (`_expose` in chromogen.py; mirrored in torch + DCTL.)
+- **Contrast Curve toe/shoulder rebuilt on Contour's model**: Black/White
+  Point (asymptote LEVELS, capped to the visible range — black -6..-1.5
+  stops ≈ code 0..0.28, baseline ~code 0.08 at -4.2), Toe/Shoulder Length
+  (roll EXTENT: 0=knee at point/identity, 1=knee at pivot), Toe/Shoulder
+  Strength (knee sharpness n 1..9), Preserve Color (= old Luma Blend),
+  Mid Push + Mid Compensate (Compensate ON = the mid-S). Solver `init()`
+  hook seeds the toe/shoulder engaged (identity is a dead-gradient
+  region). All exact-identity + numpy/torch parity.
+- **Split Tone stage NEW** (`SplitToneStage`, chromogen.py + torch mirror
+  + dctl/SplitTone.dctl): per-channel cubic-Bezier shadow/highlight
+  (Black/Shadow/Highlight/White ×RGB), ported from Marc's Bezier split
+  tone. RGB/log per-channel (the subtractive split we agreed on). Added
+  **per-channel Crossover offset**: 0 pins the channel to the pivot
+  (neutral mid, as the stock tool forced all 3), non-zero floats its
+  crossover LEVEL so channels need NOT converge at one point (mid tint).
+  Uses exact 1/3 framing (stock DCTL's 0.333 left ~1e-4 non-identity).
+- **Neutral Tint is OUT of the ML search pool** (Marc): Split Tone
+  replaces it for fitting. It stays in STAGE_POOL (presets / manual /
+  .drx mapping). See `chain_search.default_pool()`. local_search's
+  tone-unfreeze now triggers on Split Tone OR Neutral Tint.
+- **DCTLs renamed to theme**: Bezier_Split_Tone_V2 → SplitTone.dctl,
+  ME_Filmic_Contrast_v1.3 → FilmicContrast.dctl. Both default to LogC3.
+- **New kitchen-sink template** `1.5.3.T.drx` (scratchpad) has
+  FilmicContrast + SplitTone + sectors + OpenDRT — but NO ContrastCurve /
+  ColourSaturation. NOT yet wired as the export default because the fit
+  still uses ContrastCurve (see next).
+
+**Open / next (in priority order):**
+
+1. **Port ME_Filmic_Contrast (FilmicContrast.dctl) as a stage.** Marc: "for
+   the contrast, lets just use this for now, this really works." Its
+   **Exposure must be mid-grey-balanced only** (same principle as our fix
+   — balance the LUT mid-grey to the target mid-grey, achromatic). Once
+   ported, retire ContrastCurve from the ML pool and swap the export
+   default to the 1.5.3.T template (which has FilmicContrast + SplitTone).
+   Also needs ColourSaturation in that template (or drop it from the pool).
+2. **Contrast curve: one extra FREE control point** (Marc, 2026-07-22),
+   for model flexibility. Params: an **x coordinate** (where on the curve)
+   and a **y ± offset** from where the curve currently is at that x —
+   maybe a spline/tension param if needed, but PREFER leaving it out and
+   finding a smooth way (fewer knobs for the same functionality is the
+   explicit goal). A single movable point that bumps the curve locally
+   and smoothly. Whether this lands on ContrastCurve or FilmicContrast
+   depends on (1).
+3. Split Tone crossover: Marc floated a "disable crossover" TOGGLE too;
+   we shipped per-channel Crossover OFFSETS (0 = pinned) which subsume it
+   and are fittable. Confirm that covers his intent or add a hard toggle.
+4. Powergrade export needs a template containing EVERY fittable node type;
+   Marc's working templates don't. Resolve once the pool is settled (1).
+
+---
+
 ## 1. What this is
 
 A macOS (Apple Silicon), Python/PySide6 clone-and-extension of Nico

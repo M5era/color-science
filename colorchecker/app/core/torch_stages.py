@@ -28,6 +28,7 @@ from app.core.chromogen import (
     SectorSaturationStage,
     SectorSkewStage,
     SectorSquashStage,
+    SplitToneStage,
 )
 from app.core.stages import (
     LiftGammaGainStage,
@@ -407,6 +408,39 @@ def _sector_squash_apply(stage, x, p):
     return _reuleaux_to_rgb(hue2, sat, val)
 
 
+def _split_tone_apply(stage, x, p):
+    """Differentiable mirror of SplitToneStage.apply (per-channel Bezier)."""
+    mg = chromogen.MID_GREY
+    pivot = mg + p[12]
+    pm = 1.0 - pivot
+    third = stage._THIRD
+    scale = stage._CTRL_SCALE
+
+    def bez(r, p0, p1, p2, p3):
+        ir = 1.0 - r
+        return p0 * ir ** 3 + 3.0 * p1 * ir ** 2 * r \
+            + 3.0 * p2 * ir * r * r + p3 * r ** 3
+
+    chans = []
+    for ci in range(3):
+        blk = p[0 + ci] * scale
+        shd = p[3 + ci] * scale
+        hil = p[6 + ci] * scale
+        wht = p[9 + ci]
+        level = pivot + p[13 + ci]
+        v = x[..., ci]
+        r = torch.clamp(v / pivot, 0.0, 1.0)
+        sh = bez(r, blk, shd, shd + third, level / pivot) * pivot
+        rr = torch.clamp((1.0 - v) / pm, 0.0, 1.0)
+        lm = 1.0 - level
+        hi = 1.0 - bez(rr, 1.0 - wht, 1.0 - (hil + third),
+                       1.0 - hil, lm / pm) * pm
+        res = torch.where(v <= pivot, sh, hi)
+        res = torch.where((v < 0.0) | (v > 1.0), v, res)
+        chans.append(res)
+    return torch.stack(chans, dim=-1)
+
+
 _APPLY = {
     LiftGammaGainStage: _lgg_apply,
     LinearMatrixStage: _matrix_apply,
@@ -424,6 +458,7 @@ _APPLY = {
     SectorBrightnessStage: _sector_brightness_apply,
     SectorSaturationStage: _sector_saturation_apply,
     SectorSquashStage: _sector_squash_apply,
+    SplitToneStage: _split_tone_apply,
 }
 
 

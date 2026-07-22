@@ -33,6 +33,7 @@ from app.core.chromogen import (
     CHROMOGEN_STAGES,
     ContrastCurveStage,
     NeutralTintStage,
+    SplitToneStage,
 )
 from app.core.diagnostics import noise_gain
 from app.core.lut import CubeLUT
@@ -57,8 +58,11 @@ _TONE_ANCHOR_REG = 250.0
 
 def default_pool() -> list[type]:
     """The searchable node types: all Chromogen-family tools, NO Lift
-    Gamma Gain (Marc's directive)."""
-    return list(CHROMOGEN_STAGES)
+    Gamma Gain, and NO Neutral Tint — Split Tone replaces it for fitting
+    (Marc, 2026-07-22). Neutral Tint stays in STAGE_POOL for presets /
+    manual use, just out of the ML audition."""
+    from app.core.chromogen import NeutralTintStage
+    return [cls for cls in CHROMOGEN_STAGES if cls is not NeutralTintStage]
 
 
 def _fit_err(a, b):
@@ -155,12 +159,14 @@ def _apply_chain(stages, params, x):
 def _refine_chain(stages, params, src, fit_target, regularization, fwd,
                   frozen_n, grey_anchor, unfreeze_on_tint, max_nfev=150):
     """Joint-refine a chain. Normally the frozen tone prefix is held and
-    only stages[frozen_n:] move. But once a Neutral Tint (which is NOT
-    neutral-safe — it tints greys) is present and `unfreeze_on_tint` is
-    set, the tone node is un-frozen INTO the joint solve, soft-anchored
-    to its grey-scale fit, so tone and tint co-adapt on the (tinted)
-    neutrals instead of the tone being locked-then-disturbed."""
-    tint = any(isinstance(s, NeutralTintStage) for s in stages[frozen_n:])
+    only stages[frozen_n:] move. But once a tint that is NOT neutral-safe
+    (Split Tone or Neutral Tint — both can tint greys) is present and
+    `unfreeze_on_tint` is set, the tone node is un-frozen INTO the joint
+    solve, soft-anchored to its grey-scale fit, so tone and tint co-adapt
+    on the (tinted) neutrals instead of the tone being locked-then-
+    disturbed."""
+    tint = any(isinstance(s, (NeutralTintStage, SplitToneStage))
+               for s in stages[frozen_n:])
     if frozen_n and unfreeze_on_tint and tint:
         anchors = [grey_anchor] + [s.identity() for s in stages[frozen_n:]]
         reg_scales = ([_TONE_ANCHOR_REG]

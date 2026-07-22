@@ -1,0 +1,106 @@
+// SplitTone.dctl — per-channel cubic-Bezier shadow/highlight split tone.
+//
+// Companion to the "Split Tone" stage of the colorchecker parametric
+// solver (app/core/chromogen.py SplitToneStage). The solver's stage
+// report prints values in EXACTLY these slider units — paste them in.
+// Defaults (Black 0, Shadow 1, Highlight 1, White 1, Crossover 0) are the
+// identity: the node does nothing until moved.
+//
+// Ported from Bezier_Split_Tone_V2.dctl (per-channel Bezier), with two
+// changes: the Black/Shadow/Highlight framing uses an EXACT 1/3 (the
+// original 0.333 left a ~1e-4 non-identity), and each channel gets a
+// Crossover offset — 0 pins it to the pivot (neutral mid-grey, as the
+// stock tool forced ALL channels to), non-zero floats that channel's
+// crossover LEVEL so the three need not converge at one point (a mid tint
+// / no forced crossover, which Marc wanted optional and per-channel).
+//
+// Each channel: a cubic Bezier over the shadows (input <= pivot) and one
+// over the highlights (input > pivot). Working per-channel in the code
+// values of the selected transfer function; pivot is that TF's mid-grey.
+
+DEFINE_UI_PARAMS(BLK_R, Black Red,   DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 1.0, 0.01)
+DEFINE_UI_PARAMS(BLK_G, Black Green, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 1.0, 0.01)
+DEFINE_UI_PARAMS(BLK_B, Black Blue,  DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 1.0, 0.01)
+DEFINE_UI_PARAMS(SHD_R, Shadow Red,   DCTLUI_SLIDER_FLOAT, 1.0, 0.0, 2.0, 0.01)
+DEFINE_UI_PARAMS(SHD_G, Shadow Green, DCTLUI_SLIDER_FLOAT, 1.0, 0.0, 2.0, 0.01)
+DEFINE_UI_PARAMS(SHD_B, Shadow Blue,  DCTLUI_SLIDER_FLOAT, 1.0, 0.0, 2.0, 0.01)
+DEFINE_UI_PARAMS(HIL_R, Highlight Red,   DCTLUI_SLIDER_FLOAT, 1.0, 0.0, 2.0, 0.01)
+DEFINE_UI_PARAMS(HIL_G, Highlight Green, DCTLUI_SLIDER_FLOAT, 1.0, 0.0, 2.0, 0.01)
+DEFINE_UI_PARAMS(HIL_B, Highlight Blue,  DCTLUI_SLIDER_FLOAT, 1.0, 0.0, 2.0, 0.01)
+DEFINE_UI_PARAMS(WHT_R, White Red,   DCTLUI_SLIDER_FLOAT, 1.0, 0.0, 2.0, 0.01)
+DEFINE_UI_PARAMS(WHT_G, White Green, DCTLUI_SLIDER_FLOAT, 1.0, 0.0, 2.0, 0.01)
+DEFINE_UI_PARAMS(WHT_B, White Blue,  DCTLUI_SLIDER_FLOAT, 1.0, 0.0, 2.0, 0.01)
+DEFINE_UI_PARAMS(pivot_offset, Pivot Offset, DCTLUI_SLIDER_FLOAT, 0.0, -0.25, 0.25, 0.001)
+DEFINE_UI_PARAMS(XOV_R, Crossover Red,   DCTLUI_SLIDER_FLOAT, 0.0, -0.2, 0.2, 0.001)
+DEFINE_UI_PARAMS(XOV_G, Crossover Green, DCTLUI_SLIDER_FLOAT, 0.0, -0.2, 0.2, 0.001)
+DEFINE_UI_PARAMS(XOV_B, Crossover Blue,  DCTLUI_SLIDER_FLOAT, 0.0, -0.2, 0.2, 0.001)
+DEFINE_UI_PARAMS(trasferfunction, Transfer Function, DCTLUI_COMBO_BOX, 2, { dwg, aces, logc, logc4, red }, { DaVinci Intermediate, Aces cct, Log-C3, Log-C4, Log3G10 })
+DEFINE_UI_PARAMS(opt_showcurve, Show Curve, DCTLUI_CHECK_BOX, 0)
+
+#define THIRD (1.0f / 3.0f)
+
+__DEVICE__ float bez(float r, float p0, float p1, float p2, float p3) {
+    float ir = 1.0f - r;
+    return p0 * ir * ir * ir + 3.0f * p1 * ir * ir * r
+         + 3.0f * p2 * ir * r * r + p3 * r * r * r;
+}
+
+// One channel. blk/shd/hil are pre-scaled by 1/3; wht is raw (used as
+// 1-wht); level = pivot + crossover (the channel's output at the pivot).
+__DEVICE__ float split_channel(float v, float pivot, float blk, float shd,
+                               float hil, float wht, float level) {
+    if (v < 0.0f || v > 1.0f) return v;         // pass through, exact identity
+    float pm = 1.0f - pivot;
+    if (v <= pivot) {
+        float r = v / pivot;
+        return bez(r, blk, shd, shd + THIRD, level / pivot) * pivot;
+    }
+    float rr = (1.0f - v) / pm;
+    float lm = 1.0f - level;
+    return 1.0f - bez(rr, 1.0f - wht, 1.0f - (hil + THIRD), 1.0f - hil, lm / pm) * pm;
+}
+
+__DEVICE__ float3 split_all(float3 in, float pivot,
+                            float BLK_R, float BLK_G, float BLK_B,
+                            float SHD_R, float SHD_G, float SHD_B,
+                            float HIL_R, float HIL_G, float HIL_B,
+                            float WHT_R, float WHT_G, float WHT_B,
+                            float XOV_R, float XOV_G, float XOV_B) {
+    float3 out;
+    out.x = split_channel(in.x, pivot, BLK_R * THIRD, SHD_R * THIRD, HIL_R * THIRD, WHT_R, pivot + XOV_R);
+    out.y = split_channel(in.y, pivot, BLK_G * THIRD, SHD_G * THIRD, HIL_G * THIRD, WHT_G, pivot + XOV_G);
+    out.z = split_channel(in.z, pivot, BLK_B * THIRD, SHD_B * THIRD, HIL_B * THIRD, WHT_B, pivot + XOV_B);
+    return out;
+}
+
+#define SPLIT_ARGS BLK_R, BLK_G, BLK_B, SHD_R, SHD_G, SHD_B, HIL_R, HIL_G, HIL_B, WHT_R, WHT_G, WHT_B, XOV_R, XOV_G, XOV_B
+
+__DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, float p_R, float p_G, float p_B)
+{
+    float3 in = make_float3(p_R, p_G, p_B);
+
+    // mid-grey of the selected transfer function
+    float pivot = 0.391f;
+    if (trasferfunction == 0) pivot = 0.336f;   // DaVinci Wide Gamut Intermediate
+    if (trasferfunction == 1) pivot = 0.414f;   // ACEScct
+    if (trasferfunction == 2) pivot = 0.391f;   // Log-C3
+    if (trasferfunction == 3) pivot = 0.278f;   // Log-C4
+    if (trasferfunction == 4) pivot = 0.333f;   // Log3G10
+    pivot = pivot + pivot_offset;
+
+    float3 out = split_all(in, pivot, SPLIT_ARGS);
+
+    // On-screen scope: the three channel curves (R, G, B) over input 0..1
+    if (opt_showcurve) {
+        float gx = (float)p_X / (float)p_Width;
+        float gy = 1.0f - (float)p_Y / (float)p_Height;
+        float3 c = split_all(make_float3(gx, gx, gx), pivot, SPLIT_ARGS);
+        float rr = out.x * 0.3f, gg = out.y * 0.3f, bb = out.z * 0.3f;
+        if (_fabs(gy - gx) < 0.0025f) { rr += 0.2f; gg += 0.2f; bb += 0.2f; }  // identity
+        if (_fabs(gy - c.x) < 0.004f) rr = 1.0f;
+        if (_fabs(gy - c.y) < 0.004f) gg = 1.0f;
+        if (_fabs(gy - c.z) < 0.004f) bb = 1.0f;
+        return make_float3(rr, gg, bb);
+    }
+    return out;
+}

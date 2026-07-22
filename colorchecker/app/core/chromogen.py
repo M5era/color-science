@@ -830,11 +830,118 @@ class SectorSquashStage(_SectorStage):
         return reuleaux_to_rgb(np.stack([hue2, sat, val], axis=-1))
 
 
+class SplitToneStage(Stage):
+    """Split Tone — a per-channel cubic-Bezier shadow/highlight shaper,
+    ported from Marc's Bezier_Split_Tone_V2.dctl. Each RGB channel gets a
+    Bezier over the shadows (input <= pivot) and another over the
+    highlights (input > pivot); moving one channel's shadow/highlight
+    against another's IS the split tone (subtractive, per-channel, in log
+    code values — exactly the RGB split we agreed on).
+
+    Per channel: Black (the black level), Shadow (the shadow curve),
+    Highlight (the highlight curve), White (the white level). Defaults
+    Black 0 / Shadow 1 / Highlight 1 / White 1 are an EXACT identity (the
+    Beziers reduce to the straight line, the .333 offsets do the framing).
+
+    Pivot Offset moves the shadow<->highlight crossover (default mid-grey).
+    In the stock tool ALL three channels are pinned to converge at the
+    pivot (neutral mid-grey, a hard crossover Marc found limiting), so
+    each channel also gets a Crossover offset: 0 keeps it pinned (neutral),
+    non-zero floats that channel's crossover LEVEL so the channels need not
+    meet at one point — a mid-grey tint / no forced convergence.
+    """
+
+    name = "Split Tone"
+    param_names = [
+        "Black R", "Black G", "Black B",
+        "Shadow R", "Shadow G", "Shadow B",
+        "Highlight R", "Highlight G", "Highlight B",
+        "White R", "White G", "White B",
+        "Pivot Offset", "Crossover R", "Crossover G", "Crossover B",
+    ]
+
+    _THIRD = 1.0 / 3.0
+    # the stock DCTL scales Black/Shadow/Highlight by 0.333; we use an
+    # EXACT 1/3 so the default Bezier is a perfectly straight identity
+    # (0.333 left a ~1e-4 residual). The updated SplitTone.dctl matches.
+    _CTRL_SCALE = 1.0 / 3.0
+
+    def identity(self):
+        return np.array([0.0, 0.0, 0.0,   # Black RGB
+                         1.0, 1.0, 1.0,   # Shadow RGB
+                         1.0, 1.0, 1.0,   # Highlight RGB
+                         1.0, 1.0, 1.0,   # White RGB
+                         0.0,             # Pivot Offset
+                         0.0, 0.0, 0.0])  # Crossover RGB
+
+    def bounds(self):
+        lo = ([-1.0] * 3 + [0.0] * 3 + [0.0] * 3 + [0.0] * 3
+              + [-0.25] + [-0.2] * 3)
+        hi = ([1.0] * 3 + [2.0] * 3 + [2.0] * 3 + [2.0] * 3
+              + [0.25] + [0.2] * 3)
+        return np.asarray(lo), np.asarray(hi)
+
+    @staticmethod
+    def _bez(r, p0, p1, p2, p3):
+        """Cubic Bezier value at parameter r (control VALUES p0..p3)."""
+        ir = 1.0 - r
+        return p0 * ir ** 3 + 3.0 * p1 * ir ** 2 * r \
+            + 3.0 * p2 * ir * r * r + p3 * r ** 3
+
+    def apply(self, x, params):
+        x = np.asarray(x, dtype=np.float64)
+        pivot = MID_GREY + params[12]
+        pm = 1.0 - pivot
+        out = np.empty_like(x)
+        for ci in range(3):
+            blk = params[0 + ci] * self._CTRL_SCALE
+            shd = params[3 + ci] * self._CTRL_SCALE
+            hil = params[6 + ci] * self._CTRL_SCALE
+            wht = params[9 + ci]                       # used as 1 - wht
+            level = pivot + params[13 + ci]            # per-channel crossover
+            v = x[..., ci]
+            # shadow half (v <= pivot): Bezier [blk, shd, shd+1/3, level]
+            r = np.clip(v / pivot, 0.0, 1.0)
+            sh = self._bez(r, blk, shd, shd + self._THIRD, level / pivot) * pivot
+            # highlight half (v > pivot): mirror about 1
+            rr = np.clip((1.0 - v) / pm, 0.0, 1.0)
+            lm = 1.0 - level
+            hi = 1.0 - self._bez(rr, 1.0 - wht, 1.0 - (hil + self._THIRD),
+                                 1.0 - hil, lm / pm) * pm
+            res = np.where(v <= pivot, sh, hi)
+            # pass through out-of-[0,1] so identity is exact everywhere
+            res = np.where((v < 0.0) | (v > 1.0), v, res)
+            out[..., ci] = res
+        return out
+
+    def label(self, params):
+        blk = params[0:3]
+        wht = np.asarray(params[9:12]) - 1.0
+        if np.max(np.abs(blk)) < 0.03 and np.max(np.abs(wht)) < 0.03 \
+                and np.max(np.abs(params[13:16])) < 0.01:
+            return "split (idle)"
+        # crude warm/cool read from the R-vs-B black balance
+        lo = params[0] - params[2]           # black R - black B
+        return "warm lows" if lo > 0 else "cool lows"
+
+    def describe(self, params):
+        p = np.round(np.asarray(params, dtype=float), 3)
+        return "\n".join([
+            "Split Tone (paste into dctl/SplitTone.dctl):",
+            f"  Black   R {p[0]}  G {p[1]}  B {p[2]}",
+            f"  Shadow  R {p[3]}  G {p[4]}  B {p[5]}",
+            f"  Highlight R {p[6]}  G {p[7]}  B {p[8]}",
+            f"  White   R {p[9]}  G {p[10]}  B {p[11]}",
+            f"  Pivot Offset {p[12]}  Crossover R {p[13]} G {p[14]} B {p[15]}",
+        ])
+
+
 CHROMOGEN_STAGES = [
     ColourSaturationStage,
     ColourCrosstalkStage,
     ContrastCurveStage,
     HighlightBleachStage,
+    SplitToneStage,
     NeutralTintStage,
     BrillianceReductionStage,
     SectorSkewStage,
@@ -842,3 +949,8 @@ CHROMOGEN_STAGES = [
     SectorSaturationStage,
     SectorSquashStage,
 ]
+
+# NeutralTintStage stays a known stage (STAGE_POOL: presets, manual bake,
+# .drx node mapping) but is EXCLUDED from the ML search's audition pool —
+# Split Tone replaces it for fitting (Marc, 2026-07-22). See
+# chain_search.default_pool().

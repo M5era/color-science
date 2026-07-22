@@ -39,12 +39,13 @@ def _simple_look(x):
     return tint.apply(out, _with(tint, Hue=40.0, Amount=0.5))
 
 
-def test_default_pool_is_chromogen_without_lgg():
+def test_default_pool_is_chromogen_without_lgg_or_neutral_tint():
     pool = default_pool()
     assert LiftGammaGainStage not in pool
     names = {cls.name for cls in pool}
     assert "Brilliance Reduction" in names
-    assert "Neutral Tint" in names
+    assert "Split Tone" in names            # replaces Neutral Tint for fitting
+    assert "Neutral Tint" not in names      # out of the ML audition (Marc)
     assert len(pool) == 10
 
 
@@ -144,17 +145,20 @@ def test_local_search_drops_redundant_node():
 
 def test_local_search_unfreezes_tone_and_prunes_on_tint():
     """A look whose NEUTRALS are tinted (crossover): the frozen tone can't
-    tint, so local_search must un-freeze it to co-adapt with the Neutral
-    Tint, and its noise-gain-aware prune should trim redundant nodes."""
+    tint, so local_search must un-freeze it to co-adapt with the Split
+    Tone, and its noise-gain-aware prune should trim redundant nodes."""
+    from app.core.chromogen import SplitToneStage
     from app.core.opendrt import OpenDRTModel
 
     drt = OpenDRTModel()
     neutrals = np.linspace(0.05, 0.95, 40)[:, None].repeat(3, axis=1)
     x = np.concatenate([_source(200), neutrals])
     con = ContrastCurveStage()
-    tint = NeutralTintStage()
+    tint = SplitToneStage()
     y = con.apply(x, _with(con, Contrast=1.6))
-    y = tint.apply(y, _with(tint, Hue=40.0, Amount=0.6, Chroma=1.2))
+    # crossover offsets + a shadow move tint the neutral ramp
+    y = tint.apply(y, _with(tint, **{"Black R": -0.4, "Black B": 0.3,
+                                     "Crossover R": 0.05, "Crossover B": -0.04}))
     target = drt(y)
 
     greedy = search_chain(x, target, max_nodes=4, min_gain=0.005,

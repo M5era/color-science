@@ -25,6 +25,7 @@ from app.core.chromogen import (
     SectorSaturationStage,
     SectorSkewStage,
     SectorSquashStage,
+    SplitToneStage,
     modulation,
 )
 from app.core.reuleaux import rgb_to_reuleaux
@@ -197,6 +198,44 @@ def test_contrast_curve_preserve_color_preserves_chroma():
     # chromaticity (reuleaux sat constant)
     np.testing.assert_allclose(_sat_of(luma_mode), _sat_of(x), atol=1e-6)
     assert _sat_of(rgb_mode)[0] > _sat_of(x)[0]
+
+
+def test_split_tone_identity_at_defaults():
+    stage = SplitToneStage()
+    x = np.random.default_rng(0).uniform(-0.05, 1.1, (400, 3))
+    np.testing.assert_allclose(stage.apply(x, stage.identity()), x, atol=1e-12)
+
+
+def test_split_tone_splits_shadows_and_highlights_per_channel():
+    stage = SplitToneStage()
+
+    def _w(**kw):
+        p = stage.identity().copy()
+        for k, v in kw.items():
+            p[stage.param_names.index(k)] = v
+        return p
+
+    ramp = np.linspace(0.02, 0.98, 11)[:, None].repeat(3, axis=1)
+    # teal shadows (lower R, raise B low) + warm highlights (raise R, lower B high)
+    out = stage.apply(ramp, _w(**{"Black R": -0.4, "Black B": 0.3,
+                                  "White R": 1.2, "White B": 0.85}))
+    shadow, high = out[1], out[9]
+    assert shadow[0] < shadow[2]          # shadows lean blue/teal (R < B)
+    assert high[0] > high[2]              # highlights lean warm (R > B)
+
+
+def test_split_tone_crossover_pins_then_floats():
+    stage = SplitToneStage()
+    pivot = np.full((1, 3), MID_GREY)
+    p = stage.identity().copy()
+    p[stage.param_names.index("Black R")] = -0.4   # a shadow move
+    # default: every channel still lands exactly on the pivot (neutral)
+    np.testing.assert_allclose(stage.apply(pivot, p)[0], MID_GREY, atol=1e-9)
+    # a Crossover offset floats just that channel at the pivot (a mid tint)
+    p[stage.param_names.index("Crossover R")] = 0.05
+    out = stage.apply(pivot, p)[0]
+    assert abs(out[0] - (MID_GREY + 0.05)) < 1e-6
+    assert abs(out[1] - MID_GREY) < 1e-9
 
 
 def test_contrast_curve_mid_compensate_holds_pivot():

@@ -193,16 +193,27 @@ def apply_power_sigmoid_contrast(x, contrast, pivot):
 
 def _end_roll(v, point, pivot, strength):
     """The shared shoulder/toe compressor for values above `pivot`
-    (mirror of the per-channel body of apply_white_point). `point` is
-    where the roll lands at input 1.0. Base floored at 1e-3 (matching
-    the guard added to our DCTL copy — float32-safe at strength 10):
-    where the stock DCTL NaNs (point <= pivot) the limit flattens the
-    end at the pivot."""
+    (mirror of apply_white_point's per-channel body). `point` is where
+    the roll lands at input 1.0. Two ALGEBRAICALLY IDENTICAL but
+    overflow-free rewrites (mirrored in the DCTL) so the knee strength
+    is unbounded — the naive base**-n and (1+d**n) forms blow past
+    float32 around n ~ 12, capping how TIGHT the toe could get (Marc:
+    "really really tight"):
+      (base^-n - 1)^(1/n)      == (1 - base^n)^(1/n) / base
+      (1 + d^n)^(1/n) for d>1  == d * (1 + d^-n)^(1/n)
+    Base floored at 1e-3: where the stock tool NaNs (roll pivot beyond
+    the scaled point) the limit flattens the end at the pivot."""
     base = max((point - pivot) / (1.0 - pivot), 1e-3)
-    scale = (1.0 - pivot) / (base ** -strength - 1.0) ** (1.0 / strength)
-    d = (v - pivot) / scale
-    with np.errstate(invalid="ignore"):   # v < pivot -> NaN, discarded
-        rolled = pivot + scale * d / (1.0 + d ** strength) ** (1.0 / strength)
+    bn = base ** strength                      # underflows to 0 = hard knee
+    scale = (1.0 - pivot) * base / max(1.0 - bn, 1e-30) ** (1.0 / strength)
+    d = np.maximum(v - pivot, 0.0) / scale     # negative side discarded below
+    d_lo = np.minimum(d, 1.0)
+    d_hi = np.maximum(d, 1.0)
+    denom = np.where(
+        d <= 1.0,
+        (1.0 + d_lo ** strength) ** (1.0 / strength),
+        d_hi * (1.0 + d_hi ** -strength) ** (1.0 / strength))
+    rolled = pivot + scale * d / denom
     return np.where(v > pivot, rolled, v)
 
 
@@ -453,7 +464,10 @@ class FilmicContrastStage(Stage):
 
       Exposure          stops, linear gain applied at the END (mid-grey
                         referenced, achromatic in linear light)
-      Contrast          mid slope around the pivot (1 = identity)
+      Contrast          mid slope around the pivot (1 = identity);
+                        ceiling raised 3 -> 5 (the toe holds shadows
+                        down, but the steep release above it IS the
+                        contrast slope — Marc kept maxing 3.0)
       Pivot             relative to mid-grey (0 = mid-grey, LogC3)
       White Point       highlight compression target; 1.02 = OFF (the
                         stock UI tops out at 1.018 ~= the same thing);
@@ -471,7 +485,7 @@ class FilmicContrastStage(Stage):
       Toe               where the shadow roll starts
       Toe Falloff       toe softness; extended to -20..10 — negative
                         values give a MUCH sharper toe (internal
-                        strength up to ~10.3 vs the stock ceiling 3.35;
+                        strength up to ~38 — the roll math was rewritten overflow-free so the knee is effectively unbounded (stock capped at 3.35);
                         Marc kept hitting the stock cap), positive is
                         the stock soft direction, default unchanged
       Linear Rolled     blends Linear -> Rolled -> PowerP contrast
@@ -513,10 +527,10 @@ class FilmicContrastStage(Stage):
     def bounds(self) -> tuple[np.ndarray, np.ndarray]:
         lo = np.array([-4.0, 0.5, -1.0,
                        -0.15, 0.2, 0.0,
-                       0.0, 0.0, -20.0,
+                       0.0, 0.0, -100.0,
                        0.0, 0.0, 0.0, -1.0,
                        -1.0])
-        hi = np.array([4.0, 3.0, 1.0,
+        hi = np.array([4.0, 5.0, 1.0,
                        1.02, 0.997, 9.7,
                        1.5, 0.8, 10.0,
                        1.0, 1.0, 1.0, 3.5,

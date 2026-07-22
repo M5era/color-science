@@ -547,13 +547,21 @@ def _f_power_sigmoid_contrast(x, contrast, pivot):
 
 
 def _f_end_roll(v, point, pivot, strength):
-    base = torch.clamp((point - pivot) / (1.0 - pivot), min=1e-9)
-    scale = (1.0 - pivot) / (base ** -strength - 1.0) ** (1.0 / strength)
+    # overflow-free forms (see app/core/filmic._end_roll): knee
+    # strength is unbounded, gradients stay finite
+    base = torch.clamp((point - pivot) / (1.0 - pivot), min=1e-3)
+    bn = base ** strength
+    scale = (1.0 - pivot) * base / torch.clamp(
+        1.0 - bn, min=1e-30) ** (1.0 / strength)
     mask = v > pivot
-    d = (v - pivot) / scale
-    d_safe = torch.where(mask, d, torch.ones_like(d))
-    rolled = pivot + scale * d_safe / (
-        1.0 + d_safe ** strength) ** (1.0 / strength)
+    d = torch.clamp(v - pivot, min=0.0) / scale
+    d_lo = torch.clamp(d, max=1.0)
+    d_hi = torch.clamp(d, min=1.0)
+    denom = torch.where(
+        d <= 1.0,
+        (1.0 + d_lo ** strength) ** (1.0 / strength),
+        d_hi * (1.0 + d_hi ** -strength) ** (1.0 / strength))
+    rolled = pivot + scale * d / denom
     return torch.where(mask, rolled, v)
 
 

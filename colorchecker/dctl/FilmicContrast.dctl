@@ -26,7 +26,7 @@ mirrored in the Python port (app/core/filmic.py):
 
 */
 DEFINE_UI_PARAMS(P_exposure,  Exposure 🌞, DCTLUI_SLIDER_FLOAT, 0.0, -4, 4.0, 0.001)
-DEFINE_UI_PARAMS(contrast, Contrast 🌓 , DCTLUI_SLIDER_FLOAT, 1.0, 0.5, 3.0, 0.0001)
+DEFINE_UI_PARAMS(contrast, Contrast 🌓 , DCTLUI_SLIDER_FLOAT, 1.0, 0.5, 5.0, 0.0001)
 DEFINE_UI_PARAMS(pivot, Relative Pivot 📌, DCTLUI_SLIDER_FLOAT, 0.0, -1, 1, 0.001)
 
 
@@ -36,7 +36,7 @@ DEFINE_UI_PARAMS(p_shoulder_str,└ Fall off ╭   , DCTLUI_SLIDER_FLOAT, 6,
 
 DEFINE_UI_PARAMS(p_black_point, ⚫ Black Point  :⚫, DCTLUI_SLIDER_FLOAT, 0.0001, 0.0, 1.5, 0.0001)
 DEFINE_UI_PARAMS(p_b_p_pivot, ├ Toe     ⌣  , DCTLUI_SLIDER_FLOAT, 0.5, 0.0, 0.8, 0.001)
-DEFINE_UI_PARAMS(p_toe_str, └ Fall off   ⌣   , DCTLUI_SLIDER_FLOAT, 2.0, -20.0, 10.0, 0.001) // extended below 0: negative = much SHARPER toe (internal strength up to ~10.3 vs stock max 3.35)
+DEFINE_UI_PARAMS(p_toe_str, └ Fall off   ⌣   , DCTLUI_SLIDER_FLOAT, 2.0, -100.0, 10.0, 0.001) // deep negative = REALLY tight toe (internal strength up to ~38; the roll math is overflow-free now)
 
 
 DEFINE_UI_PARAMS(p_mix_contrast, Linear / Rolled : , DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 1.0, 0.001)
@@ -935,115 +935,52 @@ __DEVICE__ float remapAsymSigned(float u, float negMin, float posMax) {
     return out;
   }
   
+  // Overflow-free end rolls (toolkit rewrite, 2026-07-22 night): the stock
+  // scale factor _powf(base, -n) and roll denom _powf(1+_powf(d, n), 1/n)
+  // blow past float32 around strength ~12, silently capping how TIGHT the
+  // toe/shoulder knee can get. These forms are ALGEBRAICALLY IDENTICAL:
+  //   (base^-n - 1)^(1/n)     == (1 - base^n)^(1/n) / base
+  //   (1 + d^n)^(1/n), d > 1  == d * (1 + d^-n)^(1/n)
+  // so the knee strength is now unbounded (Marc: "really really tight").
+  // Base floored at 1e-3: where the stock formula NaNs (roll pivot beyond
+  // the scaled point) the limit flattens that end at the pivot.
+  __DEVICE__ float end_roll_channel(float v, float pivot, float scale, float n) {
+    if (v <= pivot) return v;
+    float d = (v - pivot) / scale;
+    float denom;
+    if (d <= 1.0f) denom = _powf(1.0f + _powf(d, n), 1.0f / n);
+    else           denom = d * _powf(1.0f + _powf(d, -n), 1.0f / n);
+    return pivot + scale * d / denom;
+  }
+
+  __DEVICE__ float end_roll_scale(float point, float pivot, float n) {
+    float base = _fmaxf((point - pivot) / (1.0f - pivot), 1e-3f);
+    float bn = _powf(base, n);   // underflows to 0 for hard knees — fine
+    return (1.0f - pivot) * base / _powf(_fmaxf(1.0f - bn, 1e-30f), 1.0f / n);
+  }
+
   __DEVICE__ float3 apply_white_point (float3 in, float white_point, float pivot, float shoulder_strength) {
-   
-   float3 out = in; 
-   float scale_factor;
    // white_point == 1.0 is the exact-identity limit but the formula
    // divides by zero there (reachable at the slider max 1.02) — return in
    if (white_point >= 1.0f) { return in; }
-   
-   if (in.x > pivot) {
-    scale_factor = (1.0f - pivot) / _powf(_powf(_fmaxf((white_point - pivot) / (1.0f - pivot), 1e-3f), -1.0f*shoulder_strength) - 1.0f, 1.0f/shoulder_strength);
-    
-    out.x = pivot + scale_factor *((in.x - pivot) / scale_factor) / (_powf(1.0f + _powf((in.x - pivot) / scale_factor, shoulder_strength), 1.0f / shoulder_strength));
-
-    }
-
-        else {
-           
-        out.x = in.x;
-        
-        }
-
-   if (in.y > pivot) {
-    scale_factor = (1.0f - pivot) / _powf(_powf(_fmaxf((white_point - pivot) / (1.0f - pivot), 1e-3f), -1.0f*shoulder_strength) - 1.0f, 1.0f/shoulder_strength);
-    
-    out.y = pivot + scale_factor *((in.y - pivot) / scale_factor) / (_powf(1.0f + _powf((in.y - pivot) / scale_factor, shoulder_strength), 1.0f / shoulder_strength));
-
-    }
-
-        else {
-           
-        out.y = in.y;
-        
-        }
-
-   if (in.z > pivot) {
-    scale_factor = (1.0f - pivot) / _powf(_powf(_fmaxf((white_point - pivot) / (1.0f - pivot), 1e-3f), -1.0f*shoulder_strength) - 1.0f, 1.0f/shoulder_strength);
-    
-    out.z = pivot + scale_factor *((in.z - pivot) / scale_factor) / (_powf(1.0f + _powf((in.z - pivot) / scale_factor, shoulder_strength), 1.0f / shoulder_strength));
-
-    }
-
-        else {
-           
-        out.z = in.z;
-        
-        }
-
-    return out;
- 
-     }
+   float scale_factor = end_roll_scale(white_point, pivot, shoulder_strength);
+   float3 out;
+   out.x = end_roll_channel(in.x, pivot, scale_factor, shoulder_strength);
+   out.y = end_roll_channel(in.y, pivot, scale_factor, shoulder_strength);
+   out.z = end_roll_channel(in.z, pivot, scale_factor, shoulder_strength);
+   return out;
+  }
   
   __DEVICE__ float3 apply_black_point (float3 in, float black_point, float pivot, float toe_str) {
-
-      float3 out = in; 
       // black_point == 1.0 is the exact-identity limit but the formula
       // divides by zero there (reachable at Black Point slider 0.0) — return in
       if (black_point >= 1.0f) { return in; }
-      
-      in.x = 1.0f - in.x;
-      in.y = 1.0f - in.y ;
-      in.z = 1.0f - in.z ;
-      
-      float scale_factor;
-      
-    if (in.x > pivot) {
-    scale_factor = (1.0f - pivot) / _powf(_powf(_fmaxf((black_point - pivot) / (1.0f - pivot), 1e-3f), -1.0f*toe_str) - 1.0f, 1.0f/toe_str);
-    
-    out.x = pivot + scale_factor *((in.x - pivot) / scale_factor) / (_powf(1.0f + _powf((in.x - pivot) / scale_factor, toe_str), 1.0f / toe_str));
-    }
-    
-            else {
-           
-        out.x = in.x;
-        
-        }
-    
-    if (in.y > pivot) {
-
-    scale_factor = (1.0f - pivot) / _powf(_powf(_fmaxf((black_point - pivot) / (1.0f - pivot), 1e-3f), -1.0f*toe_str) - 1.0f, 1.0f/toe_str);
-    
-    out.y = pivot + scale_factor *((in.y - pivot) / scale_factor) / (_powf(1.0f + _powf((in.y - pivot) / scale_factor, toe_str), 1.0f / toe_str));
-
-    }
-    
-            else {
-           
-        out.y = in.y;
-        
-        }
-    
-    if (in.z > pivot) {
-    scale_factor = (1.0f - pivot) / _powf(_powf(_fmaxf((black_point - pivot) / (1.0f - pivot), 1e-3f), -1.0f*toe_str) - 1.0f, 1.0f/toe_str);
-    
-    out.z = pivot + scale_factor *((in.z - pivot) / scale_factor) / (_powf(1.0f + _powf((in.z - pivot) / scale_factor, toe_str), 1.0f / toe_str));
-
-    }
-    
-            else {
-           
-        out.z = in.z;
-        
-        }
-
-    out.x = 1.0f - out.x;
-    out.y = 1.0f - out.y;
-    out.z = 1.0f - out.z;
-   
-   return out;
-    
+      float scale_factor = end_roll_scale(black_point, pivot, toe_str);
+      float3 out;
+      out.x = 1.0f - end_roll_channel(1.0f - in.x, pivot, scale_factor, toe_str);
+      out.y = 1.0f - end_roll_channel(1.0f - in.y, pivot, scale_factor, toe_str);
+      out.z = 1.0f - end_roll_channel(1.0f - in.z, pivot, scale_factor, toe_str);
+      return out;
         }
     
 

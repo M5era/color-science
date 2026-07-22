@@ -35,6 +35,7 @@ from app.core.chromogen import (
     NeutralTintStage,
     SplitToneStage,
 )
+from app.core.filmic import FilmicContrastStage
 from app.core.diagnostics import noise_gain
 from app.core.lut import CubeLUT
 from app.core.match import invert_lut_at
@@ -57,12 +58,16 @@ _TONE_ANCHOR_REG = 250.0
 
 
 def default_pool() -> list[type]:
-    """The searchable node types: all Chromogen-family tools, NO Lift
-    Gamma Gain, and NO Neutral Tint — Split Tone replaces it for fitting
-    (Marc, 2026-07-22). Neutral Tint stays in STAGE_POOL for presets /
-    manual use, just out of the ML audition."""
-    from app.core.chromogen import NeutralTintStage
-    return [cls for cls in CHROMOGEN_STAGES if cls is not NeutralTintStage]
+    """The searchable node types: the Chromogen-family tools, NO Lift
+    Gamma Gain and NO Contrast Curve — Filmic Contrast replaces it as
+    the tone tool (Marc, 2026-07-22: "for the contrast, lets just use
+    this for now, this really works"; it stays in STAGE_POOL for
+    presets / manual use). Neutral Tint was out for a day in favour of
+    Split Tone, then re-admitted alongside it once its falloff/pivot
+    floors were fixed (Marc, same evening: "add it back in the ML")."""
+    pool = [cls for cls in CHROMOGEN_STAGES
+            if cls is not ContrastCurveStage]
+    return pool + [FilmicContrastStage]
 
 
 def _fit_err(a, b):
@@ -84,7 +89,10 @@ def _fit_candidate(stage: Stage, cur: np.ndarray, fit_target: np.ndarray,
         fit = (fwd(stage.apply(cur, p)) - fit_target).ravel()
         return np.concatenate([fit, reg * (p - identity) / scale])
 
-    starts = [identity]
+    # start from init(), not identity: stages whose identity sits in a
+    # dead-gradient region (Filmic Contrast's parked white/black point)
+    # seed engaged there; for every other stage init() IS identity
+    starts = [stage.init()]
     if "Hue" in stage.param_names:
         hue_i = stage.param_names.index("Hue")
         starts = []
@@ -167,7 +175,9 @@ def _refine_chain(stages, params, src, fit_target, regularization, fwd,
     disturbed."""
     tint = any(isinstance(s, (NeutralTintStage, SplitToneStage))
                for s in stages[frozen_n:])
-    if frozen_n and unfreeze_on_tint and tint:
+    # grey_anchor is None for a MANUAL prefix — those nodes are Marc's
+    # hand-dialled values and must never be co-adapted
+    if frozen_n and unfreeze_on_tint and tint and grey_anchor is not None:
         anchors = [grey_anchor] + [s.identity() for s in stages[frozen_n:]]
         reg_scales = ([_TONE_ANCHOR_REG]
                       + [s.reg_scale for s in stages[frozen_n:]])
@@ -249,6 +259,7 @@ def search_chain(
     local_search: bool = False,
     prune_tol: float = 0.01,
     prune_screen_k: int = 4,
+    pre_chain=None,
     verbose: bool = False,
 ) -> ParametricResult:
     """Search a chain of at most `max_nodes` nodes drawn freely (with
@@ -329,12 +340,36 @@ def search_chain(
     if verbose:
         print(f"  before any nodes: fit error -> {err0:.5f}")
 
-    # ---- grey-scale-locked tone: fit ONE Contrast Curve on the
-    # neutral samples only and freeze it as node 1
+    # ---- MANUAL PREFIX (Marc's 2026-07-22 workflow: "i would do the
+    # contrast, exposure, and split myself first"): his hand-dialled
+    # tone nodes are applied as a HARD-frozen prefix — never refit,
+    # never unfrozen, never pruned — and the tone tools leave the
+    # audition pool so the search only explains color on top.
+    if pre_chain is not None:
+        from app.core.filmic import ExposureStage
+        pre_stages, pre_params = pre_chain
+        stages = list(pre_stages)
+        params = [np.asarray(p, dtype=np.float64).copy() for p in pre_params]
+        frozen_n = len(stages)
+        neutral_tone = False
+        tone_types = (FilmicContrastStage, ContrastCurveStage,
+                      SplitToneStage, ExposureStage)
+        pool = [cls for cls in pool if not issubclass(cls, tone_types)]
+        cur = _apply_chain(stages, params, src)
+        err0 = _fit_err(fwd(cur), fit_target)
+        log.append((frozen_n, f"[manual prefix: "
+                    f"{' -> '.join(s.name for s in stages)}]", err0))
+        if verbose:
+            print(f"  manual prefix ({frozen_n} nodes: "
+                  f"{' -> '.join(s.name for s in stages)})  "
+                  f"fit error -> {err0:.5f}")
+
+    # ---- grey-scale-locked tone: fit ONE tone node (Filmic Contrast)
+    # on the neutral samples only and freeze it as node 1
     if neutral_tone:
         neutral = np.all(src == src[:, :1], axis=1)
         if neutral.sum() >= 8:
-            con = ContrastCurveStage()
+            con = FilmicContrastStage()
             p, _ = _fit_candidate(con, src[neutral], fit_target[neutral],
                                   regularization, fwd, max_nfev=200)
             stages.append(con)
@@ -342,19 +377,23 @@ def search_chain(
             frozen_n = 1
             grey_anchor = p.copy()
             pool = [cls for cls in pool
-                    if not issubclass(cls, ContrastCurveStage)]
+                    if not issubclass(cls, (FilmicContrastStage,
+                                            ContrastCurveStage))]
             cur = con.apply(src, p)
             err0 = _fit_err(fwd(cur), fit_target)
-            log.append((1, "Contrast Curve [grey-scale-locked tone]", err0))
+            log.append((1, "Filmic Contrast [grey-scale-locked tone]", err0))
             if verbose:
-                print(f"  node 1: + Contrast Curve (grey-scale-locked "
+                print(f"  node 1: + Filmic Contrast (grey-scale-locked "
                       f"tone)  fit error -> {err0:.5f}")
         else:
             log.append("neutral_tone skipped: no neutral samples in source")
 
     err = _fit_err(fwd(cur), fit_target)
 
-    while len(stages) < max_nodes:
+    # with a manual prefix, max_nodes counts the ADDED nodes (the prefix
+    # is Marc's, not the search's)
+    node_cap = max_nodes + (frozen_n if pre_chain is not None else 0)
+    while len(stages) < node_cap:
         best = None       # winner by DISCOUNTED gain
         best_real = None  # winner by real gain (fallback for the stop test)
         for cls in pool:

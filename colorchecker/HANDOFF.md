@@ -9,6 +9,13 @@ layer. (Refreshed 2026-07-21 end-of-session; supersedes prior handoff.)
 
 ## 0. Latest session (2026-07-22)
 
+**Housekeeping (later same day): test suite fast/slow split.** The
+suite had grown to ~5 min; ~95% was 21 end-to-end solver tests.
+`pytest` is now the ~10 s dev loop (slow tests skipped, visibly);
+`pytest --full -n auto` is the pre-push gate (~3.5 min). No test
+content changed — only markers + conftest + pytest.ini +
+requirements-dev.txt. Details in section 7.
+
 Curve + split-tone overhaul, driven by Marc grading in Resolve:
 
 - **Contrast Curve exposure** is now achromatic AND applied AFTER the
@@ -42,28 +49,148 @@ Curve + split-tone overhaul, driven by Marc grading in Resolve:
   ColourSaturation. NOT yet wired as the export default because the fit
   still uses ContrastCurve (see next).
 
+**2026-07-22 second block — FilmicContrast port + full ML->PowerGrade
+pipeline (Marc: "get the whole ML + powergrade pipeline working"):**
+
+- **ME_Filmic_Contrast V1.3 PORTED** (`app/core/filmic.py`, 1:1 float64
+  like reuleaux/openDRT; torch mirror; `dctl/FilmicContrast.dctl`
+  committed — Marc must install THIS copy). LogC3 / Preserve Mid-gray
+  ON / end-exposure config. Its Exposure is a linear gain = mid-grey
+  balanced + achromatic, exactly the required tone-node behaviour.
+  Documented deviations (all exact mathematical limits): WP raw 1.02 /
+  BP raw 0.0 = section exactly OFF (stage identity), 0-valued
+  exposure/pop/flare skip their log<->lin round-trips, shoulder base
+  floored 1e-9 (the stock tool can NaN there), and _mix_sat at
+  contrast==1 skips the CHEN round-trip (its truncated rotation
+  constants carry ~4e-9). **Black Point range extended to 1.5** (Marc:
+  "extend the range to 1, maybe 1.5"; stock 0.5) — required lowering
+  the stock sanitize floor 0.69 -> 0.4 which silently dead-zoned the
+  slider past ~0.775; mirrored in the committed DCTL.
+- **ML pool swap**: Filmic Contrast IS the tone tool now — it takes the
+  grey-locked-tone freeze slot and Contrast Curve left `default_pool()`
+  (still in STAGE_POOL for presets/manual, like Neutral Tint).
+  `_fit_candidate` now starts stages at `init()` (Filmic seeds its
+  white/black points engaged; identity is dead-gradient).
+- **PowerGrade export: NODE SYNTHESIS** (`drx_build.SYNTH_SPECS`). Node
+  types missing from the template are now synthesized: clone any DCTL
+  node, rewrite its protobuf param map (path + sliderFloatParamN doubles
+  + checkBox/comboBox entries, name-sorted like Resolve writes them).
+  Proven: Resolve honors entries BY NAME (Marc's old templates carry
+  slider indices 10/11). FilmicContrast (14 sliders) + SplitTone (16)
+  export with EVERY slider stored — no "wiggle it in Resolve" gaps, no
+  template dependency. Round-trip verified in tests; **Marc still needs
+  one Resolve import to bless a synthesized grade on his machine.**
+- Full gate green: 177 tests (14 new filmic + synthesis coverage).
+
+**2026-07-22 evening — Filmic tuning round (Marc grading on footage;
+ALL of these are toolkit deviations from stock, mirrored in port +
+torch + dctl/FilmicContrast.dctl — reinstall the DCTL again):**
+
+- **NaN guards shipped**: Black Point 0.0 / White Point 1.02 blacked
+  the whole image (stock formula divides by zero at the section-off
+  limit; guards return input). Roll ratio floored at 1e-3 (float32-safe)
+  — WP near top + high Shoulder took pow(negative) = NaN in stock.
+- **White Point extended DOWN** (slider min -0.15; the 0.5 and 0.7
+  sanitize floors relaxed to pivot*1.1): stock dead-zoned the slider
+  below ~0.42; the white ceiling now fades to just above mid-grey.
+- **Shoulder** slider step 0.1 -> 0.001 (stock had 8 coarse detents —
+  the "shoulder isn't doing anything" feel; it also only shapes when
+  WP is engaged). **Shoulder Falloff** max 9 -> 9.7 (softness floor).
+- **Toe Falloff remapped** in preserve-midgray: stock squashed the
+  whole slider into internal strength 1.48..2.95; now 0.25..3.35 with
+  the default (falloff 2 -> 2.65) EXACTLY unchanged (Marc: toe works
+  fine, wants more shape range).
+- **Pop Mids is mid-grey COMPENSATED** (Marc: "compensate exposure to
+  keep mid grey intact"): a global counter-gain re-anchors a mid-grey
+  pixel exactly where the tone block put it, for any Pop Mids value —
+  Pop Mids and Exposure are now fully DECOUPLED, so the ML needs no
+  special ordering for the pair (Marc floated "tweak all other params
+  first"; with the compensation that's unnecessary).
+- Gate: 180 green.
+
+**2026-07-22 late — Neutral Tint falloff fix + first 250D match:**
+
+- **Neutral Tint floors raised** (Marc found the bug on footage: a
+  near-step transition on the scope): Falloff floor 0.1 -> 1.0 stop,
+  Pivot floor -6 -> -4 stops (below ~-4.2 is sub-black code) — DCTL
+  sliders + stage bounds. **Neutral Tint is BACK in default_pool()**
+  alongside Split Tone (Marc: "add it back in the ML") — 11 tools.
+- **genesis250D_2383.cube matched** (`--drt-math --target-is-display
+  --search --max-nodes 14`, cloud, ~35 min, run BEFORE the NT
+  re-admission — the "pipeline as is" run Marc asked for): display
+  error 0.172 -> 0.044 (p95 0.096, worst patch 0.234), 0 dropped.
+  Chain: Filmic tone freeze (punch contrast, roll highs, lift blacks,
+  -1.4 stop) + 5x Split Tone + Highlight Bleach + 4x Sector Brightness
+  + 2x Sector Skew + Crosstalk. Delivered to Marc as .cube/.drx/
+  chain.json (scratchpad files don't persist — chain.json is the
+  refit-warm-start insurance). CAVEATS for the next iteration: still
+  gaining ~1%/node at the max_nodes stop (try 18-20 or Marc's Mac),
+  several bound-pinned params (Skew -60 x2, G->Y/B -1.0, Split Tone
+  Blacks at -1), noise gain max x59.8 on a Split Tone (median x0.62;
+  local_search prune was OFF — try --local-search next), and 5 "cool
+  lows" Split Tones smell like one tool doing gradual descent — the
+  re-admitted Neutral Tint may consolidate those in the next run.
+
+**Neutral Tint falloff v4 — Marc's design sketch (2026-07-22, for
+later):** the floor fix helped the highlight side but "it is still
+funky in the bottom". Marc's replacement model: imagine ONE bell-shaped
+weight curve (gaussian-FEELING, "doesn't need to be mathematically"
+gaussian) laid over the whole log range. **Amount** shifts the whole
+bell left (shadows) / right (highlights) from centre; **Pivot** is the
+predefined middle anchor (mid-grey); **Falloff** sets the bell's width
+AND its smoothness in one move. This replaces the current one-sided
+ramp (whose hard saturation below the ramp is what misbehaves in the
+bottom). Not implemented yet — waiting until the current match loop
+settles.
+
+**2026-07-22 night — workflow pivot (Marc drives tone manually):**
+
+- **Split Tone v3**: ONE cubic Bezier per channel (12 sliders), the
+  shadow/highlight pivot joint REMOVED — its C0-only crossover was
+  visible banding (Marc: "each rgb channel needs to stay super
+  smooth!!"). Pivot Offset + Crossover sliders gone, no transfer combo
+  (raw code values), C1 linear tails outside 0..1. v2 slider values do
+  NOT transfer — re-dial by eye once.
+- **Exposure.dctl NEW** (+ ExposureStage): pure linear gain in stops,
+  intended as the very first node. Filmic KEEPS its own Exposure for
+  now (Marc stopped the removal mid-flight).
+- **Filmic Toe Falloff extended to -20..10**: negative = much sharper
+  toe (internal strength to ~10.3 vs stock ceiling 3.35 — Marc was
+  pinned at Toe 0.8 + Falloff 0 trying to match his custom-curves
+  shadow shape and asked for "a little bit further" than even -10).
+- **--pre-chain (lut_match CLI)**: Marc hand-dials Exposure/Filmic/
+  Split in Resolve, hands over the DCTL slider values as JSON
+  ({"stages": [names], "params": [[...]]}); the search applies them as
+  a bit-frozen prefix, drops ALL tone tools from the audition pool,
+  and fits color only. Verified: prefix untouched, color recovered to
+  ~1e-6. max_nodes counts ADDED nodes in this mode.
+- Marc's manual reference values for the genesis shape (from his
+  screenshots, our new-DCTL units): Filmic [Exp -0.249, Con 1.953,
+  Piv 0, WP 0.739, Sh 0.404, ShF 8.873, BP 1.081, Toe 0.800, ToeF 0.0,
+  L/R 0, PC 0.5, Pin 0.558, Pop -1.0, Flare 0.147] + a Split (v2
+  units, needs re-dial) + custom curves in the shadows (the part the
+  extended toe is meant to absorb).
+- Gate: 182 green.
+
 **Open / next (in priority order):**
 
-1. **Port ME_Filmic_Contrast (FilmicContrast.dctl) as a stage.** Marc: "for
-   the contrast, lets just use this for now, this really works." Its
-   **Exposure must be mid-grey-balanced only** (same principle as our fix
-   — balance the LUT mid-grey to the target mid-grey, achromatic). Once
-   ported, retire ContrastCurve from the ML pool and swap the export
-   default to the 1.5.3.T template (which has FilmicContrast + SplitTone).
-   Also needs ColourSaturation in that template (or drop it from the pool).
+1. **Marc verifies in Resolve**: (a) install the committed
+   dctl/FilmicContrast.dctl (extended BP range); (b) import one
+   search-delivered .drx containing synthesized FilmicContrast +
+   SplitTone nodes and confirm sliders arrive; (c) eyeball a real
+   genesis search with the new tone node.
 2. **Contrast curve: one extra FREE control point** (Marc, 2026-07-22),
    for model flexibility. Params: an **x coordinate** (where on the curve)
    and a **y ± offset** from where the curve currently is at that x —
    maybe a spline/tension param if needed, but PREFER leaving it out and
    finding a smooth way (fewer knobs for the same functionality is the
    explicit goal). A single movable point that bumps the curve locally
-   and smoothly. Whether this lands on ContrastCurve or FilmicContrast
-   depends on (1).
-3. Split Tone crossover: Marc floated a "disable crossover" TOGGLE too;
-   we shipped per-channel Crossover OFFSETS (0 = pinned) which subsume it
-   and are fittable. Confirm that covers his intent or add a hard toggle.
-4. Powergrade export needs a template containing EVERY fittable node type;
-   Marc's working templates don't. Resolve once the pool is settled (1).
+   and smoothly. Lands on FilmicContrast now (it won the tone slot).
+   DEFERRED by Marc same day ("lets do this later").
+3. Split Tone crossover disable-toggle question — DEFERRED by Marc
+   ("lets do this later too, i want to see how it works atm").
+4. ~~Kitchen-sink template needed~~ RESOLVED via node synthesis (any
+   template with one DCTL node suffices; all_nodes stays the default).
 
 ---
 
@@ -119,6 +246,7 @@ colorchecker/
     stages.py                  Matrix/LumaCurve/RGBCurves/ReuleauxBroad/ReuleauxFine/
                                LiftGammaGain + STAGE_POOL + CHAIN_PRESETS
     chromogen.py               the 9 Chromogen-style stages + modulation block + hue_word
+    filmic.py                  ME_Filmic_Contrast port (THE tone tool) + FilmicContrastStage
     windows.py                 plateau/wrapped windows + signed ramp_window
     parametric.py              solve_parametric: stagewise init (prep stages LAST) ->
                                optional torch refine -> joint least-squares; waterfall,
@@ -142,7 +270,8 @@ colorchecker/
                                wiggle it once + re-save to make it patchable.
                                Older: contrast_boost_1.6.4.T.drx + 1.6.1/1.6.2
   reference/OpenDRT.dctl       openDRT source (Jed Smith, GPLv3) for the port
-  tests/                       146 green offscreen (torch tests auto-skip w/o torch)
+  tests/                       177 offscreen incl. torch (auto-skip w/o);
+                               fast/slow split — see section 7 Tests
 ```
 
 Tests drive REAL interaction paths (canvas signals, mocked dialogs).
@@ -256,7 +385,9 @@ emissive overlays, CSV export, project save/load.
   chain)" and "Chromogen film look (full stack)" (Marc's canonical
   order: sectors BEFORE Highlight Bleach; duplicates allowed).
 
-### DCTLs — 12 files, sliders EXACTLY = solver report units
+### DCTLs — 14 files, sliders EXACTLY = solver report units
+FilmicContrast.dctl is the MODIFIED toolkit copy (BP range 1.5 / floor
+0.4, WP max 1.02) — Marc must install it over the stock ME version.
 ReuleauxFine + 10 Chromogen tools + LiftGammaGain (ContrastBoost.dctl
 renamed → ContrastCurve.dctl: 10 float sliders + TWO checkboxes — Mid
 Push Compensate (right after Mid Push, like Diachromie) and Draw Curve
@@ -429,9 +560,19 @@ port module must carry the license; fine for private use).
 - **Run on Mac:** `python3 main.py` from `colorchecker/`; deps
   `python3 -m pip install -r requirements.txt` (NOT pip3 — path has
   spaces). torch is OPTIONAL (backprop); zstandard required (drx).
-- **Tests:** `QT_QPA_PLATFORM=offscreen python3 -m pytest tests/` —
-  146 green, ~2-3 min. Cloud container may need
-  `apt-get install libegl1 libgl1 libxkbcommon0` for Qt.
+- **Tests (fast/slow split, 2026-07-22):**
+  `QT_QPA_PLATFORM=offscreen python3 -m pytest` — the DEV LOOP, ~10 s:
+  skips the 21 tests marked `slow` (end-to-end solver/search runs; the
+  skip count is shown, never silent). The GATE before every commit/push:
+  `python3 -m pytest --full -n auto` (~3.5 min on the 4-core cloud box,
+  vs ~5 min serial; needs pytest-xdist — `pip install -r
+  requirements-dev.txt`). conftest.py pins BLAS to 1 thread per xdist
+  worker (without it, parallel = serial from core thrashing). 155 green
+  + 3 torch-skips on the cloud box (torch optional). Slow-marking
+  policy: any test ≥2 s (real scipy/Adam optimization) gets
+  `@pytest.mark.slow`; keep at least an import-level smoke test of each
+  module in the fast set. Cloud container may need `apt-get update &&
+  apt-get install libegl1 libgl1 libxkbcommon0` for Qt.
 - **Detection code is Marc-blessed** — don't touch without cause.
 - **Commit trailers:** Co-Authored-By + Claude-Session lines; never
   put the model identifier in commits.

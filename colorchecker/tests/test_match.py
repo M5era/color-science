@@ -20,6 +20,7 @@ def _film_like_pairs(n=500, seed=2):
     return source, target
 
 
+@pytest.mark.slow
 def test_matrix_plus_rbf_fits_film_curve():
     source, target = _film_like_pairs()
     result = solve_match(source, target, use_matrix=True, layers=6)
@@ -173,6 +174,7 @@ def test_invert_lut_midrange_and_plateaus(tmp_path):
     np.testing.assert_allclose(apply_lut(drt, inverted[0:1]), targets[0:1], atol=5e-3)
 
 
+@pytest.mark.slow
 def test_sandwich_fit_recovers_underlying_transform(tmp_path):
     drt = _drt_cube(tmp_path)
     rng = np.random.default_rng(7)
@@ -190,6 +192,7 @@ def test_sandwich_fit_recovers_underlying_transform(tmp_path):
     np.testing.assert_allclose(result.model(probe), probe @ underlying.T, atol=0.02)
 
 
+@pytest.mark.slow
 def test_sandwich_drops_clipped_patches(tmp_path):
     drt = _drt_cube(tmp_path)
     rng = np.random.default_rng(8)

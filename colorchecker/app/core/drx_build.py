@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import copy
 import re
+import struct
 from pathlib import Path
 
 from app.core.drx import DrxTemplate
@@ -28,6 +29,135 @@ _ID_BASE = 300          # fresh node ids (3 digits, keeps the uuid suffix length
 _F12_BASE = 900_000_000_000
 _CONN_BASE = 5000
 _UUID_RE = re.compile(rb"([0-9a-f]{12})_(\d+)")   # ...edbd_<id>
+
+# ------------------------------------------------- node SYNTHESIS specs
+#
+# Node types absent from every saved template can be SYNTHESIZED: clone
+# any DCTL node as a scaffold and rewrite its param map at the protobuf
+# level — the map is a generic name -> typed-value KV list ("DCTLs" path
+# string, sliderFloatParamN doubles, checkBoxParamN varints, comboBoxParamN
+# enums), and Resolve reads entries BY NAME (Marc's own templates carry
+# honored sliderFloatParam10/11 entries, so indices past 9 work). Values
+# here are each DCTL's UI defaults — fitted sliders get patched afterwards
+# by the normal DrxTemplate pass; a synthesized node stores a double for
+# EVERY slider, so nothing is ever a "wiggle it in Resolve" template gap.
+SYNTH_SPECS = {
+    "FilmicContrast": {
+        "path": "______DCTL______/0_MS/FilmicContrast.dctl",
+        "sliders": [0.0, 1.0, 0.0, 1.015, 0.6, 6.0, 0.0001, 0.5, 2.0,
+                    0.0, 0.5, 0.0, 0.0, 0.0],
+        # bypass, show curve, show ramp, wide overlays, tone-mapped exp,
+        # PRESERVE MID-GRAY (on), show pin range
+        "checkboxes": [0, 0, 0, 0, 0, 1, 0],
+        "combos": [0],          # transfer function: ARRI LogC3
+    },
+    "SplitTone": {
+        "path": "______DCTL______/0_MS/SplitTone.dctl",
+        "sliders": [0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
+                    1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0],
+        "checkboxes": [0],      # show curve
+        "combos": [2],          # transfer function: Log-C3
+    },
+}
+
+_PARAM_NAME_RE = re.compile(
+    rb"(sliderFloat|checkBox|comboBox|intSlider)Param\d+$")
+
+
+def _kv_entry(name: bytes, value_field: Field) -> Field:
+    """One param-map entry: {1: name, 2: {typed value}} as a field-5."""
+    entry = Message([Field(1, 2, name),
+                     Field(2, 2, Message([value_field]).serialize())])
+    return Field(5, 2, entry.serialize())
+
+
+def _spec_entries(spec) -> list[tuple[bytes, Field]]:
+    out = []
+    for i, v in enumerate(spec["sliders"]):      # {2: double} (wire 1)
+        out.append((f"sliderFloatParam{i}".encode(),
+                    _kv_entry(f"sliderFloatParam{i}".encode(),
+                              Field(2, 1, struct.pack("<d", float(v))))))
+    for i, v in enumerate(spec["checkboxes"]):   # {3: varint}
+        out.append((f"checkBoxParam{i}".encode(),
+                    _kv_entry(f"checkBoxParam{i}".encode(),
+                              Field(3, 0, int(v)))))
+    for i, v in enumerate(spec["combos"]):       # {4: {1: varint}}
+        out.append((f"comboBoxParam{i}".encode(),
+                    _kv_entry(f"comboBoxParam{i}".encode(),
+                              Field(4, 2, Message([Field(1, 0, int(v))])
+                                    .serialize()))))
+    return out
+
+
+def _rewrite_param_block(raw: bytes, spec) -> bytes | None:
+    """Recursively locate the KV param map (the message whose field-5
+    entries include name == b"DCTLs") and rewrite it for `spec`: repoint
+    the DCTL path, drop the scaffold's slider/checkbox/combo entries,
+    insert the spec's. Entries stay ASCII-name-sorted like Resolve
+    writes them. Returns the rewritten bytes, or None if `raw` doesn't
+    contain the map."""
+    if b"DCTLs" not in raw:
+        return None
+    try:
+        m = Message.parse(raw)
+    except (ValueError, IndexError):
+        return None
+
+    def entry_name(f):
+        try:
+            names = f.as_message().find(1)
+            return bytes(names[0].value) if names else None
+        except (ValueError, IndexError):
+            return None
+
+    is_map = any(f.number == 5 and f.wire == 2 and entry_name(f) == b"DCTLs"
+                 for f in m.fields)
+    if is_map:
+        keep: list[tuple[bytes, Field]] = []
+        for f in m.fields:
+            if f.number != 5 or f.wire != 2:
+                continue
+            name = entry_name(f)
+            if name == b"DCTLs":
+                e = f.as_message()
+                e.find(2)[0].value = Message(
+                    [Field(5, 2, spec["path"].encode())]).serialize()
+                keep.append((name, Field(5, 2, e.serialize())))
+            elif name is None or _PARAM_NAME_RE.match(name):
+                continue                      # re-synthesized below
+            else:
+                keep.append((name, f))
+        keep.extend(_spec_entries(spec))
+        keep.sort(key=lambda t: t[0])         # Resolve writes name-sorted
+        rebuilt, inserted = [], False
+        for f in m.fields:
+            if f.number == 5 and f.wire == 2:
+                if not inserted:
+                    rebuilt.extend(kv for _, kv in keep)
+                    inserted = True
+                continue
+            rebuilt.append(f)
+        m.fields = rebuilt
+        return m.serialize()
+
+    for f in m.fields:                        # descend toward the map
+        if f.wire == 2 and isinstance(f.value, (bytes, bytearray)) \
+                and b"DCTLs" in f.value:
+            new = _rewrite_param_block(bytes(f.value), spec)
+            if new is not None:
+                f.value = new
+                return m.serialize()
+    return None
+
+
+def _synthesize_node(scaffold: Field, spec) -> Field:
+    """Clone `scaffold` (any DCTL node) into a fresh node of the spec'd
+    type. Id/uuid/label stamping happens later in _clone_node, exactly
+    as for real library nodes."""
+    new_raw = _rewrite_param_block(bytes(scaffold.value), spec)
+    if new_raw is None:
+        raise ValueError("scaffold node has no DCTL param map")
+    return Field(7, 2, new_raw)
 
 
 def _clone_node(node: Field, new_id: int, f12: int,
@@ -101,6 +231,13 @@ def build_grade(template_path: str | Path, dctl_names: list[str],
 
         wanted = list(dctl_names) + [drt_name]
         missing = [w for w in wanted if w not in library]
+        for w in list(missing):
+            if w in SYNTH_SPECS:
+                scaffold = min(
+                    (n for k, n in library.items() if k != drt_name),
+                    key=lambda f: len(f.value))
+                library[w] = _synthesize_node(scaffold, SYNTH_SPECS[w])
+                missing.remove(w)
         if missing:
             raise KeyError(f"template lacks a node for: {missing}")
         if labels is not None and len(labels) != len(wanted):

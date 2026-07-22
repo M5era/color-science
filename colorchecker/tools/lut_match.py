@@ -106,6 +106,15 @@ def main() -> None:
                              "values patched into the template's DCTL nodes")
     parser.add_argument("--drx-template",
                         default="templates/all_nodes_1.10.3.T.drx")
+    parser.add_argument("--pre-chain",
+                        help="JSON of Marc's MANUAL tone nodes (his "
+                             "hand-dialled DCTL sliders), applied as a "
+                             "hard-frozen prefix before the search: "
+                             '{"stages": ["Exposure", "Filmic Contrast", '
+                             '"Split Tone"], "params": [[...], ...]} — '
+                             "param order = each DCTL's sliders. The tone "
+                             "tools leave the audition pool; search only "
+                             "adds color on top. Requires --search.")
     args = parser.parse_args()
 
     if args.list_presets or not args.lut:
@@ -149,6 +158,25 @@ def main() -> None:
         drt = None
     else:
         drt = parse_cube(args.drt) if args.drt else None
+    pre_chain = None
+    if args.pre_chain:
+        import json as _json
+
+        spec = _json.loads(Path(args.pre_chain).read_text())
+        pre_stages = [STAGE_POOL[name]() for name in spec["stages"]]
+        pre_params = [np.asarray(p, dtype=np.float64)
+                      for p in spec["params"]]
+        for st, pr in zip(pre_stages, pre_params):
+            if pr.size != len(st.param_names):
+                raise SystemExit(
+                    f"--pre-chain: {st.name} expects "
+                    f"{len(st.param_names)} params, got {pr.size}")
+        if not args.search:
+            raise SystemExit("--pre-chain requires --search")
+        pre_chain = (pre_stages, pre_params)
+        print(f"manual prefix: {' -> '.join(s.name for s in pre_stages)}"
+              " (frozen; tone tools out of the audition pool)")
+
     if args.search:
         result = search_lut_match(
             lut,
@@ -165,6 +193,7 @@ def main() -> None:
             target_is_display=args.target_is_display,
             verbose=True,
             drt_math=drt_math,
+            pre_chain=pre_chain,
         )
         # insurance: persist the found chain immediately, so a failed
         # export step can never cost the search

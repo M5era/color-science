@@ -65,6 +65,7 @@ def test_recovers_matrix_plus_reuleaux():
     assert result.waterfall[-1][1] <= result.waterfall[0][1] + 1e-9
 
 
+@pytest.mark.slow
 def test_full_chain_on_film_like_target():
     x = _source()
     # contrast + split tone + hue/sat character
@@ -105,6 +106,7 @@ def test_strength_blend():
     )
 
 
+@pytest.mark.slow
 def test_parametric_sandwich_under_drt(tmp_path):
     from tests.test_match import _drt_cube
     from app.core.lut import apply_lut
@@ -120,6 +122,7 @@ def test_parametric_sandwich_under_drt(tmp_path):
     assert result.error_after < result.error_before
 
 
+@pytest.mark.slow
 def test_broad_plus_fine_recovers_local_zone():
     """Broad handles the global move; a Fine zone near red (overlapping
     the identity window, so the local solver can find it) mops up a

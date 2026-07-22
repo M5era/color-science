@@ -28,9 +28,15 @@ python3 main.py
 ## Tests
 
 ```
-pip install pytest
-python3 -m pytest tests/
+python3 -m pip install -r requirements-dev.txt
+
+python3 -m pytest              # dev loop, ~10 s (skips the slow solver tests)
+python3 -m pytest --full -n auto   # the FULL gate — run before every push
 ```
+
+The default run skips tests marked `slow` (the end-to-end solver/search
+runs, several minutes of scipy) and says so in the summary. `--full`
+runs everything; `-n auto` (pytest-xdist) spreads it across cores.
 
 Tests generate their own tiny synthetic TIFFs at runtime; no footage is
 committed to the repo (`*.tif` is git-ignored — keep real frames in

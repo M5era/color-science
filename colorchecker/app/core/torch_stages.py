@@ -647,24 +647,27 @@ def _filmic_contrast_apply(stage, x, p):
     hi_feather = torch.clamp(2.5 + 1.5 * hi_drive, 2.5, 4.0)
     lo_feather = torch.clamp(7.5 + 4.0 * feather_drive, 7.5, 11.5)
 
-    w_p_pivot = torch.minimum(white_point, shoulder)
     shoulder_str = torch.clamp(10.0 - shoulder_falloff, min=0.3)
     toe_str = torch.clamp(10.0 - toe_falloff, min=0.17)
 
     black_point = 1.0 - black_point * 0.4
-    b_p_pivot = torch.minimum(black_point - 0.05, toe)
     white_point = white_point * 0.5 + 0.49   # extended-down, no 0.5 floor
     black_point = torch.clamp(black_point, min=0.4)   # extended range floor
 
     pivot = torch.clamp(pivot, 0.05, 0.90)
     white_point = torch.maximum(white_point, pivot * 1.1)  # no 0.7 floor
-    w_p_pivot = torch.maximum(pivot * 1.015, w_p_pivot)
-    b_p_pivot = torch.maximum(
-        1.0 - torch.maximum(torch.clamp(1.0 - b_p_pivot, max=0.6), pivot),
-        pivot)
-    if _v(pivot) > 0.7:
-        b_p_pivot = torch.minimum(pivot, (1.0 - b_p_pivot) * pivot + 0.5)
     black_point = black_point * 0.45 + 0.55
+
+    # LIVE toe/shoulder position mappings (mirrors app/core/filmic.py)
+    t_s = torch.clamp((shoulder - 0.2) / (0.997 - 0.2), 0.0, 1.0)
+    lo_s = pivot * 1.015
+    hi_s = torch.maximum(white_point - 0.01, lo_s + 1e-4)
+    w_p_pivot = lo_s + (hi_s - lo_s) * t_s
+
+    t_t = torch.clamp(toe / 0.8, 0.0, 1.0)
+    lo_t = 1.0 - pivot
+    hi_t = torch.maximum(black_point - 0.05, lo_t + 1e-4)
+    b_p_pivot = lo_t + (hi_t - lo_t) * (1.0 - t_t)
     toe_str = torch.clamp(toe_str * 0.35 - 0.15, min=0.25)  # widened range
     if _v(toe_falloff) < 0.0:
         toe_str = 3.35 - toe_falloff       # 1:1 negative side, cont. at 0

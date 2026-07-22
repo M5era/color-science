@@ -29,6 +29,8 @@ mode; --preset picks any chain preset; --list-presets shows them.
 import argparse
 from pathlib import Path
 
+import numpy as np
+
 from app.core.lut import parse_cube
 from app.core.lut_match import search_lut_match, solve_lut_match
 from app.core.match import load_patch_csv, write_cube
@@ -208,8 +210,15 @@ def main() -> None:
         shown = name if label == name else f"{name} — {label}"
         print(f"  after {shown}: {err:.5f}   "
               f"[noise gain ×{gain['median']:.2f}, max ×{gain['max']:.2f}]")
-    print(f"After match: {result.error_after:.5f} "
-          f"(worst {result.error_after_max:.5f})")
+    # MSE = mean ||r||^2 (Chromogen's loss axis); report the tail (p95,
+    # worst) next to it — the mean/MSE can look great while a memory
+    # colour is far off, and the tail is what shows up in an A/B.
+    pp = np.asarray(result.per_patch_error, dtype=np.float64)
+    mse = float((pp ** 2).mean())
+    p95 = float(np.percentile(pp, 95))
+    print(f"After match:  MSE {mse:.5f}  (Chromogen metric)")
+    print(f"  per-patch L2 error:  mean {result.error_after:.5f}  "
+          f"p95 {p95:.5f}  worst {result.error_after_max:.5f}")
     g = result.chain_noise_gain
     print(f"Chain noise gain: ×{g['median']:.2f} median, ×{g['max']:.2f} max")
     print()

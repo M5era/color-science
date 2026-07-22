@@ -57,34 +57,64 @@ def test_unknown_slider_rejected():
         drx.set_slider(node, 99, 1.0)
 
 
+KITCHEN_SINK = (Path(__file__).resolve().parents[1]
+                / "templates" / "all_nodes_1.10.3.T.drx")
+
+
 def test_lut_match_to_drx_end_to_end(tmp_path, monkeypatch, capsys):
-    """The full Plan C pipeline: LUT in -> fitted PowerGrade out."""
+    """The full Plan C pipeline: LUT in -> from-scratch PowerGrade out.
+
+    Exercises the real deliverable path — a free-order --search fit
+    exported by cloning exactly the fitted chain (+ DRT) out of the
+    kitchen-sink template, each node carrying its short label."""
     import sys
 
-    import numpy as np
-
     from app.core.drx import DrxTemplate
+    from app.core.protobuf import Message
     from tests.test_lut_match import _chromogen_look_cube
     from tools import lut_match as cli
+
+    if not KITCHEN_SINK.exists():
+        pytest.skip("kitchen-sink template not present")
 
     _chromogen_look_cube(tmp_path)
     out_drx = tmp_path / "fitted.drx"
     monkeypatch.setattr(sys, "argv", [
         "lut_match", "--lut", str(tmp_path / "look.cube"),
-        "--samples", "500",
-        "--drx-out", str(out_drx), "--drx-template", str(TEMPLATE),
+        "--search", "--max-nodes", "4", "--samples", "500",
+        "--drx-out", str(out_drx), "--drx-template", str(KITCHEN_SINK),
     ])
     cli.main()
     text = capsys.readouterr().out
-    assert "drx node ColourSaturation#0" in text
-    assert "NO NODE IN TEMPLATE" in text  # LGG/Contrast not in template
+    assert "from scratch" in text
 
     fitted = DrxTemplate(out_drx)
-    sat = next(n for n in fitted.nodes if n.dctl_name == "ColourSaturation")
-    # the fit recovers the baked look's Y/B boost (1.45): the patched
-    # node must carry a clearly-raised Y/B slider, not the default
-    assert sat.sliders[1] > 1.2
-    # R/G lands a touch high (~1.35 vs 1.15): the per-RGB Contrast Curve
-    # in the fitted chain shares some of the saturation lift, so the sat
-    # node carries a little less. Still a clearly-raised, non-default slider.
-    assert abs(sat.sliders[0] - 1.15) < 0.25
+    names = [n.dctl_name for n in fitted.nodes]
+    # the generated stack is EXACTLY the fitted look nodes + the DRT,
+    # nothing else — no leftover identity nodes from the kitchen sink
+    assert names[-1] == "OpenDRT"
+    assert "LiftGammaGain" not in names          # --search never emits LGG
+    assert len(names) == len(cli_stage_count(text)) + 1  # look nodes + DRT
+
+    # every generated node carries a non-empty display label (field 6)
+    body = _node_container(fitted)
+    labels = [n.as_message().find(6) for n in body.find(7)]
+    assert all(lbl and lbl[0].value for lbl in labels)
+
+
+def cli_stage_count(text: str) -> list[str]:
+    """The 'drx node <Type>#<k>' lines list one entry per look node."""
+    return [ln for ln in text.splitlines() if ln.strip().startswith("drx node")]
+
+
+def _node_container(fitted):
+    """The body-1 container holding the node stack (field 7 + field 8)."""
+    from app.core.protobuf import Message
+
+    for _prefix, payload in fitted.bodies:
+        body = Message.parse(bytes(payload))
+        for cont in body.find(1):
+            contm = cont.as_message()
+            if contm.find(7) and contm.find(8):
+                return contm
+    raise AssertionError("no node-stack container found")

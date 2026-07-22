@@ -240,51 +240,38 @@ def main() -> None:
         print(f"wrote {args.out} ({args.size}^3) — A/B against {args.lut}")
 
     if args.drx_out:
-        from app.core.stages import STAGE_POOL as _POOL
-
-        drx = drx_template_obj
+        from app.core.drx import DrxTemplate
+        from app.core.drx_build import build_grade
 
         export_result = result
-        if args.search and len(result.model.stages) > 1:
-            # A .drx can only run the template's own node order. Map
-            # each found stage to its k-th node of that type; if the
-            # discovered order differs, REFIT the same stage set in
-            # template order (warm-started) so the exported grade is
-            # optimal for the order it will actually run in.
-            counters: dict = {}
-            keyed = []
-            for pos, (stage, params) in enumerate(
-                    zip(result.model.stages, result.model.params)):
-                name = stage.name.replace(" ", "")
-                node_ids = [i for i, n in enumerate(drx.nodes)
-                            if n.dctl_name == name]
-                k = counters.get(name, 0)
-                counters[name] = k + 1
-                idx = node_ids[k] if k < len(node_ids) else 10_000 + pos
-                keyed.append((idx, stage, params))
-            order = sorted(range(len(keyed)), key=lambda j: keyed[j][0])
-            if order != list(range(len(keyed))):
-                print("search order != template node order — refitting "
-                      "in template order for the .drx export (assumes "
-                      "the template's stored node order is its graph "
-                      "order — verify the stack in Resolve)")
-                export_result = solve_lut_match(
-                    lut, [keyed[j][1] for j in order],
-                    source_points=source_points,
-                    n_samples=args.samples,
-                    backend=args.backend,
-                    drt=drt,
-                    target_is_display=args.target_is_display,
-                    init_params=[keyed[j][2] for j in order],
-                    drt_math=drt_math,
-                )
-                print(f".drx (template-order) error: "
-                      f"{export_result.error_after:.5f}   "
-                      f"free-order error: {result.error_after:.5f}")
 
-        counters = {}
-        unmatched = []
-        patched_ids = set()
+        # Build the powergrade FROM SCRATCH: exactly the fitted stages,
+        # in the fitted order, followed by the DRT node — cloned out of
+        # the kitchen-sink template. No template-order refit is needed
+        # (unlike the old in-place patch) because the generated stack
+        # runs in the order we emit. Each node also carries its short
+        # label so the grade reads properly in Resolve.
+        dctl_names = [s.name.replace(" ", "")
+                      for s in export_result.model.stages]
+        node_labels = [s.short_label(p) for s, p in
+                       zip(export_result.model.stages,
+                           export_result.model.params)]
+        drt_label = "OpenDRT"
+        try:
+            build_grade(args.drx_template, dctl_names, args.drx_out,
+                        drt_name="OpenDRT",
+                        labels=node_labels + [drt_label])
+        except KeyError as exc:
+            raise SystemExit(
+                f"cannot build powergrade: {exc}. Add the missing DCTL "
+                "node(s) to your template and re-export it.")
+
+        # reopen the generated grade and patch every fitted slider. The
+        # generated stack holds exactly the fitted nodes in fitted order,
+        # so the k-th node of each type lines up 1:1 with the k-th fitted
+        # stage of that type.
+        drx = DrxTemplate(args.drx_out)
+        counters: dict = {}
         for stage, params, label in zip(export_result.model.stages,
                                         export_result.model.params,
                                         export_result.stage_labels):
@@ -292,9 +279,6 @@ def main() -> None:
             matches = [n for n in drx.nodes if n.dctl_name == name]
             k = counters.get(name, 0)
             counters[name] = k + 1
-            if k >= len(matches):
-                unmatched.append(f"{stage.name} — {label}")
-                continue
             node = matches[k]
             missing = []
             for i, value in enumerate(params):
@@ -302,7 +286,6 @@ def main() -> None:
                     drx.set_slider(node, i, float(value))
                 elif abs(value - stage.identity()[i]) > 1e-9:
                     missing.append(f"{stage.param_names[i]}={value:.4f}")
-            patched_ids.add(id(node))
             print(f"drx node {name}#{k} <- {label}  "
                   f"[node name: {stage.short_label(params)}]")
             if missing:
@@ -311,30 +294,9 @@ def main() -> None:
                       "(wiggle them once in Resolve and re-save the "
                       "template to fix)")
 
-        # template nodes carry the grade they were saved with — reset
-        # every look node the fit did NOT use to its stage identity so
-        # the exported powergrade is EXACTLY the fitted chain (+ DRT)
-        by_dctl = {cls.name.replace(" ", ""): cls for cls in _POOL.values()}
-        resets = 0
-        for node in drx.nodes:
-            if id(node) in patched_ids or node.dctl_name not in by_dctl:
-                continue
-            identity = by_dctl[node.dctl_name]().identity()
-            for i, value in enumerate(identity):
-                if i in node._offsets:
-                    drx.set_slider(node, i, float(value))
-            resets += 1
-        if resets:
-            print(f"reset {resets} unused look nodes to identity")
-
         drx.write(args.drx_out)
-        print(f"wrote {args.drx_out} (template: {args.drx_template})")
-        if unmatched:
-            print("NO NODE IN TEMPLATE for these fitted stages — add the "
-                  "DCTL node to your powergrade and re-export it as the "
-                  "template, or paste the sliders by hand:")
-            for u in unmatched:
-                print(f"  {u}")
+        print(f"wrote {args.drx_out} (template: {args.drx_template}) — "
+              f"{len(dctl_names)} look nodes + DRT, from scratch")
 
 
 if __name__ == "__main__":

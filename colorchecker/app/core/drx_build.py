@@ -30,13 +30,18 @@ _CONN_BASE = 5000
 _UUID_RE = re.compile(rb"([0-9a-f]{12})_(\d+)")   # ...edbd_<id>
 
 
-def _clone_node(node: Field, new_id: int, f12: int) -> Field:
-    """Deep-copy a field-7 node, stamping a fresh id / field12 / uuid."""
+def _clone_node(node: Field, new_id: int, f12: int,
+                label: str | None = None) -> Field:
+    """Deep-copy a field-7 node, stamping a fresh id / field12 / uuid,
+    and optionally its on-screen node label (field 6, a wire-2 string
+    sitting between field 5 and field 7)."""
     m = copy.deepcopy(node.as_message())
     old_id = m.find(1)[0].value
     m.find(1)[0].value = new_id
     if m.find(12):
         m.find(12)[0].value = f12
+    if label is not None:
+        _set_label(m, label)
     raw = m.serialize()
     # retarget the uuid suffix ...edbd_<oldid> -> ...edbd_<newid>. Same
     # digit count (both 3) so the enclosing length is unchanged.
@@ -44,12 +49,33 @@ def _clone_node(node: Field, new_id: int, f12: int) -> Field:
     return Field(7, 2, raw)
 
 
+def _set_label(m: Message, label: str) -> None:
+    """Set a node's display label (field 6). Replace it if present, else
+    insert it just after field 5 to match Resolve's field order."""
+    enc = label.encode()
+    existing = m.find(6)
+    if existing:
+        existing[0].value = enc
+        return
+    lbl = Field(6, 2, enc)
+    after5 = 0
+    for idx, f in enumerate(m.fields):
+        if f.number <= 5:
+            after5 = idx + 1
+    m.fields.insert(after5, lbl)
+
+
 def build_grade(template_path: str | Path, dctl_names: list[str],
-                out_path: str | Path, drt_name: str = "OpenDRT") -> None:
+                out_path: str | Path, drt_name: str = "OpenDRT",
+                labels: list[str] | None = None) -> None:
     """Write a .drx whose node stack is exactly `dctl_names` (in order)
     followed by the DRT node, cloned from `template_path`'s library.
     Slider values are NOT set here — open the result with DrxTemplate and
-    patch, as the exporter already does (k-th node of each type)."""
+    patch, as the exporter already does (k-th node of each type).
+
+    `labels`, if given, must be parallel to `dctl_names + [drt_name]` and
+    becomes each node's on-screen Resolve label; None keeps the cloned
+    node's own label (usually blank)."""
     tpl = DrxTemplate(template_path)
     # the node stack lives in whichever body has the field-1 container
     for bi, (prefix, payload) in enumerate(tpl.bodies):
@@ -77,11 +103,16 @@ def build_grade(template_path: str | Path, dctl_names: list[str],
         missing = [w for w in wanted if w not in library]
         if missing:
             raise KeyError(f"template lacks a node for: {missing}")
+        if labels is not None and len(labels) != len(wanted):
+            raise ValueError(
+                f"labels ({len(labels)}) must match nodes ({len(wanted)})")
 
         new_nodes, ids = [], []
         for k, name in enumerate(wanted):
             nid = _ID_BASE + k
-            new_nodes.append(_clone_node(library[name], nid, _F12_BASE + k))
+            lbl = labels[k] if labels is not None else None
+            new_nodes.append(
+                _clone_node(library[name], nid, _F12_BASE + k, lbl))
             ids.append(nid)
 
         new_conns = []

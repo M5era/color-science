@@ -32,7 +32,7 @@ DEFINE_UI_PARAMS(pivot, Relative Pivot 📌, DCTLUI_SLIDER_FLOAT, 0.0, -1, 1, 0.
 
 DEFINE_UI_PARAMS(p_white_point, ⚪ White Point  :⚪, DCTLUI_SLIDER_FLOAT, 1.015, -0.15, 1.02, 0.0001)
 DEFINE_UI_PARAMS(p_w_p_pivot, ├ Shoulder  ╭, DCTLUI_SLIDER_FLOAT, 0.6, 0.2, .997, 0.001)
-DEFINE_UI_PARAMS(p_shoulder_str,└ Fall off ╭   , DCTLUI_SLIDER_FLOAT, 6, -100.0, 9.7, 0.001) // deep negative = REALLY tight shoulder (strength up to ~110, near-rectangular)
+DEFINE_UI_PARAMS(p_shoulder_str,└ Fall off ╭   , DCTLUI_SLIDER_FLOAT, 6, -25.0, 9.7, 0.001) // negative = knee strength DOUBLES every 5 units (10 -> 320 at -25): each step visibly tightens toward rectangular
 
 DEFINE_UI_PARAMS(p_black_point, ⚫ Black Point  :⚫, DCTLUI_SLIDER_FLOAT, 0.0001, 0.0, 1.5, 0.0001)
 DEFINE_UI_PARAMS(p_b_p_pivot, ├ Toe     ⌣  , DCTLUI_SLIDER_FLOAT, 0.5, 0.0, 0.8, 0.001)
@@ -1189,14 +1189,17 @@ __DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, float p
      //sanitize black and white points
      if (p_transfer_f == 15) {p_shoulder_str += 5.0f;}
      float toe_falloff_raw = p_toe_str; // raw slider, for the 1:1 negative-side toe mapping
-     p_w_p_pivot = _fminf(p_white_point, p_w_p_pivot );
+     float shoulder_falloff_raw = p_shoulder_str;
      p_shoulder_str= _fmaxf((10.0f - p_shoulder_str), 0.3f);
+     // negative falloff: GEOMETRIC growth (perceptual) — the corner radius
+     // shrinks like 1/strength, so linear growth felt dead below 0; now the
+     // knee visibly halves its radius every 5 slider units
+     if (shoulder_falloff_raw < 0.0f) { p_shoulder_str = 10.0f * _exp2f(-shoulder_falloff_raw / 5.0f); }
      p_toe_str= _fmaxf((10.0f - p_toe_str), 0.17f);
 
      p_black_point = p_black_point*.4f;
      p_black_point = 1.0f - p_black_point;
 
-     p_b_p_pivot = _fminf((p_black_point - 0.05f) , p_b_p_pivot );
      p_white_point = p_white_point*.5f + 0.49f; // extended-down: floor 0.5 removed (pivot*1.1 + the 1e-3 ratio floor keep it safe)
      //p_white_point = _fmaxf(p_white_point , 0.5f);
      p_black_point = _fmaxf(p_black_point , 0.4f); // extended-range floor (stock 0.69)
@@ -1207,12 +1210,22 @@ __DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, float p
        
        pivot = _fminf(0.90f, _fmaxf(0.05f, pivot));
        p_white_point = _fmaxf(p_white_point, pivot*1.1f); // extended-down: hard 0.7 floor removed
-       p_w_p_pivot = _fmaxf(_fmaxf(pivot*1.015f, p_w_p_pivot),p_w_p_pivot );
-       p_b_p_pivot = _fmaxf((1.0f- _fmaxf(_fminf(0.6f,(1.0f-p_b_p_pivot)), pivot)), pivot);
-       if (pivot > 0.7f) {
-         p_b_p_pivot = _fminf(pivot, (1.0f - p_b_p_pivot) * pivot+0.5);
-         }
        p_black_point = p_black_point* 0.45f +.55f;
+
+       // LIVE Toe/Shoulder position mappings (toolkit rewrite — the stock
+       // clamp chains dead-zoned ~80% of both sliders). Full travel sweeps
+       // the valid range linearly: Shoulder = roll starts just above the
+       // pivot .. just under the white ceiling; Toe = roll hugs the black
+       // floor .. reaches up to mid-grey (the preserve-midgray edge).
+       float t_s = _clampf((p_w_p_pivot - 0.2f) / (0.997f - 0.2f), 0.0f, 1.0f);
+       float lo_s = pivot * 1.015f;
+       float hi_s = _fmaxf(p_white_point - 0.01f, lo_s + 1e-4f);
+       p_w_p_pivot = lo_s + (hi_s - lo_s) * t_s;
+
+       float t_t = _clampf(p_b_p_pivot / 0.8f, 0.0f, 1.0f);
+       float lo_t = 1.0f - pivot;                          // toe up to mid-grey (raw 0.8)
+       float hi_t = _fmaxf(p_black_point - 0.05f, lo_t + 1e-4f); // floor-hugging (raw 0)
+       p_b_p_pivot = lo_t + (hi_t - lo_t) * (1.0f - t_t);
        p_toe_str = _fmaxf(p_toe_str*0.35f - 0.15f, 0.25f); // widened toe-shape range (stock 1.48..2.95 -> 0.25..3.35, default 2.65 unchanged)
        // negative falloff: 1:1 mapping (continuous at 0 -> 3.35) so the
        // toe reaches the same near-rectangular strengths as the shoulder

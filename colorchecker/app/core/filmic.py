@@ -46,6 +46,12 @@ produce NaNs):
     the Shoulder slider step fixed 0.1 -> 0.001; Toe Falloff remapped
     in preserve-midgray from strength 1.48..2.95 to 0.25..3.35 (much
     wider toe shapes, the default 2 -> 2.65 unchanged). Marc, 22 eve.
+  * Toe/Shoulder POSITION sliders remapped to be LIVE end-to-end
+    (2026-07-22 night, Marc: "the actual toe and shoulder sliders dont
+    do anything"): the stock clamp chains dead-zoned ~80% of both
+    sliders. Full travel now sweeps the valid range linearly —
+    Shoulder: just above the pivot -> just under the white ceiling;
+    Toe: hugging the black floor -> up to mid-grey.
   * Pop Mids is mid-grey COMPENSATED (not in the stock tool): a global
     counter-gain re-anchors mid-grey exactly where the tone block put
     it, decoupling Pop Mids from Exposure (Marc: "compensate exposure
@@ -344,14 +350,11 @@ def filmic_contrast(x: np.ndarray,
     lo_feather = float(np.clip(7.5 + 4.0 * feather_drive, 7.5, 7.5 + 4.0))
     hi_threshold, lo_threshold = 0.8, -3.0
 
-    # --- sanitize black and white points (DCTL order preserved: the
-    # shoulder pivot caps against the RAW white point slider)
-    w_p_pivot = min(white_point, shoulder)
+    # --- sanitize black and white points
     shoulder_str = max(10.0 - shoulder_falloff, 0.3)
     toe_str = max(10.0 - toe_falloff, 0.17)
 
     black_point = 1.0 - black_point * 0.4
-    b_p_pivot = min(black_point - 0.05, toe)
     # extended-down White Point: the stock 0.5 floor is removed (the
     # pivot*1.1 limit below + the 1e-3 roll-ratio floor keep it safe)
     white_point = white_point * 0.5 + 0.49
@@ -363,11 +366,26 @@ def filmic_contrast(x: np.ndarray,
     pivot = min(0.90, max(0.05, pivot))
     # extended-down White Point: stock hard 0.7 floor removed
     white_point = max(white_point, pivot * 1.1)
-    w_p_pivot = max(max(pivot * 1.015, w_p_pivot), w_p_pivot)
-    b_p_pivot = max(1.0 - max(min(0.6, 1.0 - b_p_pivot), pivot), pivot)
-    if pivot > 0.7:
-        b_p_pivot = min(pivot, (1.0 - b_p_pivot) * pivot + 0.5)
+
+    # --- LIVE Toe/Shoulder position mappings (toolkit rewrite, Marc:
+    # "the actual toe and shoulder sliders dont do anything"). The stock
+    # clamp chains dead-zoned ~80% of both sliders (Toe was pinned
+    # between min(0.6,..) and max(..,pivot); Shoulder was capped by the
+    # RAW White Point slider). Full travel now sweeps the valid range
+    # linearly: Shoulder 0.2..0.997 = roll starts just above the pivot
+    # .. just under the white ceiling; Toe 0..0.8 = roll hugs the black
+    # floor .. reaches up to mid-grey (the preserve-midgray edge).
     black_point = black_point * 0.45 + 0.55
+
+    t_s = min(max((shoulder - 0.2) / (0.997 - 0.2), 0.0), 1.0)
+    lo_s = pivot * 1.015
+    hi_s = max(white_point - 0.01, lo_s + 1e-4)
+    w_p_pivot = lo_s + (hi_s - lo_s) * t_s
+
+    t_t = min(max(toe / 0.8, 0.0), 1.0)
+    lo_t = 1.0 - pivot                       # toe up to mid-grey (raw 0.8)
+    hi_t = max(black_point - 0.05, lo_t + 1e-4)  # floor-hugging (raw 0)
+    b_p_pivot = lo_t + (hi_t - lo_t) * (1.0 - t_t)
     # widened toe-shape range (stock 1.48..2.95 -> 0.25..3.35; the
     # default falloff 2 still maps to 2.65 exactly). Negative falloff
     # maps 1:1 (continuous at 0 -> 3.35) so the toe reaches the same

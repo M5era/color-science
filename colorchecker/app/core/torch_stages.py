@@ -409,35 +409,23 @@ def _sector_squash_apply(stage, x, p):
 
 
 def _split_tone_apply(stage, x, p):
-    """Differentiable mirror of SplitToneStage.apply (per-channel Bezier)."""
-    mg = chromogen.MID_GREY
-    pivot = mg + p[12]
-    pm = 1.0 - pivot
+    """Differentiable mirror of SplitToneStage.apply (v3: one cubic
+    Bezier per channel over the whole range, C1 linear tails)."""
     third = stage._THIRD
-    scale = stage._CTRL_SCALE
-
-    def bez(r, p0, p1, p2, p3):
-        ir = 1.0 - r
-        return p0 * ir ** 3 + 3.0 * p1 * ir ** 2 * r \
-            + 3.0 * p2 * ir * r * r + p3 * r ** 3
-
     chans = []
     for ci in range(3):
-        blk = p[0 + ci] * scale
-        shd = p[3 + ci] * scale
-        hil = p[6 + ci] * scale
-        wht = p[9 + ci]
-        level = pivot + p[13 + ci]
+        y0 = p[0 + ci] * third
+        y1 = p[3 + ci] * third
+        y2 = 1.0 - (2.0 - p[6 + ci]) * third
+        y3 = p[9 + ci]
         v = x[..., ci]
-        r = torch.clamp(v / pivot, 0.0, 1.0)
-        sh = bez(r, blk, shd, shd + third, level / pivot) * pivot
-        rr = torch.clamp((1.0 - v) / pm, 0.0, 1.0)
-        lm = 1.0 - level
-        hi = 1.0 - bez(rr, 1.0 - wht, 1.0 - (hil + third),
-                       1.0 - hil, lm / pm) * pm
-        res = torch.where(v <= pivot, sh, hi)
-        res = torch.where((v < 0.0) | (v > 1.0), v, res)
-        chans.append(res)
+        iv = 1.0 - v
+        bez = (y0 * iv ** 3 + 3.0 * y1 * iv ** 2 * v
+               + 3.0 * y2 * iv * v * v + y3 * v ** 3)
+        lo_ext = y0 + 3.0 * (y1 - y0) * v
+        hi_ext = y3 + 3.0 * (y3 - y2) * (v - 1.0)
+        chans.append(torch.where(v < 0.0, lo_ext,
+                                 torch.where(v > 1.0, hi_ext, bez)))
     return torch.stack(chans, dim=-1)
 
 
@@ -479,3 +467,289 @@ def torch_chain(stages, x, param_list):
     for stage, p in zip(stages, param_list):
         out = torch_apply(stage, out, p)
     return out
+
+
+# -------------------------------------------------- ME Filmic Contrast
+
+def _f_logc3_encode(x):
+    from app.core import filmic as F
+    arg = torch.clamp(F._A * x + F._B, min=1e-30)   # discarded branch guard
+    return torch.where(x > F._CUT,
+                       F._C * torch.log10(arg) + F._D,
+                       F._E * x + F._F)
+
+
+def _f_logc3_decode(x):
+    from app.core import filmic as F
+    return torch.where(x > F._E * F._CUT + F._F,
+                       (10.0 ** ((x - F._D) / F._C) - F._B) / F._A,
+                       (x - F._F) / F._E)
+
+
+def _f_smootherstep(x):
+    x = torch.clamp(x, 0.0, 1.0)
+    return 3.0 * x ** 2 - 2.0 * x ** 3
+
+
+def _f_smootherstep5(x):
+    x = torch.clamp(x, 0.0, 1.0)
+    return x * x * x * (x * (x * 6.0 - 15.0) + 10.0)
+
+
+def _f_gentle_ramp(x):
+    return _f_smootherstep(torch.clamp(x, 0.0, 1.0)) ** 3
+
+
+def _f_powerf(base, exp):
+    return torch.sign(base) * torch.abs(base).clamp(min=1e-12) ** exp
+
+
+def _f_linear_contrast(x, contrast, pivot):
+    return (x - pivot) * contrast + pivot
+
+
+def _f_rolling_contrast(x, contrast, pivot):
+    p = torch.clamp(pivot, 1e-6, 1.0 - 1e-6)
+    e = torch.clamp(0.01 * torch.minimum(p, 1.0 - p), min=1e-4)
+    x0, x1 = p - e, p + e
+    f_left = _f_powerf(x / p, contrast) * p
+    pm = 1.0 - p
+    f_right = 1.0 - _f_powerf((1.0 - x) / pm, contrast) * pm
+    t = _f_smootherstep5((x - x0) / torch.clamp(x1 - x0, min=1e-6))
+    blend = f_left * (1.0 - t) + f_right * t
+    return torch.where(x <= x0, f_left,
+                       torch.where(x >= x1, f_right, blend))
+
+
+def _f_power_sigmoid_contrast(x, contrast, pivot):
+    t0 = torch.clamp(pivot, 1e-4, 1.0 - 1e-4)
+    s0 = torch.clamp(contrast, 0.5, 2.5)
+    s0v = float(s0.detach()) if torch.is_tensor(s0) else float(s0)
+    if s0v > 1.0:
+        s0 = s0 * (1.0 + 0.12 * (s0 - 1.0) / 1.5)
+        s0v = float(s0.detach())
+    if s0v < 1.0:
+        x = torch.clamp(x, 0.0, 1.0)
+    if abs(s0v - 1.0) < 1e-5:
+        return x
+    eps = 1e-6
+    denom = s0 - 1.0
+    denom = torch.sign(denom) * torch.clamp(torch.abs(denom), min=eps)
+    s1 = s0 * (1.0 - t0) / denom
+    s2 = s0 * (t0 - 0.0) / denom
+    s1 = torch.sign(s1) * torch.clamp(torch.abs(s1), min=eps)
+    s2 = torch.sign(s2) * torch.clamp(torch.abs(s2), min=eps)
+    d_hi = x - t0
+    hi = s0 * d_hi / (d_hi * s0 / s1 + 1.0) + t0
+    d_lo = t0 - x
+    lo = -s0 * d_lo / (d_lo * s0 / s2 + 1.0) + t0
+    return torch.where(x >= t0, hi, lo)
+
+
+def _f_end_roll(v, point, pivot, strength):
+    # overflow-free forms (see app/core/filmic._end_roll): knee
+    # strength is unbounded, gradients stay finite
+    base = torch.clamp((point - pivot) / (1.0 - pivot), min=1e-3)
+    bn = base ** strength
+    scale = (1.0 - pivot) * base / torch.clamp(
+        1.0 - bn, min=1e-30) ** (1.0 / strength)
+    mask = v > pivot
+    d = torch.clamp(v - pivot, min=0.0) / scale
+    d_lo = torch.clamp(d, max=1.0)
+    d_hi = torch.clamp(d, min=1.0)
+    denom = torch.where(
+        d <= 1.0,
+        (1.0 + d_lo ** strength) ** (1.0 / strength),
+        d_hi * (1.0 + d_hi ** -strength) ** (1.0 / strength))
+    rolled = pivot + scale * d / denom
+    return torch.where(mask, rolled, v)
+
+
+def _f_rgb_to_chen(rgb):
+    r, g, b = rgb[..., 0], rgb[..., 1], rgb[..., 2]
+    rtr = r * 0.81649658 + g * -0.40824829 + b * -0.40824829
+    rtg = g * 0.70710678 + b * -0.70710678
+    rtb = r * 0.57735027 + g * 0.57735027 + b * 0.57735027
+    art = torch.atan2(rtg, rtr)
+    sphr = torch.sqrt(rtr * rtr + rtg * rtg + rtb * rtb + 1e-24)
+    spht = torch.where(art < 0.0, art + 2.0 * 3.141592653589, art)
+    sphp = torch.atan2(torch.sqrt(rtr * rtr + rtg * rtg + 1e-24), rtb)
+    return torch.stack([spht * 0.15915494309189535,
+                        sphp * 1.0467733744265997,
+                        sphr * 0.5773502691896258], dim=-1)
+
+
+def _f_chen_to_rgb(chen):
+    h = chen[..., 0] * 6.283185307179586
+    c = chen[..., 1] * 0.9553166181245093
+    length = chen[..., 2] * 1.7320508075688772
+    ctr = length * torch.sin(c) * torch.cos(h)
+    ctg = length * torch.sin(c) * torch.sin(h)
+    ctb = length * torch.cos(c)
+    r = ctr * 0.81649658 + ctb * 0.57735027
+    g = ctr * -0.40824829 + ctg * 0.70710678 + ctb * 0.57735027
+    b = ctr * -0.40824829 + ctg * -0.70710678 + ctb * 0.57735027
+    return torch.stack([r, g, b], dim=-1)
+
+
+def _f_mix_sat(contrasted, toned, mix, contrast, pivot, contrast_fn):
+    cv = float(contrast.detach()) if torch.is_tensor(contrast) else float(contrast)
+    if cv == 1.0:                   # exact limit, as in the numpy port
+        luma_only = toned
+    else:
+        chen = _f_rgb_to_chen(toned)
+        l2 = contrast_fn(chen[..., 2], contrast, pivot)
+        luma_only = _f_chen_to_rgb(
+            torch.stack([chen[..., 0], chen[..., 1], l2], dim=-1))
+    return contrasted * (1.0 - mix) + luma_only * mix
+
+
+def _f_hi_lo_mask(metric_rgb, hi_t, hi_f, lo_t, lo_f, mid_grey_log2):
+    m = torch.max(metric_rgb, dim=-1).values
+    hi_t, hi_f, lo_t, lo_f = (torch.as_tensor(v, dtype=m.dtype)
+                              for v in (hi_t, hi_f, lo_t, lo_f))
+    mlog = torch.log2(torch.clamp(m, min=1e-10))
+    lo_min = mid_grey_log2 + (lo_t - 0.5 * lo_f)
+    lo_max = mid_grey_log2 + (lo_t + 0.5 * lo_f)
+    hi_min = mid_grey_log2 + (hi_t - 0.5 * hi_f)
+    hi_max = mid_grey_log2 + (hi_t + 0.5 * hi_f)
+    shadow = 1.0 - _f_smootherstep(
+        (mlog - lo_min) / torch.clamp(lo_max - lo_min, min=1e-6))
+    highlight = _f_smootherstep(
+        (mlog - hi_min) / torch.clamp(hi_max - hi_min, min=1e-6))
+    return torch.clamp(shadow + highlight, 0.0, 1.0)
+
+
+def _filmic_contrast_apply(stage, x, p):
+    """Differentiable mirror of app/core/filmic.filmic_contrast. Python
+    branches follow the numpy port's guards exactly (they branch on the
+    concrete param values; gradients flow through the taken branch)."""
+    from app.core import filmic as F
+
+    (exposure, contrast, pivot_rel, white_point, shoulder,
+     shoulder_falloff, black_point, toe, toe_falloff, mix_contrast,
+     preserve_color, pin_ends, pop_mids, flare) = [p[i] for i in range(14)]
+
+    def _v(t):          # concrete value for CONTROL FLOW only
+        return float(t.detach()) if torch.is_tensor(t) else float(t)
+
+    clean = x
+
+    pivot = torch.clamp(pivot_rel + F.MID_GREY, 0.02, 1.0)
+
+    pin_n = _f_gentle_ramp(pin_ends)
+    cdelta = contrast - 1.0
+    c_n = _f_gentle_ramp(cdelta / 1.0 if _v(cdelta) >= 0.0
+                         else -cdelta / 0.5)
+    feather_drive = 1.0 - (1.0 - torch.clamp(pin_n, 0.0, 1.0)) * (
+        1.0 - torch.clamp(c_n, 0.0, 1.0))
+    hi_drive = feather_drive * feather_drive
+    hi_feather = torch.clamp(2.5 + 1.5 * hi_drive, 2.5, 4.0)
+    lo_feather = torch.clamp(7.5 + 4.0 * feather_drive, 7.5, 11.5)
+
+    shoulder_str = torch.clamp(10.0 - shoulder_falloff, min=0.3)
+    toe_str = torch.clamp(10.0 - toe_falloff, min=0.17)
+
+    black_point = 1.0 - black_point * 0.4
+    white_point = white_point * 0.5 + 0.49   # extended-down, no 0.5 floor
+    black_point = torch.clamp(black_point, min=0.4)   # extended range floor
+
+    pivot = torch.clamp(pivot, 0.05, 0.90)
+    white_point = torch.maximum(white_point, pivot * 1.1)  # no 0.7 floor
+    black_point = black_point * 0.45 + 0.55
+
+    # LIVE toe/shoulder position mappings (mirrors app/core/filmic.py)
+    t_s = torch.clamp((shoulder - 0.2) / (0.997 - 0.2), 0.0, 1.0)
+    lo_s = pivot * 1.015
+    hi_s = torch.maximum(white_point - 0.01, lo_s + 1e-4)
+    w_p_pivot = lo_s + (hi_s - lo_s) * t_s
+
+    t_t = torch.clamp(toe / 0.8, 0.0, 1.0)
+    lo_t = 1.0 - pivot
+    hi_t = torch.maximum(black_point - 0.05, lo_t + 1e-4)
+    b_p_pivot = lo_t + (hi_t - lo_t) * (1.0 - t_t)
+    toe_str = torch.clamp(toe_str * 0.35 - 0.15, min=0.25)  # widened range
+    if _v(toe_falloff) < 0.0:
+        toe_str = 3.35 - toe_falloff       # 1:1 negative side, cont. at 0
+
+    if _v(contrast) < 1.0:
+        preserve_color = 1.0 - preserve_color
+
+    mix_n = torch.clamp(mix_contrast, 0.0, 1.0)
+    w_lin = torch.exp(-0.5 * ((mix_n - 0.00) / 0.07) ** 2)
+    w_roll = torch.exp(-0.5 * ((mix_n - 0.33) / 0.18) ** 2)
+    w_pow = torch.exp(-0.5 * ((mix_n - 1.00) / 0.32) ** 2)
+    w_sum = torch.clamp(w_lin + w_roll + w_pow, min=1e-8)
+
+    def _tone_block(v):
+        if _v(white_point) >= 1.0:
+            toned = v
+        else:
+            toned = _f_end_roll(v, white_point, w_p_pivot, shoulder_str)
+        if _v(black_point) < 1.0:
+            toned = 1.0 - _f_end_roll(1.0 - toned, black_point, b_p_pivot,
+                                      toe_str)
+        lin = _f_linear_contrast(toned, contrast, pivot)
+        lin = _f_mix_sat(lin, toned, preserve_color, contrast, pivot,
+                         _f_linear_contrast)
+        roll = _f_rolling_contrast(toned, contrast, pivot)
+        roll = _f_mix_sat(roll, toned, preserve_color, contrast, pivot,
+                          _f_rolling_contrast)
+        powsig = _f_power_sigmoid_contrast(toned, contrast, pivot)
+        powsig = _f_mix_sat(powsig, toned, preserve_color, contrast, pivot,
+                            _f_power_sigmoid_contrast)
+        return (lin * (w_lin / w_sum) + roll * (w_roll / w_sum)
+                + powsig * (w_pow / w_sum))
+
+    out = _tone_block(x)
+
+    mid_log2 = float(np.log2(F.MID_GREY))
+    if _v(pop_mids) != 0.0:
+        big = _f_hi_lo_mask(clean, 1.04, 1.85,
+                            -3.0 + 1.61, lo_feather - 4.4, mid_log2)
+        small = _f_hi_lo_mask(clean, 1.02, 1.51, -2.9, 4.5, mid_log2)
+        band = torch.clamp(big - small, 0.0, 1.0)[..., None]
+        pop = _f_logc3_encode(_f_logc3_decode(out) * 2.0 ** -pop_mids)
+        out = out * (1.0 - band) + pop * band
+
+        # mid-grey compensation (mirrors app/core/filmic.py)
+        midpix = torch.full((1, 3), F.MID_GREY, dtype=x.dtype)
+        m0 = _tone_block(midpix)[0, 0]
+        b_mid = torch.clamp(
+            _f_hi_lo_mask(midpix, 1.04, 1.85,
+                          -3.0 + 1.61, lo_feather - 4.4, mid_log2)
+            - _f_hi_lo_mask(midpix, 1.02, 1.51, -2.9, 4.5, mid_log2),
+            0.0, 1.0)[0]
+        m0_lin = _f_logc3_decode(m0)
+        pop_mid = _f_logc3_encode(m0_lin * 2.0 ** -pop_mids)
+        v_mid = m0 * (1.0 - b_mid) + pop_mid * b_mid
+        comp = m0_lin / _f_logc3_decode(v_mid)
+        out = _f_logc3_encode(_f_logc3_decode(out) * comp)
+
+    if _v(exposure) != 0.0:
+        out = _f_logc3_encode(_f_logc3_decode(out) * 2.0 ** exposure)
+
+    if _v(pin_ends) != 0.0:
+        mask = _f_hi_lo_mask(clean, 0.8, hi_feather,
+                             -3.0, lo_feather, mid_log2)[..., None]
+        pinends = out * (1.0 - mask) + clean * mask
+        out = out * (1.0 - pin_ends) + pinends * pin_ends
+
+    if _v(flare) != 0.0:
+        u = torch.clamp(flare, -1.0, 1.0)
+        offset = u * torch.abs(u) * 0.01
+        out = _f_logc3_encode(_f_logc3_decode(out) + offset)
+
+    return out
+
+
+def _exposure_apply(stage, x, p):
+    if float(p[0].detach() if torch.is_tensor(p[0]) else p[0]) == 0.0:
+        return x
+    return _f_logc3_encode(_f_logc3_decode(x) * 2.0 ** p[0])
+
+
+from app.core.filmic import ExposureStage, FilmicContrastStage  # noqa: E402
+
+_APPLY[FilmicContrastStage] = _filmic_contrast_apply
+_APPLY[ExposureStage] = _exposure_apply

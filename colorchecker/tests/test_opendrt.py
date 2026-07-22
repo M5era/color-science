@@ -14,6 +14,7 @@ _CUBE = (Path(__file__).resolve().parents[1] / "test_luts"
 
 
 @pytest.mark.skipif(not _CUBE.exists(), reason="baked cube not in repo")
+@pytest.mark.slow
 def test_port_matches_resolve_baked_cube():
     """THE gate: the port must reproduce what Marc's Resolve renders.
     The cube stores float32 on a 65^3 lattice, so agreement is bounded

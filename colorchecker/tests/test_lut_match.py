@@ -47,6 +47,7 @@ def test_sample_covers_domain_and_neutrals():
 
 # ---------------------------------------------------------- lut match
 
+@pytest.mark.slow
 def test_lut_match_recovers_chromogen_look(tmp_path):
     lut, look = _chromogen_look_cube(tmp_path)
     stages = [STAGE_POOL[n]() for n in
@@ -81,6 +82,7 @@ def test_lgg_prior_yields_when_target_is_exposure(tmp_path):
     np.testing.assert_allclose(gains, 1.25, atol=0.1)
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("backend", ["torch"])
 def test_lut_match_through_backprop(tmp_path, backend):
     pytest.importorskip("torch")
@@ -138,6 +140,7 @@ def test_stage_labels_read_like_grading_notes():
     assert "exposure" in lgg.label(p)
 
 
+@pytest.mark.slow
 def test_cli_lut_match(tmp_path, monkeypatch, capsys):
     import sys
 

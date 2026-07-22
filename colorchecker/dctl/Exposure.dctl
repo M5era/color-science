@@ -1,0 +1,31 @@
+// Exposure.dctl — pure linear-gain exposure, in stops. LogC3.
+//
+// Companion to the "Exposure" stage (app/core/filmic.py ExposureStage).
+// Split out of FilmicContrast (Marc, 2026-07-22: "remove exposure from
+// the contrast and have it be its own dctl that lives as the very
+// first node, just linear gain"). Decode LogC3 -> multiply by
+// 2^Exposure -> encode. Achromatic in linear light; +N stops moves
+// mid-grey by exactly N stops. Identity at 0.
+
+DEFINE_UI_PARAMS(exposure, Exposure, DCTLUI_SLIDER_FLOAT, 0.0, -8.0, 8.0, 0.001)
+
+__DEVICE__ float logc3_to_lin(float x) {
+    const float cut = 0.010591f, a = 5.555556f, b = 0.052272f;
+    const float c = 0.247190f, d = 0.385537f, e = 5.367655f, f = 0.092809f;
+    return (x > e * cut + f) ? (_powf(10.0f, (x - d) / c) - b) / a : (x - f) / e;
+}
+
+__DEVICE__ float lin_to_logc3(float x) {
+    const float cut = 0.010591f, a = 5.555556f, b = 0.052272f;
+    const float c = 0.247190f, d = 0.385537f, e = 5.367655f, f = 0.092809f;
+    return (x > cut) ? c * _log10f(a * x + b) + d : e * x + f;
+}
+
+__DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, float p_R, float p_G, float p_B)
+{
+    if (exposure == 0.0f) return make_float3(p_R, p_G, p_B);
+    float g = _powf(2.0f, exposure);
+    return make_float3(lin_to_logc3(logc3_to_lin(p_R) * g),
+                       lin_to_logc3(logc3_to_lin(p_G) * g),
+                       lin_to_logc3(logc3_to_lin(p_B) * g));
+}

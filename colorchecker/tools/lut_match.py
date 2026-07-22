@@ -105,7 +105,7 @@ def main() -> None:
                         help="also write a PowerGrade with the fitted "
                              "values patched into the template's DCTL nodes")
     parser.add_argument("--drx-template",
-                        default="templates/brilliance_red_1.4.1.T.drx")
+                        default="templates/all_nodes_1.10.3.T.drx")
     args = parser.parse_args()
 
     if args.list_presets or not args.lut:

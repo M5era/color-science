@@ -12,6 +12,7 @@ from app.core.chromogen import (
     ContrastCurveStage,
     NeutralTintStage,
 )
+from app.core.filmic import FilmicContrastStage
 from app.core.stages import LiftGammaGainStage
 
 
@@ -46,6 +47,8 @@ def test_default_pool_is_chromogen_without_lgg_or_neutral_tint():
     assert "Brilliance Reduction" in names
     assert "Split Tone" in names            # replaces Neutral Tint for fitting
     assert "Neutral Tint" not in names      # out of the ML audition (Marc)
+    assert "Filmic Contrast" in names       # replaces Contrast Curve as tone
+    assert "Contrast Curve" not in names    # retired from the ML audition
     assert len(pool) == 10
 
 
@@ -53,7 +56,9 @@ def test_default_pool_is_chromogen_without_lgg_or_neutral_tint():
 def test_search_recovers_simple_look_and_logs():
     x = _source()
     result = search_chain(x, _simple_look(x), max_nodes=4, min_gain=0.01)
-    assert result.error_after < result.error_before / 10
+    # ~10x recovery; the exact figure moved a hair when Filmic Contrast
+    # replaced Contrast Curve in the pool (different greedy trajectory)
+    assert result.error_after < result.error_before / 8
     assert 1 <= len(result.model.stages) <= 4
     assert all(not isinstance(s, LiftGammaGainStage)
                for s in result.model.stages)
@@ -81,10 +86,10 @@ def test_search_allows_reusing_a_stage_type():
     sat = ColourSaturationStage()
     p = _with(sat, **{"R/G": 1.9, "Y/B": 1.9})
     target = sat.apply(sat.apply(x, p), p)  # ~3.6x, beyond the 0..2 range
-    # keep Contrast Curve out of this fixture: in per-RGB mode it also
+    # keep the tone tool out of this fixture: in per-RGB mode it also
     # lifts saturation, so it would compete to explain the sat boost and
     # muddy this pure reuse-mechanic check.
-    pool = [c for c in default_pool() if c is not ContrastCurveStage]
+    pool = [c for c in default_pool() if c is not FilmicContrastStage]
     result = search_chain(x, target, max_nodes=3, min_gain=0.005, pool=pool)
     names = [s.name for s in result.model.stages]
     assert names.count("Colour Saturation") >= 2
@@ -94,18 +99,18 @@ def test_search_allows_reusing_a_stage_type():
 @pytest.mark.slow
 def test_search_display_domain_analytic_drt_finds_contrast():
     """The genesis lesson: with the analytic DRT and a display-domain
-    loss, a contrasty look must surface Contrast Curve — no cube
-    inversion deleting the tone evidence at the extremes."""
+    loss, a contrasty look must surface the tone tool (now Filmic
+    Contrast) — no cube inversion deleting the tone evidence."""
     from app.core.opendrt import OpenDRTModel
 
     drt = OpenDRTModel()
     x = _source(300)
-    con = ContrastCurveStage()
+    con = FilmicContrastStage()
     target = drt(con.apply(x, _with(con, Contrast=1.7)))
     result = search_chain(x, target, max_nodes=3, min_gain=0.005,
                           display_transform=drt)
     names = [s.name for s in result.model.stages]
-    assert "Contrast Curve" in names
+    assert "Filmic Contrast" in names
     assert result.error_after < result.error_before / 5
     assert result.pairs_unreachable == 0  # nothing is ever dropped
 
@@ -113,21 +118,21 @@ def test_search_display_domain_analytic_drt_finds_contrast():
 @pytest.mark.slow
 def test_grey_locked_tone_matches_neutrals_exactly():
     """Marc: 'contrast adjusted based on grey scale only'. The tone
-    node is fitted on neutrals, frozen, and no second Contrast Curve
+    node is fitted on neutrals, frozen, and no second tone node
     enters the chain — so the grey-scale match is exact and stays."""
     from app.core.opendrt import OpenDRTModel
 
     drt = OpenDRTModel()
     neutrals = np.linspace(0.02, 0.95, 40)[:, None].repeat(3, axis=1)
     x = np.concatenate([_source(250), neutrals])
-    con = ContrastCurveStage()
+    con = FilmicContrastStage()
     target = drt(con.apply(x, _with(con, Contrast=1.7)))
 
     result = search_chain(x, target, max_nodes=4, min_gain=0.01,
                           display_transform=drt)
-    assert isinstance(result.model.stages[0], ContrastCurveStage)
+    assert isinstance(result.model.stages[0], FilmicContrastStage)
     names = [s.name for s in result.model.stages]
-    assert names.count("Contrast Curve") == 1  # left the pool after node 1
+    assert names.count("Filmic Contrast") == 1  # left the pool after node 1
     mask = np.all(x == x[:, :1], axis=1)
     fitted_display = drt(result.model(x[mask]))
     np.testing.assert_allclose(fitted_display, target[mask], atol=5e-3)
@@ -160,7 +165,7 @@ def test_local_search_unfreezes_tone_and_prunes_on_tint():
     drt = OpenDRTModel()
     neutrals = np.linspace(0.05, 0.95, 40)[:, None].repeat(3, axis=1)
     x = np.concatenate([_source(200), neutrals])
-    con = ContrastCurveStage()
+    con = FilmicContrastStage()
     tint = SplitToneStage()
     y = con.apply(x, _with(con, Contrast=1.6))
     # crossover offsets + a shadow move tint the neutral ramp

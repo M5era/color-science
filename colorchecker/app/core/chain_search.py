@@ -35,6 +35,7 @@ from app.core.chromogen import (
     NeutralTintStage,
     SplitToneStage,
 )
+from app.core.filmic import FilmicContrastStage
 from app.core.diagnostics import noise_gain
 from app.core.lut import CubeLUT
 from app.core.match import invert_lut_at
@@ -57,12 +58,17 @@ _TONE_ANCHOR_REG = 250.0
 
 
 def default_pool() -> list[type]:
-    """The searchable node types: all Chromogen-family tools, NO Lift
-    Gamma Gain, and NO Neutral Tint — Split Tone replaces it for fitting
-    (Marc, 2026-07-22). Neutral Tint stays in STAGE_POOL for presets /
-    manual use, just out of the ML audition."""
+    """The searchable node types: the Chromogen-family tools, NO Lift
+    Gamma Gain, NO Neutral Tint (Split Tone replaces it for fitting —
+    Marc, 2026-07-22) and NO Contrast Curve — Filmic Contrast replaces
+    it as the tone tool (Marc, same day: "for the contrast, lets just
+    use this for now, this really works"). Both retirees stay in
+    STAGE_POOL for presets / manual use, just out of the ML audition."""
     from app.core.chromogen import NeutralTintStage
-    return [cls for cls in CHROMOGEN_STAGES if cls is not NeutralTintStage]
+    pool = [cls for cls in CHROMOGEN_STAGES
+            if cls is not NeutralTintStage
+            and cls is not ContrastCurveStage]
+    return pool + [FilmicContrastStage]
 
 
 def _fit_err(a, b):
@@ -84,7 +90,10 @@ def _fit_candidate(stage: Stage, cur: np.ndarray, fit_target: np.ndarray,
         fit = (fwd(stage.apply(cur, p)) - fit_target).ravel()
         return np.concatenate([fit, reg * (p - identity) / scale])
 
-    starts = [identity]
+    # start from init(), not identity: stages whose identity sits in a
+    # dead-gradient region (Filmic Contrast's parked white/black point)
+    # seed engaged there; for every other stage init() IS identity
+    starts = [stage.init()]
     if "Hue" in stage.param_names:
         hue_i = stage.param_names.index("Hue")
         starts = []
@@ -329,12 +338,12 @@ def search_chain(
     if verbose:
         print(f"  before any nodes: fit error -> {err0:.5f}")
 
-    # ---- grey-scale-locked tone: fit ONE Contrast Curve on the
-    # neutral samples only and freeze it as node 1
+    # ---- grey-scale-locked tone: fit ONE tone node (Filmic Contrast)
+    # on the neutral samples only and freeze it as node 1
     if neutral_tone:
         neutral = np.all(src == src[:, :1], axis=1)
         if neutral.sum() >= 8:
-            con = ContrastCurveStage()
+            con = FilmicContrastStage()
             p, _ = _fit_candidate(con, src[neutral], fit_target[neutral],
                                   regularization, fwd, max_nfev=200)
             stages.append(con)
@@ -342,12 +351,13 @@ def search_chain(
             frozen_n = 1
             grey_anchor = p.copy()
             pool = [cls for cls in pool
-                    if not issubclass(cls, ContrastCurveStage)]
+                    if not issubclass(cls, (FilmicContrastStage,
+                                            ContrastCurveStage))]
             cur = con.apply(src, p)
             err0 = _fit_err(fwd(cur), fit_target)
-            log.append((1, "Contrast Curve [grey-scale-locked tone]", err0))
+            log.append((1, "Filmic Contrast [grey-scale-locked tone]", err0))
             if verbose:
-                print(f"  node 1: + Contrast Curve (grey-scale-locked "
+                print(f"  node 1: + Filmic Contrast (grey-scale-locked "
                       f"tone)  fit error -> {err0:.5f}")
         else:
             log.append("neutral_tone skipped: no neutral samples in source")

@@ -384,6 +384,8 @@ CHAIN_PRESETS = {
 
 
 from app.core.chromogen import CHROMOGEN_STAGES  # noqa: E402
+from app.core.filmic import FilmicContrastStage  # noqa: E402
 
 for _cls in CHROMOGEN_STAGES:
     STAGE_POOL[_cls.name] = _cls
+STAGE_POOL[FilmicContrastStage.name] = FilmicContrastStage

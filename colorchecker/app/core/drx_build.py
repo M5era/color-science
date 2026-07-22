@@ -105,12 +105,36 @@ def build_grade(template_path: str | Path, dctl_names: list[str],
                 continue
             rebuilt.append(f)
         contm.fields = rebuilt
+
+        # the container's input/output pointers reference the FIRST and
+        # LAST node by id — field 1 = output id, field 9 -> first id,
+        # field 10 -> last id. Retarget them or Resolve dereferences
+        # dropped nodes and crashes.
+        if contm.find(1):
+            contm.find(1)[0].value = ids[-1]
+        _set_endpoint(contm, 9, ids[0])
+        _set_endpoint(contm, 10, ids[-1])
         cont.value = contm.serialize()
         tpl.bodies[bi] = (prefix, bytearray(body.serialize()))
         tpl.nodes = tpl._scan_nodes()
         tpl.write(out_path)
         return
     raise ValueError("no node-stack container found in template")
+
+
+def _set_endpoint(contm: Message, field_num: int, node_id: int) -> None:
+    """Retarget the node-id reference buried in a container endpoint
+    pointer (field 9/10 = {..., 3: {..., 4: <node id>}})."""
+    fs = contm.find(field_num)
+    if not fs:
+        return
+    outer = fs[0].as_message()
+    if outer.find(3):
+        inner = outer.find(3)[0].as_message()
+        if inner.find(4):
+            inner.find(4)[0].value = node_id
+            outer.find(3)[0].value = inner.serialize()
+    fs[0].value = outer.serialize()
 
 
 def _DCTL_of(node: Field) -> str:

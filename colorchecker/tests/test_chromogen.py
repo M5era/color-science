@@ -224,18 +224,30 @@ def test_split_tone_splits_shadows_and_highlights_per_channel():
     assert high[0] > high[2]              # highlights lean warm (R > B)
 
 
-def test_split_tone_crossover_pins_then_floats():
+def test_split_tone_is_smooth_everywhere():
+    """v3 (Marc's banding fix): one cubic Bezier per channel — there is
+    no pivot joint anymore, so the second derivative must stay bounded
+    on a dense ramp (a kink would spike the second difference)."""
     stage = SplitToneStage()
-    pivot = np.full((1, 3), MID_GREY)
     p = stage.identity().copy()
-    p[stage.param_names.index("Black R")] = -0.4   # a shadow move
-    # default: every channel still lands exactly on the pivot (neutral)
-    np.testing.assert_allclose(stage.apply(pivot, p)[0], MID_GREY, atol=1e-9)
-    # a Crossover offset floats just that channel at the pivot (a mid tint)
-    p[stage.param_names.index("Crossover R")] = 0.05
-    out = stage.apply(pivot, p)[0]
-    assert abs(out[0] - (MID_GREY + 0.05)) < 1e-6
-    assert abs(out[1] - MID_GREY) < 1e-9
+    p[stage.param_names.index("Black R")] = -0.8
+    p[stage.param_names.index("Shadow R")] = 1.6
+    p[stage.param_names.index("White R")] = 0.9
+    ramp = np.linspace(-0.2, 1.3, 20001)[:, None].repeat(3, axis=1)
+    y = stage.apply(ramp, p)[:, 0]
+    kink = np.abs(np.diff(np.diff(y)))
+    assert kink.max() < 1e-6              # curvature only, no joints
+
+
+def test_split_tone_c1_tails():
+    """Outside [0,1] the curve extends linearly with the endpoint slope
+    (v2 hard-passed super-whites through — a snap whenever White != 1)."""
+    stage = SplitToneStage()
+    p = stage.identity().copy()
+    p[stage.param_names.index("White R")] = 0.8
+    just_in = stage.apply(np.array([[0.999, 0.5, 0.5]]), p)[0, 0]
+    just_out = stage.apply(np.array([[1.001, 0.5, 0.5]]), p)[0, 0]
+    assert abs(just_out - just_in) < 5e-3  # continuous through 1.0
 
 
 def test_contrast_curve_mid_compensate_holds_pivot():

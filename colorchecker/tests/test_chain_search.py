@@ -86,10 +86,13 @@ def test_search_allows_reusing_a_stage_type():
     sat = ColourSaturationStage()
     p = _with(sat, **{"R/G": 1.9, "Y/B": 1.9})
     target = sat.apply(sat.apply(x, p), p)  # ~3.6x, beyond the 0..2 range
-    # keep the tone tool out of this fixture: in per-RGB mode it also
-    # lifts saturation, so it would compete to explain the sat boost and
-    # muddy this pure reuse-mechanic check.
-    pool = [c for c in default_pool() if c is not FilmicContrastStage]
+    # keep the per-channel tools out of this fixture: Filmic (per-RGB
+    # contrast) and Split Tone v3 (per-channel curves) both move channel
+    # spread, so they'd compete to explain the sat boost and muddy this
+    # pure reuse-mechanic check.
+    from app.core.chromogen import SplitToneStage
+    pool = [c for c in default_pool()
+            if c is not FilmicContrastStage and c is not SplitToneStage]
     result = search_chain(x, target, max_nodes=3, min_gain=0.005, pool=pool)
     names = [s.name for s in result.model.stages]
     assert names.count("Colour Saturation") >= 2
@@ -168,9 +171,9 @@ def test_local_search_unfreezes_tone_and_prunes_on_tint():
     con = FilmicContrastStage()
     tint = SplitToneStage()
     y = con.apply(x, _with(con, Contrast=1.6))
-    # crossover offsets + a shadow move tint the neutral ramp
+    # asymmetric per-channel shadow moves tint the neutral ramp
     y = tint.apply(y, _with(tint, **{"Black R": -0.4, "Black B": 0.3,
-                                     "Crossover R": 0.05, "Crossover B": -0.04}))
+                                     "Shadow R": 1.25, "Shadow B": 0.8}))
     target = drt(y)
 
     greedy = search_chain(x, target, max_nodes=4, min_gain=0.005,
@@ -240,3 +243,30 @@ def test_search_broad_bias_prefers_broad_tools():
                           broad_bias=0.9)
     assert all(not s.local_tool for s in result.model.stages)
     assert result.error_after < result.error_before / 5
+
+
+@pytest.mark.slow
+def test_manual_pre_chain_is_hard_frozen():
+    """Marc's workflow pivot: he dials Exposure/Filmic/Split himself and
+    hands over the DCTL values; the search must apply them as an
+    untouchable prefix, drop the tone tools from the pool, and explain
+    only the color on top."""
+    from app.core.filmic import ExposureStage
+
+    x = _source()
+    exp, fc, sat = (ExposureStage(), FilmicContrastStage(),
+                    ColourSaturationStage())
+    p_exp = _with(exp, Exposure=-0.3)
+    p_fc = _with(fc, Contrast=1.5, **{"White Point": 0.9})
+    y = fc.apply(exp.apply(x, p_exp), p_fc)
+    target = sat.apply(y, _with(sat, **{"R/G": 1.4, "Y/B": 1.4}))
+
+    res = search_chain(x, target, max_nodes=3, min_gain=0.005,
+                       pre_chain=([exp, fc], [p_exp, p_fc]))
+    names = [s.name for s in res.model.stages]
+    assert names[:2] == ["Exposure", "Filmic Contrast"]
+    np.testing.assert_array_equal(res.model.params[0], p_exp)  # bit-frozen
+    np.testing.assert_array_equal(res.model.params[1], p_fc)
+    assert not any(n in ("Filmic Contrast", "Split Tone", "Exposure",
+                         "Contrast Curve") for n in names[2:])
+    assert res.error_after < res.error_before / 5

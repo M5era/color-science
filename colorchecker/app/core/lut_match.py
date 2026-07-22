@@ -108,6 +108,7 @@ def search_lut_match(
     target_is_display: bool = False,
     verbose: bool = False,
     drt_math=None,
+    pre_chain=None,
 ) -> ParametricResult:
     """solve_lut_match without a prescribed chain: the free-order
     greedy search (app/core/chain_search.py) picks which tools to use,
@@ -125,7 +126,7 @@ def search_lut_match(
             pool=pool, max_nodes=max_nodes, min_gain=min_gain,
             broad_bias=broad_bias, neutral_tone=neutral_tone,
             local_search=local_search,
-            prune_screen_k=prune_screen_k,
+            prune_screen_k=prune_screen_k, pre_chain=pre_chain,
             backend=backend, regularization=regularization,
             display_transform=drt_math, verbose=verbose,
         )
@@ -136,7 +137,7 @@ def search_lut_match(
             pool=pool, max_nodes=max_nodes, min_gain=min_gain,
             broad_bias=broad_bias, neutral_tone=neutral_tone,
             local_search=local_search,
-            prune_screen_k=prune_screen_k,
+            prune_screen_k=prune_screen_k, pre_chain=pre_chain,
             backend=backend, regularization=regularization,
             output_transform=drt, verbose=verbose,
         )
@@ -145,6 +146,6 @@ def search_lut_match(
         pool=pool, max_nodes=max_nodes, min_gain=min_gain,
         broad_bias=broad_bias, neutral_tone=neutral_tone,
         local_search=local_search,
-        prune_screen_k=prune_screen_k,
+        prune_screen_k=prune_screen_k, pre_chain=pre_chain,
         backend=backend, regularization=regularization, verbose=verbose,
     )

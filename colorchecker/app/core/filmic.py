@@ -11,8 +11,8 @@ Scope of the port (the PIXEL path only):
   * Preserve Mid-gray toggle ON (the DCTL default);
   * Tone-mapped exposure toggle OFF (default): exposure is a linear
     gain applied at the END — achromatic in linear light and mid-grey
-    referenced (+N stops moves mid-grey exactly N stops), which is the
-    behaviour Marc required of the tone node's Exposure;
+    referenced (a standalone Exposure node also exists for the manual
+    first-node workflow; Filmic keeps its own for now, Marc);
   * screen furniture (ramp / curve / checker overlays, bypass) is NOT
     ported — it never touches the measurement path.
 
@@ -469,9 +469,11 @@ class FilmicContrastStage(Stage):
                         1.5 (stock 0.5; sanitize floor lowered, see
                         module docstring)
       Toe               where the shadow roll starts
-      Toe Falloff       toe softness 0..10; remapped to a much wider
-                        internal range (0.25..3.35 vs stock 1.48..2.95,
-                        default unchanged)
+      Toe Falloff       toe softness; extended to -20..10 — negative
+                        values give a MUCH sharper toe (internal
+                        strength up to ~10.3 vs the stock ceiling 3.35;
+                        Marc kept hitting the stock cap), positive is
+                        the stock soft direction, default unchanged
       Linear Rolled     blends Linear -> Rolled -> PowerP contrast
       Preserve Color    0 = per-RGB (contrast moves saturation),
                         1 = luma-only via the CHEN model
@@ -511,7 +513,7 @@ class FilmicContrastStage(Stage):
     def bounds(self) -> tuple[np.ndarray, np.ndarray]:
         lo = np.array([-4.0, 0.5, -1.0,
                        -0.15, 0.2, 0.0,
-                       0.0, 0.0, 0.0,
+                       0.0, 0.0, -20.0,
                        0.0, 0.0, 0.0, -1.0,
                        -1.0])
         hi = np.array([4.0, 3.0, 1.0,
@@ -553,3 +555,34 @@ class FilmicContrastStage(Stage):
         if contrast > 1.02 and preserve < 0.3:
             note += " (rich)"
         return note
+
+
+class ExposureStage(Stage):
+    """Pure linear-gain exposure in stops — split out of Filmic
+    Contrast (Marc, 2026-07-22: "have it be its own dctl that lives as
+    the very first node, just linear gain"). Achromatic in linear
+    light, mid-grey referenced. Not in the ML audition pool: Marc sets
+    it manually as node 1; it exists for manual prefixes, presets and
+    the .drx export."""
+
+    name = "Exposure"
+    param_names = ["Exposure"]
+
+    def identity(self) -> np.ndarray:
+        return np.array([0.0])
+
+    def bounds(self) -> tuple[np.ndarray, np.ndarray]:
+        return np.array([-8.0]), np.array([8.0])
+
+    def apply(self, x: np.ndarray, params: np.ndarray) -> np.ndarray:
+        e = float(params[0])
+        x = np.asarray(x, dtype=np.float64)
+        if e == 0.0:
+            return x.copy()
+        return lin_to_logc3(logc3_to_lin(x) * 2.0 ** e)
+
+    def label(self, params: np.ndarray) -> str:
+        e = float(params[0])
+        if abs(e) < 0.02:
+            return "(idle)"
+        return f"{e:+.1f} stop"

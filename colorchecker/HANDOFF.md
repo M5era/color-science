@@ -143,6 +143,35 @@ ramp (whose hard saturation below the ramp is what misbehaves in the
 bottom). Not implemented yet — waiting until the current match loop
 settles.
 
+**2026-07-22 night — workflow pivot (Marc drives tone manually):**
+
+- **Split Tone v3**: ONE cubic Bezier per channel (12 sliders), the
+  shadow/highlight pivot joint REMOVED — its C0-only crossover was
+  visible banding (Marc: "each rgb channel needs to stay super
+  smooth!!"). Pivot Offset + Crossover sliders gone, no transfer combo
+  (raw code values), C1 linear tails outside 0..1. v2 slider values do
+  NOT transfer — re-dial by eye once.
+- **Exposure.dctl NEW** (+ ExposureStage): pure linear gain in stops,
+  intended as the very first node. Filmic KEEPS its own Exposure for
+  now (Marc stopped the removal mid-flight).
+- **Filmic Toe Falloff extended to -20..10**: negative = much sharper
+  toe (internal strength to ~10.3 vs stock ceiling 3.35 — Marc was
+  pinned at Toe 0.8 + Falloff 0 trying to match his custom-curves
+  shadow shape and asked for "a little bit further" than even -10).
+- **--pre-chain (lut_match CLI)**: Marc hand-dials Exposure/Filmic/
+  Split in Resolve, hands over the DCTL slider values as JSON
+  ({"stages": [names], "params": [[...]]}); the search applies them as
+  a bit-frozen prefix, drops ALL tone tools from the audition pool,
+  and fits color only. Verified: prefix untouched, color recovered to
+  ~1e-6. max_nodes counts ADDED nodes in this mode.
+- Marc's manual reference values for the genesis shape (from his
+  screenshots, our new-DCTL units): Filmic [Exp -0.249, Con 1.953,
+  Piv 0, WP 0.739, Sh 0.404, ShF 8.873, BP 1.081, Toe 0.800, ToeF 0.0,
+  L/R 0, PC 0.5, Pin 0.558, Pop -1.0, Flare 0.147] + a Split (v2
+  units, needs re-dial) + custom curves in the shadows (the part the
+  extended toe is meant to absorb).
+- Gate: 182 green.
+
 **Open / next (in priority order):**
 
 1. **Marc verifies in Resolve**: (a) install the committed

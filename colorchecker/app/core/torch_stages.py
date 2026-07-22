@@ -409,35 +409,23 @@ def _sector_squash_apply(stage, x, p):
 
 
 def _split_tone_apply(stage, x, p):
-    """Differentiable mirror of SplitToneStage.apply (per-channel Bezier)."""
-    mg = chromogen.MID_GREY
-    pivot = mg + p[12]
-    pm = 1.0 - pivot
+    """Differentiable mirror of SplitToneStage.apply (v3: one cubic
+    Bezier per channel over the whole range, C1 linear tails)."""
     third = stage._THIRD
-    scale = stage._CTRL_SCALE
-
-    def bez(r, p0, p1, p2, p3):
-        ir = 1.0 - r
-        return p0 * ir ** 3 + 3.0 * p1 * ir ** 2 * r \
-            + 3.0 * p2 * ir * r * r + p3 * r ** 3
-
     chans = []
     for ci in range(3):
-        blk = p[0 + ci] * scale
-        shd = p[3 + ci] * scale
-        hil = p[6 + ci] * scale
-        wht = p[9 + ci]
-        level = pivot + p[13 + ci]
+        y0 = p[0 + ci] * third
+        y1 = p[3 + ci] * third
+        y2 = 1.0 - (2.0 - p[6 + ci]) * third
+        y3 = p[9 + ci]
         v = x[..., ci]
-        r = torch.clamp(v / pivot, 0.0, 1.0)
-        sh = bez(r, blk, shd, shd + third, level / pivot) * pivot
-        rr = torch.clamp((1.0 - v) / pm, 0.0, 1.0)
-        lm = 1.0 - level
-        hi = 1.0 - bez(rr, 1.0 - wht, 1.0 - (hil + third),
-                       1.0 - hil, lm / pm) * pm
-        res = torch.where(v <= pivot, sh, hi)
-        res = torch.where((v < 0.0) | (v > 1.0), v, res)
-        chans.append(res)
+        iv = 1.0 - v
+        bez = (y0 * iv ** 3 + 3.0 * y1 * iv ** 2 * v
+               + 3.0 * y2 * iv * v * v + y3 * v ** 3)
+        lo_ext = y0 + 3.0 * (y1 - y0) * v
+        hi_ext = y3 + 3.0 * (y3 - y2) * (v - 1.0)
+        chans.append(torch.where(v < 0.0, lo_ext,
+                                 torch.where(v > 1.0, hi_ext, bez)))
     return torch.stack(chans, dim=-1)
 
 
@@ -742,6 +730,13 @@ def _filmic_contrast_apply(stage, x, p):
     return out
 
 
-from app.core.filmic import FilmicContrastStage  # noqa: E402
+def _exposure_apply(stage, x, p):
+    if float(p[0].detach() if torch.is_tensor(p[0]) else p[0]) == 0.0:
+        return x
+    return _f_logc3_encode(_f_logc3_decode(x) * 2.0 ** p[0])
+
+
+from app.core.filmic import ExposureStage, FilmicContrastStage  # noqa: E402
 
 _APPLY[FilmicContrastStage] = _filmic_contrast_apply
+_APPLY[ExposureStage] = _exposure_apply

@@ -175,7 +175,9 @@ def _refine_chain(stages, params, src, fit_target, regularization, fwd,
     disturbed."""
     tint = any(isinstance(s, (NeutralTintStage, SplitToneStage))
                for s in stages[frozen_n:])
-    if frozen_n and unfreeze_on_tint and tint:
+    # grey_anchor is None for a MANUAL prefix — those nodes are Marc's
+    # hand-dialled values and must never be co-adapted
+    if frozen_n and unfreeze_on_tint and tint and grey_anchor is not None:
         anchors = [grey_anchor] + [s.identity() for s in stages[frozen_n:]]
         reg_scales = ([_TONE_ANCHOR_REG]
                       + [s.reg_scale for s in stages[frozen_n:]])
@@ -257,6 +259,7 @@ def search_chain(
     local_search: bool = False,
     prune_tol: float = 0.01,
     prune_screen_k: int = 4,
+    pre_chain=None,
     verbose: bool = False,
 ) -> ParametricResult:
     """Search a chain of at most `max_nodes` nodes drawn freely (with
@@ -337,6 +340,30 @@ def search_chain(
     if verbose:
         print(f"  before any nodes: fit error -> {err0:.5f}")
 
+    # ---- MANUAL PREFIX (Marc's 2026-07-22 workflow: "i would do the
+    # contrast, exposure, and split myself first"): his hand-dialled
+    # tone nodes are applied as a HARD-frozen prefix — never refit,
+    # never unfrozen, never pruned — and the tone tools leave the
+    # audition pool so the search only explains color on top.
+    if pre_chain is not None:
+        from app.core.filmic import ExposureStage
+        pre_stages, pre_params = pre_chain
+        stages = list(pre_stages)
+        params = [np.asarray(p, dtype=np.float64).copy() for p in pre_params]
+        frozen_n = len(stages)
+        neutral_tone = False
+        tone_types = (FilmicContrastStage, ContrastCurveStage,
+                      SplitToneStage, ExposureStage)
+        pool = [cls for cls in pool if not issubclass(cls, tone_types)]
+        cur = _apply_chain(stages, params, src)
+        err0 = _fit_err(fwd(cur), fit_target)
+        log.append((frozen_n, f"[manual prefix: "
+                    f"{' -> '.join(s.name for s in stages)}]", err0))
+        if verbose:
+            print(f"  manual prefix ({frozen_n} nodes: "
+                  f"{' -> '.join(s.name for s in stages)})  "
+                  f"fit error -> {err0:.5f}")
+
     # ---- grey-scale-locked tone: fit ONE tone node (Filmic Contrast)
     # on the neutral samples only and freeze it as node 1
     if neutral_tone:
@@ -363,7 +390,10 @@ def search_chain(
 
     err = _fit_err(fwd(cur), fit_target)
 
-    while len(stages) < max_nodes:
+    # with a manual prefix, max_nodes counts the ADDED nodes (the prefix
+    # is Marc's, not the search's)
+    node_cap = max_nodes + (frozen_n if pre_chain is not None else 0)
+    while len(stages) < node_cap:
         best = None       # winner by DISCOUNTED gain
         best_real = None  # winner by real gain (fallback for the stop test)
         for cls in pool:

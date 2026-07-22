@@ -108,6 +108,29 @@ torch + dctl/FilmicContrast.dctl — reinstall the DCTL again):**
   first"; with the compensation that's unnecessary).
 - Gate: 180 green.
 
+**2026-07-22 late — Neutral Tint falloff fix + first 250D match:**
+
+- **Neutral Tint floors raised** (Marc found the bug on footage: a
+  near-step transition on the scope): Falloff floor 0.1 -> 1.0 stop,
+  Pivot floor -6 -> -4 stops (below ~-4.2 is sub-black code) — DCTL
+  sliders + stage bounds. **Neutral Tint is BACK in default_pool()**
+  alongside Split Tone (Marc: "add it back in the ML") — 11 tools.
+- **genesis250D_2383.cube matched** (`--drt-math --target-is-display
+  --search --max-nodes 14`, cloud, ~35 min, run BEFORE the NT
+  re-admission — the "pipeline as is" run Marc asked for): display
+  error 0.172 -> 0.044 (p95 0.096, worst patch 0.234), 0 dropped.
+  Chain: Filmic tone freeze (punch contrast, roll highs, lift blacks,
+  -1.4 stop) + 5x Split Tone + Highlight Bleach + 4x Sector Brightness
+  + 2x Sector Skew + Crosstalk. Delivered to Marc as .cube/.drx/
+  chain.json (scratchpad files don't persist — chain.json is the
+  refit-warm-start insurance). CAVEATS for the next iteration: still
+  gaining ~1%/node at the max_nodes stop (try 18-20 or Marc's Mac),
+  several bound-pinned params (Skew -60 x2, G->Y/B -1.0, Split Tone
+  Blacks at -1), noise gain max x59.8 on a Split Tone (median x0.62;
+  local_search prune was OFF — try --local-search next), and 5 "cool
+  lows" Split Tones smell like one tool doing gradual descent — the
+  re-admitted Neutral Tint may consolidate those in the next run.
+
 **Open / next (in priority order):**
 
 1. **Marc verifies in Resolve**: (a) install the committed

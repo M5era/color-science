@@ -374,10 +374,24 @@ class ContrastCurveStage(Stage):
         shape = (1.0 - comp) * hump + comp * scurve
         return mid_push * self._MID_SCALE * shape
 
+    @staticmethod
+    def _expose(x, exposure):
+        """A purely tonal (greyscale) exposure move: slide every pixel
+        along the Reuleaux value axis by `exposure` stops and preserve its
+        hue/chroma, so exposure NEVER recolours. (Run per-channel through
+        the nonlinear curve, an exposure shift lands unequally on R/G/B
+        and tints — this keeps it neutral.)"""
+        if exposure == 0.0:
+            return x
+        r = rgb_to_reuleaux(x).copy()
+        r[..., 2] = r[..., 2] + exposure * STOP
+        return reuleaux_to_rgb(r)
+
     def _tone(self, v, params):
         (contrast, white, black, mid_push, sh_roll, toe_roll,
-         _luma, _blend, flare, exposure, comp) = params
-        v = v + exposure * STOP
+         _luma, _blend, flare, _exposure, comp) = params
+        # exposure is handled achromatically in apply() (see _expose),
+        # NOT here — the per-channel curve would otherwise tint it.
         shadow_w = 1.0 - ramp_window(v, MID_GREY, self._FLARE_WIDTH * STOP)
         v = v + flare * self._FLARE_SCALE * shadow_w
         s = (v - MID_GREY) / STOP
@@ -387,8 +401,9 @@ class ContrastCurveStage(Stage):
 
     def apply(self, x, params):
         luma_blend, blend = params[6], params[7]
-        rgb_out = self._tone(x, params)
-        reuleaux = rgb_to_reuleaux(x)
+        xe = self._expose(x, params[9])          # achromatic exposure first
+        rgb_out = self._tone(xe, params)
+        reuleaux = rgb_to_reuleaux(xe)
         hue, sat, val = reuleaux[..., 0], reuleaux[..., 1], reuleaux[..., 2]
         luma_out = reuleaux_to_rgb(np.stack(
             [hue, sat, self._tone(val, params)], axis=-1))

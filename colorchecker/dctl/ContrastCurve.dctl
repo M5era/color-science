@@ -120,8 +120,10 @@ __DEVICE__ float gsc(float u, float n) {
 
 __DEVICE__ float tone(float v, float contrast, float white, float black,
                       float mid_push, float comp, float sh_roll,
-                      float toe_roll, float flare, float exposure) {
-    v = v + exposure * STOP;
+                      float toe_roll, float flare) {
+    // exposure is applied achromatically in transform() (Reuleaux value
+    // slide), NOT here — a per-channel exposure shift tints through the
+    // nonlinear curve.
     float shadow_w = 1.0f - ramp_window(v, MID_GREY, CC_FLARE_WIDTH * STOP);
     v = v + flare * CC_FLARE_SCALE * shadow_w;
     float s = (v - MID_GREY) / STOP;
@@ -147,16 +149,23 @@ __DEVICE__ float tone(float v, float contrast, float white, float black,
 
 // the UI controls tone() needs, in its argument order — expanded only
 // inside transform(), where the DEFINE_UI_PARAMS globals are in scope.
-#define TONE_ARGS contrast, white_offset, black_offset, mid_push, mid_compensate, shoulder_rolloff, toe_rolloff, flare, exposure
+#define TONE_ARGS contrast, white_offset, black_offset, mid_push, mid_compensate, shoulder_rolloff, toe_rolloff, flare
 
 __DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, float p_R, float p_G, float p_B)
 {
     float3 rgb = make_float3(p_R, p_G, p_B);
-    float3 rgb_out = make_float3(tone(rgb.x, TONE_ARGS),
-                                 tone(rgb.y, TONE_ARGS),
-                                 tone(rgb.z, TONE_ARGS));
 
-    float3 rl = rgb_to_reuleaux(rgb);
+    // Exposure is a purely tonal (greyscale) move: slide the Reuleaux
+    // value axis and preserve hue/chroma, so it never recolours. Both the
+    // per-channel and luma tone paths then run on the exposed image.
+    float3 rl0 = rgb_to_reuleaux(rgb);
+    float3 rgb_e = reuleaux_to_rgb(make_float3(rl0.x, rl0.y, rl0.z + exposure * STOP));
+
+    float3 rgb_out = make_float3(tone(rgb_e.x, TONE_ARGS),
+                                 tone(rgb_e.y, TONE_ARGS),
+                                 tone(rgb_e.z, TONE_ARGS));
+
+    float3 rl = rgb_to_reuleaux(rgb_e);
     float3 luma_out = reuleaux_to_rgb(make_float3(rl.x, rl.y, tone(rl.z, TONE_ARGS)));
 
     float3 curved = make_float3(
@@ -190,13 +199,14 @@ __DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, float p
         // identity diagonal
         if (_fabs(gy - gx) < 0.0025f) { rr += 0.22f; gg += 0.22f; bb += 0.22f; }
 
-        // short tick at the mid-grey pivot
-        if (_fabs(gy - tone(MID_GREY, TONE_ARGS)) < 0.0025f && _fabs(gx - MID_GREY) < 0.03f) {
+        // short tick at the mid-grey pivot (exposure slides the input,
+        // so fold it in on the neutral axis the scope plots)
+        if (_fabs(gy - tone(MID_GREY + exposure * STOP, TONE_ARGS)) < 0.0025f && _fabs(gx - MID_GREY) < 0.03f) {
             rr += 0.35f; gg += 0.35f; bb += 0.35f;
         }
 
         // the curve itself, in blue
-        if (_fabs(gy - tone(gx, TONE_ARGS)) < 0.004f) { rr = 0.25f; gg = 0.45f; bb = 1.0f; }
+        if (_fabs(gy - tone(gx + exposure * STOP, TONE_ARGS)) < 0.004f) { rr = 0.25f; gg = 0.45f; bb = 1.0f; }
 
         return make_float3(rr, gg, bb);
     }

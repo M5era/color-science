@@ -261,10 +261,11 @@ def _contrast_curve_scalar(v, p, stage):
     contrast, white, black = p[0], p[1], p[2]
     mid_push = p[3]
     sh_roll, toe_roll = p[4], p[5]
-    flare, exposure = p[8], p[9]
+    flare = p[8]
     comp = p[10]
 
-    v = v + exposure * st
+    # exposure (p[9]) is applied achromatically in _contrast_curve_apply,
+    # NOT here — a per-channel exposure shift would tint through the curve.
     fw = torch.as_tensor(stage._FLARE_WIDTH * st, dtype=v.dtype)
     shadow_w = 1.0 - _ramp(v, mg, fw)
     v = v + flare * stage._FLARE_SCALE * shadow_w
@@ -293,8 +294,11 @@ def _contrast_curve_scalar(v, p, stage):
 
 def _contrast_curve_apply(stage, x, p):
     luma_blend, blend = p[6], p[7]
-    rgb_out = _contrast_curve_scalar(x, p, stage)
-    hue, sat, val = _rgb_to_reuleaux(x)
+    # achromatic exposure: slide the Reuleaux value axis, preserve chroma
+    he, se, ve = _rgb_to_reuleaux(x)
+    xe = _reuleaux_to_rgb(he, se, ve + p[9] * chromogen.STOP)
+    rgb_out = _contrast_curve_scalar(xe, p, stage)
+    hue, sat, val = _rgb_to_reuleaux(xe)
     luma_out = _reuleaux_to_rgb(hue, sat, _contrast_curve_scalar(val, p, stage))
     curved = (1.0 - luma_blend) * rgb_out + luma_blend * luma_out
     return (1.0 - blend) * x + blend * curved

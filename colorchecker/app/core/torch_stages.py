@@ -294,13 +294,14 @@ def _contrast_curve_scalar(v, p, stage):
 
 def _contrast_curve_apply(stage, x, p):
     luma_blend, blend = p[6], p[7]
-    # achromatic exposure: slide the Reuleaux value axis, preserve chroma
-    he, se, ve = _rgb_to_reuleaux(x)
-    xe = _reuleaux_to_rgb(he, se, ve + p[9] * chromogen.STOP)
-    rgb_out = _contrast_curve_scalar(xe, p, stage)
-    hue, sat, val = _rgb_to_reuleaux(xe)
+    rgb_out = _contrast_curve_scalar(x, p, stage)
+    hue, sat, val = _rgb_to_reuleaux(x)
     luma_out = _reuleaux_to_rgb(hue, sat, _contrast_curve_scalar(val, p, stage))
     curved = (1.0 - luma_blend) * rgb_out + luma_blend * luma_out
+    # achromatic exposure AFTER the curve: slide the Reuleaux value axis
+    # (mid-grey referenced), preserve chroma
+    ch, cs, cv = _rgb_to_reuleaux(curved)
+    curved = _reuleaux_to_rgb(ch, cs, cv + p[9] * chromogen.STOP)
     return (1.0 - blend) * x + blend * curved
 
 

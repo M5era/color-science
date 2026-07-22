@@ -155,23 +155,24 @@ __DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, float p
 {
     float3 rgb = make_float3(p_R, p_G, p_B);
 
-    // Exposure is a purely tonal (greyscale) move: slide the Reuleaux
-    // value axis and preserve hue/chroma, so it never recolours. Both the
-    // per-channel and luma tone paths then run on the exposed image.
-    float3 rl0 = rgb_to_reuleaux(rgb);
-    float3 rgb_e = reuleaux_to_rgb(make_float3(rl0.x, rl0.y, rl0.z + exposure * STOP));
+    float3 rgb_out = make_float3(tone(rgb.x, TONE_ARGS),
+                                 tone(rgb.y, TONE_ARGS),
+                                 tone(rgb.z, TONE_ARGS));
 
-    float3 rgb_out = make_float3(tone(rgb_e.x, TONE_ARGS),
-                                 tone(rgb_e.y, TONE_ARGS),
-                                 tone(rgb_e.z, TONE_ARGS));
-
-    float3 rl = rgb_to_reuleaux(rgb_e);
+    float3 rl = rgb_to_reuleaux(rgb);
     float3 luma_out = reuleaux_to_rgb(make_float3(rl.x, rl.y, tone(rl.z, TONE_ARGS)));
 
     float3 curved = make_float3(
         (1.0f - luma_blend) * rgb_out.x + luma_blend * luma_out.x,
         (1.0f - luma_blend) * rgb_out.y + luma_blend * luma_out.y,
         (1.0f - luma_blend) * rgb_out.z + luma_blend * luma_out.z);
+
+    // Exposure is a purely tonal (greyscale) move applied AFTER the curve,
+    // mid-grey referenced: slide the Reuleaux value axis and preserve
+    // hue/chroma, so it never recolours and mid-grey moves by exactly the
+    // dialled stops.
+    float3 rlc = rgb_to_reuleaux(curved);
+    curved = reuleaux_to_rgb(make_float3(rlc.x, rlc.y, rlc.z + exposure * STOP));
 
     float3 result = make_float3(
         (1.0f - blend) * rgb.x + blend * curved.x,
@@ -199,14 +200,14 @@ __DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, float p
         // identity diagonal
         if (_fabs(gy - gx) < 0.0025f) { rr += 0.22f; gg += 0.22f; bb += 0.22f; }
 
-        // short tick at the mid-grey pivot (exposure slides the input,
-        // so fold it in on the neutral axis the scope plots)
-        if (_fabs(gy - tone(MID_GREY + exposure * STOP, TONE_ARGS)) < 0.0025f && _fabs(gx - MID_GREY) < 0.03f) {
+        // short tick at the mid-grey pivot (exposure slides the OUTPUT on
+        // the neutral axis, applied after the curve)
+        if (_fabs(gy - (tone(MID_GREY, TONE_ARGS) + exposure * STOP)) < 0.0025f && _fabs(gx - MID_GREY) < 0.03f) {
             rr += 0.35f; gg += 0.35f; bb += 0.35f;
         }
 
         // the curve itself, in blue
-        if (_fabs(gy - tone(gx + exposure * STOP, TONE_ARGS)) < 0.004f) { rr = 0.25f; gg = 0.45f; bb = 1.0f; }
+        if (_fabs(gy - (tone(gx, TONE_ARGS) + exposure * STOP)) < 0.004f) { rr = 0.25f; gg = 0.45f; bb = 1.0f; }
 
         return make_float3(rr, gg, bb);
     }

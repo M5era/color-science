@@ -376,11 +376,12 @@ class ContrastCurveStage(Stage):
 
     @staticmethod
     def _expose(x, exposure):
-        """A purely tonal (greyscale) exposure move: slide every pixel
-        along the Reuleaux value axis by `exposure` stops and preserve its
-        hue/chroma, so exposure NEVER recolours. (Run per-channel through
-        the nonlinear curve, an exposure shift lands unequally on R/G/B
-        and tints — this keeps it neutral.)"""
+        """A purely tonal (greyscale) exposure move, mid-grey referenced:
+        slide every pixel along the Reuleaux value axis by `exposure` stops
+        (so mid-grey moves by exactly that many stops) and preserve its
+        hue/chroma, so exposure NEVER recolours. Applied AFTER the tone
+        curve — the curve is free to reshape tonality; exposure just
+        repositions the result on the luma axis."""
         if exposure == 0.0:
             return x
         r = rgb_to_reuleaux(x).copy()
@@ -390,8 +391,8 @@ class ContrastCurveStage(Stage):
     def _tone(self, v, params):
         (contrast, white, black, mid_push, sh_roll, toe_roll,
          _luma, _blend, flare, _exposure, comp) = params
-        # exposure is handled achromatically in apply() (see _expose),
-        # NOT here — the per-channel curve would otherwise tint it.
+        # exposure is handled achromatically AFTER the curve in apply()
+        # (see _expose), NOT here — the per-channel curve would tint it.
         shadow_w = 1.0 - ramp_window(v, MID_GREY, self._FLARE_WIDTH * STOP)
         v = v + flare * self._FLARE_SCALE * shadow_w
         s = (v - MID_GREY) / STOP
@@ -401,13 +402,13 @@ class ContrastCurveStage(Stage):
 
     def apply(self, x, params):
         luma_blend, blend = params[6], params[7]
-        xe = self._expose(x, params[9])          # achromatic exposure first
-        rgb_out = self._tone(xe, params)
-        reuleaux = rgb_to_reuleaux(xe)
+        rgb_out = self._tone(x, params)
+        reuleaux = rgb_to_reuleaux(x)
         hue, sat, val = reuleaux[..., 0], reuleaux[..., 1], reuleaux[..., 2]
         luma_out = reuleaux_to_rgb(np.stack(
             [hue, sat, self._tone(val, params)], axis=-1))
         curved = (1.0 - luma_blend) * rgb_out + luma_blend * luma_out
+        curved = self._expose(curved, params[9])   # exposure AFTER the curve
         return (1.0 - blend) * x + blend * curved
 
     def label(self, params):

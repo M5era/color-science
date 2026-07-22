@@ -258,31 +258,35 @@ def _contrast_curve_scalar(v, p, stage):
     """Differentiable mirror of ContrastCurveStage._tone (float64)."""
     mg = chromogen.MID_GREY
     st = chromogen.STOP
-    contrast, white, black = p[0], p[1], p[2]
-    mid_push = p[3]
-    sh_roll, toe_roll = p[4], p[5]
-    flare = p[8]
-    comp = p[10]
+    contrast, bp, wp = p[0], p[1], p[2]
+    toe_len, toe_str = p[3], p[4]
+    sh_len, sh_str = p[5], p[6]
+    mid_push = p[8]
+    flare = p[10]
+    comp = p[12]
 
-    # exposure (p[9]) is applied achromatically in _contrast_curve_apply,
+    # exposure (p[11]) is applied achromatically in _contrast_curve_apply,
     # NOT here — a per-channel exposure shift would tint through the curve.
     fw = torch.as_tensor(stage._FLARE_WIDTH * st, dtype=v.dtype)
     shadow_w = 1.0 - _ramp(v, mg, fw)
     v = v + flare * stage._FLARE_SCALE * shadow_w
     s = (v - mg) / st
 
-    a = stage._BASE / (contrast - 1.0 + stage._EPS)
-    a_hi = white * a
-    a_lo = black * a
-    n_hi = stage._KNEE0 - stage._KNEE_SLOPE * sh_roll
-    n_lo = stage._KNEE0 - stage._KNEE_SLOPE * toe_roll
-
     def gsc(u, n):
         return u / torch.pow(1.0 + torch.pow(torch.abs(u), n), 1.0 / n)
 
-    up = a_hi * gsc(contrast * s / a_hi, n_hi)
-    dn = a_lo * gsc(contrast * s / a_lo, n_lo)
-    curve = torch.where(s >= 0.0, up, dn)
+    y = contrast * s
+    yk_hi = sh_len * wp
+    h_hi = wp - yk_hi + stage._EPS
+    n_hi = 1.0 + stage._STR_GAIN * sh_str
+    e_hi = torch.clamp(y - yk_hi, min=0.0)
+    hi = yk_hi + h_hi * gsc(e_hi / h_hi, n_hi)
+    yk_lo = toe_len * bp
+    h_lo = bp - yk_lo - stage._EPS
+    n_lo = 1.0 + stage._STR_GAIN * toe_str
+    e_lo = torch.clamp(y - yk_lo, max=0.0)
+    lo = yk_lo + h_lo * gsc(e_lo / h_lo, n_lo)
+    curve = torch.where(y > yk_hi, hi, torch.where(y < yk_lo, lo, y))
 
     u = s / stage._MID_W
     g = torch.exp(-0.5 * u * u)
@@ -293,15 +297,15 @@ def _contrast_curve_scalar(v, p, stage):
 
 
 def _contrast_curve_apply(stage, x, p):
-    luma_blend, blend = p[6], p[7]
+    preserve, blend = p[7], p[9]
     rgb_out = _contrast_curve_scalar(x, p, stage)
     hue, sat, val = _rgb_to_reuleaux(x)
     luma_out = _reuleaux_to_rgb(hue, sat, _contrast_curve_scalar(val, p, stage))
-    curved = (1.0 - luma_blend) * rgb_out + luma_blend * luma_out
+    curved = (1.0 - preserve) * rgb_out + preserve * luma_out
     # achromatic exposure AFTER the curve: slide the Reuleaux value axis
     # (mid-grey referenced), preserve chroma
     ch, cs, cv = _rgb_to_reuleaux(curved)
-    curved = _reuleaux_to_rgb(ch, cs, cv + p[9] * chromogen.STOP)
+    curved = _reuleaux_to_rgb(ch, cs, cv + p[11] * chromogen.STOP)
     return (1.0 - blend) * x + blend * curved
 
 

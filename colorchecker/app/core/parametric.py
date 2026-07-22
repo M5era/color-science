@@ -163,7 +163,10 @@ def solve_parametric(
             raise ValueError("init_params must have one vector per stage")
         params = [np.asarray(p, dtype=np.float64).copy() for p in init_params]
     else:
-        params = [stage.identity().astype(np.float64) for stage in stages]
+        # init() defaults to identity(); stages whose identity sits in a
+        # dead-gradient region (the filmic curve's parked toe/shoulder)
+        # start mid-engaged so the fit can discover those controls.
+        params = [stage.init().astype(np.float64) for stage in stages]
 
     if frozen and init_params is None:
         raise ValueError("frozen stages need init_params")

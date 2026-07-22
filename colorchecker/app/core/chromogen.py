@@ -272,70 +272,76 @@ class ContrastCurveStage(Stage):
     control is gentle and the defaults are an EXACT identity.
 
     All tonal work is in LogC3 code values, measured in STOPS from
-    mid-grey. The pivot is fixed at mid-grey; sliders:
-      Contrast        mid slope of a BOUNDED S at the pivot (1 = identity,
-                      a straight line; >1 steepens the mid and the curve
-                      asymptotes toward the white/black points — it never
-                      hard-clips out of range)
-      White Offset    highlight point: scales the highlight asymptote
-                      distance; 1 = neutral, <1 pulls the white point in
-                      (softer/lower whites), >1 pushes it out. Highlights
-                      only, independent of Black Offset.
-      Black Offset    shadow point: scales the shadow asymptote; <1 lifts
-                      the black point (milky), >1 deepens it. Shadows only.
-      Mid Push        a midtone bump; + lifts mids, - drops them
-      Mid Compensate  0 = the bump lifts the pivot (Push acts like a
-                      midtone exposure); 1 = the pivot is held and the
-                      bump becomes a local S (added mid contrast)
-      Shoulder Rolloff  knee sharpness of the highlight rolloff: 0 = the
-                      smooth default, -1 straightens it to ~linear then a
-                      corner, +1 rounds it further
-      Toe Rolloff     same, for the shadow rolloff
-      Luma Blend      0 = per-RGB (contrast raises saturation, the film
-                      look), 1 = luma only (chromaticity preserved)
-      Blend           master mix with the untouched input
-      Flare           milky shadow lift, tapering to identity by the
-                      highlights (added before the curve)
-      Exposure        overall pre-curve shift, in stops
+    mid-grey. The pivot is fixed at mid-grey; sliders (Contour "Curve"
+    model — independent toe & shoulder Length + Strength):
+      Contrast          mid slope at the pivot (1 = identity, a straight
+                        line; >1 steepens the mid, the ends roll toward the
+                        white/black points and never hard-clip)
+      Black Point       shadow asymptote LEVEL, in stops below mid-grey —
+                        the curve approaches it, never reaches it. Identity
+                        is far out (-10, no toe in range); bring it in for
+                        deeper (or, above -~5, lifted) blacks.
+      White Point       highlight asymptote level, in stops above mid-grey
+      Toe Length        how long the mid stays linear before the toe rolls:
+                        1 = knee at the black point (no toe in range),
+                        lower starts the toe earlier
+      Toe Strength      toe knee sharpness: 0 = a gentle round, 1 = stays
+                        straight longer then a tighter corner
+      Shoulder Length   the same, for the highlight shoulder
+      Shoulder Strength shoulder knee sharpness
+      Preserve Color    0 = per-RGB (contrast raises saturation, the film
+                        look), 1 = luma only (chromaticity preserved)
+      Mid Push          a midtone bump; + lifts mids, - drops them
+      Blend             master mix with the untouched input
+      Flare             milky shadow lift, tapering to identity by the highs
+      Exposure          overall shift in stops, applied AFTER the curve
+                        (mid-grey referenced, achromatic — see _expose)
+      Mid Compensate    0 = the bump lifts the pivot (Push acts like a
+                        midtone exposure); 1 = the pivot is held and the
+                        bump becomes a local S (added mid contrast)
     """
 
     name = "Contrast Curve"
-    # NOTE the order: the 10 FLOAT sliders come first (they map 1:1 onto
-    # the DCTL's sliderFloatParam0..9 and the .drx patch), and "Mid
+    # NOTE the order: the 12 FLOAT sliders come first (they map 1:1 onto
+    # the DCTL's sliderFloatParam0..11 and the .drx patch), and "Mid
     # Compensate" is LAST because in the DCTL it is a CHECK_BOX (like
     # Diachromie's panel) — a checkbox is not a sliderFloatParam, so
     # keeping it out of the float run keeps every other slider aligned.
     param_names = [
-        "Contrast", "White Offset", "Black Offset",
-        "Mid Push", "Shoulder Rolloff", "Toe Rolloff",
-        "Luma Blend", "Blend", "Flare", "Exposure",
+        "Contrast", "Black Point", "White Point",
+        "Toe Length", "Toe Strength", "Shoulder Length", "Shoulder Strength",
+        "Preserve Color", "Mid Push", "Blend", "Flare", "Exposure",
         "Mid Compensate",
     ]
 
     # curve shape constants (stops unless noted)
-    _BASE = 6.0         # latitude scale: asymptote distance = BASE/(contrast-1)
-    _EPS = 1e-6         # keeps contrast=1 an EXACT straight line (latitude ->inf)
-    _KNEE0 = 3.5        # soft-clip knee exponent at rolloff 0
-    _KNEE_SLOPE = 2.5   # rolloff -1 -> n 6 (sharp/linear), +1 -> n 1 (round)
+    _EPS = 1e-6         # guards the headroom divide when Length -> 1
+    _STR_GAIN = 5.0     # Strength 0->1 maps the knee exponent n 1..6
     _MID_W = 2.0        # mid-push bump half-width
     _MID_SCALE = 1.0    # mid-push max lift (stops) at Push = 1
     _FLARE_SCALE = 0.045  # code-value shadow lift per Flare unit
     _FLARE_WIDTH = 3.0    # how far up (stops) the flare lift fades out
 
     def identity(self):
-        # order: Contrast, White, Black, Mid Push, Shoulder, Toe, Luma,
-        # Blend, Flare, Exposure, Mid Compensate (OFF, as on the panel).
-        return np.array([1.0, 1.0, 1.0, 0.0, 0.0, 0.0,
-                         0.0, 1.0, 0.0, 0.0, 0.0])
+        # Contrast, Black Point, White Point, Toe Len, Toe Str, Shoulder
+        # Len, Shoulder Str, Preserve Color, Mid Push, Blend, Flare,
+        # Exposure, Mid Compensate. The ±16-stop points + Length 1 put both
+        # knees well past any real LogC3 input, so identity is an EXACT
+        # line; the solver brings a point in to engage a toe / shoulder.
+        return np.array([1.0, -16.0, 16.0, 1.0, 0.5, 1.0, 0.5,
+                         0.0, 0.0, 1.0, 0.0, 0.0, 0.0])
+
+    def init(self):
+        # Start the SOLVE with the toe & shoulder mid-engaged (knees at
+        # ~±3 stops, inside the working range) so the fit has a live
+        # gradient on the Point/Length/Strength controls. The reg still
+        # anchors at identity(), so an unneeded shoulder relaxes back out.
+        return np.array([1.0, -7.0, 7.0, 0.45, 0.5, 0.45, 0.5,
+                         0.0, 0.0, 1.0, 0.0, 0.0, 0.0])
 
     def bounds(self):
-        # White/Black points, Mid Push and the rolloff knees widened
-        # 2026-07-21 — the genesis neutral wanted brighter whites, a
-        # stronger mid push and a sharper toe than the first ranges gave
-        # (fit pinned at 1.6/±1). Rolloff floor kept > -1.5 so the knee
-        # exponent n = 3.5 - 2.5*rolloff stays positive.
-        lo = [0.2, 0.3, 0.3, -2.0, -1.5, -1.5, 0.0, 0.0, 0.0, -3.0, 0.0]
-        hi = [2.0, 1.8, 1.8,  2.0,  1.2,  1.2, 1.0, 1.0, 2.0,  3.0, 1.0]
+        lo = [0.2, -20.0,  1.5, 0.0, 0.0, 0.0, 0.0, 0.0, -2.0, 0.0, 0.0, -3.0, 0.0]
+        hi = [3.0,  -1.5, 20.0, 1.0, 1.0, 1.0, 1.0, 1.0,  2.0, 1.0, 2.0,  3.0, 1.0]
         return np.asarray(lo), np.asarray(hi)
 
     # ---- the scalar tone pipeline, run on val or on each RGB channel --
@@ -346,25 +352,29 @@ class ContrastCurveStage(Stage):
         knee sharpness `n` (n->1 round, large n -> linear then a corner)."""
         return u / np.power(1.0 + np.power(np.abs(u), n), 1.0 / n)
 
-    def _curve(self, s, contrast, white, black, sh_roll, toe_roll):
-        """A BOUNDED (asymptotic) film S — never a straight line diving out
-        of range. Mid slope AT THE PIVOT is `contrast`; the curve then rolls
-        off smoothly toward a highlight/shadow asymptote (the white/black
-        point) and approaches it without ever hard-clipping. Latitude
-        scales as 1/(contrast-1), so contrast 1 is an EXACT straight line
-        (latitude -> inf) and more contrast gives a steeper mid AND a
-        tighter, filmier S. White/Black Offset move the two points
-        independently (they only touch their own side of the pivot);
-        Shoulder/Toe Rolloff set the knee sharpness of each end.
+    def _curve(self, s, contrast, bp, wp, toe_len, toe_str, sh_len, sh_str):
+        """A BOUNDED film S with INDEPENDENT toe & shoulder (Contour model).
+        Mid slope at the pivot is `contrast`; each end then rolls smoothly
+        toward its asymptote — the White/Black Point level in stops — with
+        the roll starting at a knee whose POSITION is set by Length and
+        whose SHARPNESS by Strength. C1-continuous, never hard-clips. With
+        the knees past the working range (Length 1, ±10-stop points) it is
+        an EXACT straight line, so contrast 1 is exact identity.
         """
-        a = self._BASE / (contrast - 1.0 + self._EPS)   # latitude in stops
-        a_hi = white * a
-        a_lo = black * a
-        n_hi = self._KNEE0 - self._KNEE_SLOPE * sh_roll
-        n_lo = self._KNEE0 - self._KNEE_SLOPE * toe_roll
-        up = a_hi * self._gsc(contrast * s / a_hi, n_hi)
-        dn = a_lo * self._gsc(contrast * s / a_lo, n_lo)
-        return np.where(s >= 0.0, up, dn)
+        y = contrast * s
+        # shoulder (highlights): knee at sh_len of the way to the white point
+        yk_hi = sh_len * wp
+        h_hi = wp - yk_hi + self._EPS                 # headroom (> 0)
+        n_hi = 1.0 + self._STR_GAIN * sh_str
+        e_hi = np.maximum(y - yk_hi, 0.0)
+        hi = yk_hi + h_hi * self._gsc(e_hi / h_hi, n_hi)
+        # toe (shadows): bp < 0, so the knee and headroom are negative
+        yk_lo = toe_len * bp
+        h_lo = bp - yk_lo - self._EPS                 # headroom (< 0)
+        n_lo = 1.0 + self._STR_GAIN * toe_str
+        e_lo = np.minimum(y - yk_lo, 0.0)
+        lo = yk_lo + h_lo * self._gsc(e_lo / h_lo, n_lo)
+        return np.where(y > yk_hi, hi, np.where(y < yk_lo, lo, y))
 
     def _midterm(self, s, mid_push, comp):
         u = s / self._MID_W
@@ -389,31 +399,31 @@ class ContrastCurveStage(Stage):
         return reuleaux_to_rgb(r)
 
     def _tone(self, v, params):
-        (contrast, white, black, mid_push, sh_roll, toe_roll,
-         _luma, _blend, flare, _exposure, comp) = params
+        (contrast, bp, wp, toe_len, toe_str, sh_len, sh_str,
+         _preserve, mid_push, _blend, flare, _exposure, comp) = params
         # exposure is handled achromatically AFTER the curve in apply()
         # (see _expose), NOT here — the per-channel curve would tint it.
         shadow_w = 1.0 - ramp_window(v, MID_GREY, self._FLARE_WIDTH * STOP)
         v = v + flare * self._FLARE_SCALE * shadow_w
         s = (v - MID_GREY) / STOP
-        y = (self._curve(s, contrast, white, black, sh_roll, toe_roll)
+        y = (self._curve(s, contrast, bp, wp, toe_len, toe_str, sh_len, sh_str)
              + self._midterm(s, mid_push, comp))
         return MID_GREY + y * STOP
 
     def apply(self, x, params):
-        luma_blend, blend = params[6], params[7]
+        preserve, blend = params[7], params[9]     # Preserve Color = luma blend
         rgb_out = self._tone(x, params)
         reuleaux = rgb_to_reuleaux(x)
         hue, sat, val = reuleaux[..., 0], reuleaux[..., 1], reuleaux[..., 2]
         luma_out = reuleaux_to_rgb(np.stack(
             [hue, sat, self._tone(val, params)], axis=-1))
-        curved = (1.0 - luma_blend) * rgb_out + luma_blend * luma_out
-        curved = self._expose(curved, params[9])   # exposure AFTER the curve
+        curved = (1.0 - preserve) * rgb_out + preserve * luma_out
+        curved = self._expose(curved, params[11])  # exposure AFTER the curve
         return (1.0 - blend) * x + blend * curved
 
     def label(self, params):
-        (contrast, white, black, mid_push, sh_roll, toe_roll,
-         luma, blend, flare, exposure, comp) = params
+        (contrast, bp, wp, toe_len, toe_str, sh_len, sh_str,
+         preserve, mid_push, blend, flare, exposure, comp) = params
         if blend < 0.02:
             return "contrast (idle)"
         bits = []
@@ -425,24 +435,25 @@ class ContrastCurveStage(Stage):
             bits.append("brighten" if exposure > 0 else "darken")
         if flare > 0.05:
             bits.append("lift shadows")
-        if black > 1.1 and not bits:
+        if bp > -4.0 and not bits:
             bits.append("crush blacks")
         if not bits:
             return "contrast (idle)"
-        note = " (rich)" if luma < 0.25 else (" (clean)" if luma > 0.75 else "")
+        note = " (rich)" if preserve < 0.25 else (
+            " (clean)" if preserve > 0.75 else "")
         return bits[0] + note
 
     def describe(self, params):
-        (contrast, white, black, mid_push, sh_roll, toe_roll,
-         luma, blend, flare, exposure, comp) = params
+        (contrast, bp, wp, toe_len, toe_str, sh_len, sh_str,
+         preserve, mid_push, blend, flare, exposure, comp) = params
         return "\n".join([
             "Contrast Curve (paste into dctl/ContrastCurve.dctl):",
-            f"  Contrast {contrast:.3f}  White Offset {white:.3f}  "
-            f"Black Offset {black:.3f}",
-            f"  Mid Push {mid_push:+.3f}  Shoulder Rolloff {sh_roll:+.3f}  "
-            f"Toe Rolloff {toe_roll:+.3f}",
-            f"  Luma Blend {luma:.3f}  Blend {blend:.3f}  "
-            f"Flare {flare:.3f}  Exposure {exposure:+.3f}",
+            f"  Contrast {contrast:.3f}  Black Point {bp:+.3f}  "
+            f"White Point {wp:+.3f}",
+            f"  Toe Length {toe_len:.3f}  Toe Strength {toe_str:.3f}  "
+            f"Shoulder Length {sh_len:.3f}  Shoulder Strength {sh_str:.3f}",
+            f"  Preserve Color {preserve:.3f}  Mid Push {mid_push:+.3f}  "
+            f"Blend {blend:.3f}  Flare {flare:.3f}  Exposure {exposure:+.3f}",
             f"  Mid Compensate (checkbox) {comp:.0f}",
         ])
 

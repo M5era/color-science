@@ -6,21 +6,24 @@
 // in EXACTLY these slider units — paste them straight in. Defaults are the
 // identity: the node does nothing until moved.
 //
-// A behavioral reimplementation of the [1D] CONTRAST panel (Diachromie)
-// from Marc's screenshots — NOT a source port. All tonal work is in LogC3
-// code values, measured in STOPS from mid-grey; the pivot is fixed at
-// mid-grey (Arri LogC3 EI800 calibration). Controls:
-//   Contrast       linear slope through the pivot (1 = identity)
-//   White/Black Offset  highlight/shadow-side slope (x Contrast); 1 =
-//                  neutral, White<1 compresses highlights (shoulder),
-//                  Black>1 deepens shadows (toe)
-//   Mid Push       midtone bump; Mid Compensate 0 = lifts the pivot,
-//                  1 = holds the pivot (bump becomes local S contrast)
-//   Shoulder/Toe Rolloff  knee sharpness of those bends: 0 = smooth
-//                  default, -1 ~ linear, +1 rounder (inert at offset 1)
-//   Luma Blend     0 = per-RGB (contrast raises saturation), 1 = luma only
-//   Blend          master mix with the untouched input
-//   Flare          milky shadow lift; Exposure  pre-curve shift (stops)
+// A bounded film S with INDEPENDENT toe & shoulder (Contour "Curve"
+// model), a behavioral reimplementation from Marc's screenshots — NOT a
+// source port. All tonal work is in LogC3 code values, measured in STOPS
+// from mid-grey; the pivot is fixed at mid-grey (Arri LogC3 EI800).
+//   Contrast            mid slope through the pivot (1 = identity)
+//   Black/White Point   shadow/highlight asymptote LEVEL, in stops from
+//                       mid-grey — the curve approaches, never reaches it.
+//                       Identity is far out (±10, no roll in range).
+//   Toe/Shoulder Length knee position: 1 = knee at the point (no roll in
+//                       range), lower starts the roll earlier
+//   Toe/Shoulder Strength  knee sharpness: 0 = gentle round, 1 = straight
+//                       longer then a tighter corner
+//   Preserve Color      0 = per-RGB (contrast raises saturation), 1 = luma
+//   Mid Push            midtone bump; Mid Compensate 0 = lifts the pivot,
+//                       1 = holds the pivot (bump becomes local S contrast)
+//   Blend               master mix with the untouched input
+//   Flare               milky shadow lift
+//   Exposure            shift (stops), applied AFTER the curve, achromatic
 //
 // The rgb<->reuleaux conversion functions are transcribed from Reuleaux
 // (hotgluebanjo & calvinsilly, github.com/hotgluebanjo/reuleaux), which
@@ -28,20 +31,21 @@
 // this file. The curve/tone math is original to this project.
 
 DEFINE_UI_PARAMS(contrast, Contrast, DCTLUI_SLIDER_FLOAT, 1.0, 0.2, 3.0, 0.001)
-DEFINE_UI_PARAMS(white_offset, White Offset, DCTLUI_SLIDER_FLOAT, 1.0, 0.3, 1.8, 0.001)
-DEFINE_UI_PARAMS(black_offset, Black Offset, DCTLUI_SLIDER_FLOAT, 1.0, 0.3, 1.8, 0.001)
+DEFINE_UI_PARAMS(black_point, Black Point, DCTLUI_SLIDER_FLOAT, -16.0, -20.0, -1.5, 0.01)
+DEFINE_UI_PARAMS(white_point, White Point, DCTLUI_SLIDER_FLOAT, 16.0, 1.5, 20.0, 0.01)
+DEFINE_UI_PARAMS(toe_length, Toe Length, DCTLUI_SLIDER_FLOAT, 1.0, 0.0, 1.0, 0.001)
+DEFINE_UI_PARAMS(toe_strength, Toe Strength, DCTLUI_SLIDER_FLOAT, 0.5, 0.0, 1.0, 0.001)
+DEFINE_UI_PARAMS(shoulder_length, Shoulder Length, DCTLUI_SLIDER_FLOAT, 1.0, 0.0, 1.0, 0.001)
+DEFINE_UI_PARAMS(shoulder_strength, Shoulder Strength, DCTLUI_SLIDER_FLOAT, 0.5, 0.0, 1.0, 0.001)
+DEFINE_UI_PARAMS(preserve_color, Preserve Color, DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 1.0, 0.001)
 DEFINE_UI_PARAMS(mid_push, Mid Push, DCTLUI_SLIDER_FLOAT, 0.0, -2.0, 2.0, 0.001)
-// a checkbox (like Diachromie's panel), NOT a float slider — so it is
-// not a sliderFloatParam and the sliders below keep their 0..9 order.
-DEFINE_UI_PARAMS(mid_compensate, Mid Push Compensate, DCTLUI_CHECK_BOX, 0)
-DEFINE_UI_PARAMS(shoulder_rolloff, Shoulder Rolloff, DCTLUI_SLIDER_FLOAT, 0.0, -1.5, 1.2, 0.001)
-DEFINE_UI_PARAMS(toe_rolloff, Toe Rolloff, DCTLUI_SLIDER_FLOAT, 0.0, -1.5, 1.2, 0.001)
-DEFINE_UI_PARAMS(luma_blend, Luma Blend, DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 1.0, 0.001)
 DEFINE_UI_PARAMS(blend, Blend, DCTLUI_SLIDER_FLOAT, 1.0, 0.0, 1.0, 0.001)
 DEFINE_UI_PARAMS(flare, Flare, DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 2.0, 0.001)
 DEFINE_UI_PARAMS(exposure, Exposure, DCTLUI_SLIDER_FLOAT, 0.0, -3.0, 3.0, 0.001)
-// UI-only overlay toggle — a checkbox, NOT a float slider, so it never
-// shifts the sliderFloatParam order the solver report / .drx patch use.
+// checkboxes (NOT sliderFloatParams, so they never shift the float order
+// the solver report / .drx patch use): the Diachromie-style Mid Push
+// Compensate, and a UI-only on-screen curve overlay.
+DEFINE_UI_PARAMS(mid_compensate, Mid Push Compensate, DCTLUI_CHECK_BOX, 0)
 DEFINE_UI_PARAMS(draw_curve, Draw Curve, DCTLUI_CHECK_BOX, 0)
 
 #define PI_LOCAL 3.141592653589f
@@ -49,10 +53,8 @@ DEFINE_UI_PARAMS(draw_curve, Draw Curve, DCTLUI_CHECK_BOX, 0)
 #define STOP 0.0740774f
 #define LN2 0.693147180559945f
 #define EXP_HALF 1.648721270700128f
-#define CC_BASE 6.0f
 #define CC_EPS 0.000001f
-#define CC_KNEE0 3.5f
-#define CC_KNEE_SLOPE 2.5f
+#define CC_STR_GAIN 5.0f
 #define CC_MID_W 2.0f
 #define CC_MID_SCALE 1.0f
 #define CC_FLARE_SCALE 0.045f
@@ -118,9 +120,9 @@ __DEVICE__ float gsc(float u, float n) {
 // never reads a UI global (only transform() does). Some GPU backends
 // crash compiling a __DEVICE__ helper that touches DEFINE_UI_PARAMS.
 
-__DEVICE__ float tone(float v, float contrast, float white, float black,
-                      float mid_push, float comp, float sh_roll,
-                      float toe_roll, float flare) {
+__DEVICE__ float tone(float v, float contrast, float bp, float wp,
+                      float toe_len, float toe_str, float sh_len,
+                      float sh_str, float mid_push, float comp, float flare) {
     // exposure is applied achromatically in transform() (Reuleaux value
     // slide), NOT here — a per-channel exposure shift tints through the
     // nonlinear curve.
@@ -128,16 +130,21 @@ __DEVICE__ float tone(float v, float contrast, float white, float black,
     v = v + flare * CC_FLARE_SCALE * shadow_w;
     float s = (v - MID_GREY) / STOP;
 
-    // bounded (asymptotic) film S: mid slope = contrast, rolling off
-    // smoothly toward the white/black points, never a hard clip. Latitude
-    // ~ 1/(contrast-1) so contrast 1 is an exact straight line.
-    float a = CC_BASE / (contrast - 1.0f + CC_EPS);
-    float a_hi = white * a;
-    float a_lo = black * a;
-    float n_hi = CC_KNEE0 - CC_KNEE_SLOPE * sh_roll;
-    float n_lo = CC_KNEE0 - CC_KNEE_SLOPE * toe_roll;
-    float curve = (s >= 0.0f) ? (a_hi * gsc(contrast * s / a_hi, n_hi))
-                              : (a_lo * gsc(contrast * s / a_lo, n_lo));
+    // bounded film S with independent toe & shoulder: mid slope = contrast,
+    // each end rolls toward its Point (asymptote level) at a knee whose
+    // position is Length and sharpness is Strength. C1, never hard-clips.
+    float y = contrast * s;
+    float yk_hi = sh_len * wp;
+    float h_hi = wp - yk_hi + CC_EPS;
+    float n_hi = 1.0f + CC_STR_GAIN * sh_str;
+    float e_hi = _fmaxf(y - yk_hi, 0.0f);
+    float hi = yk_hi + h_hi * gsc(e_hi / h_hi, n_hi);
+    float yk_lo = toe_len * bp;
+    float h_lo = bp - yk_lo - CC_EPS;
+    float n_lo = 1.0f + CC_STR_GAIN * toe_str;
+    float e_lo = _fminf(y - yk_lo, 0.0f);
+    float lo = yk_lo + h_lo * gsc(e_lo / h_lo, n_lo);
+    float curve = (y > yk_hi) ? hi : ((y < yk_lo) ? lo : y);
 
     float u = s / CC_MID_W;
     float g = _expf(-0.5f * u * u);
@@ -149,7 +156,7 @@ __DEVICE__ float tone(float v, float contrast, float white, float black,
 
 // the UI controls tone() needs, in its argument order — expanded only
 // inside transform(), where the DEFINE_UI_PARAMS globals are in scope.
-#define TONE_ARGS contrast, white_offset, black_offset, mid_push, mid_compensate, shoulder_rolloff, toe_rolloff, flare
+#define TONE_ARGS contrast, black_point, white_point, toe_length, toe_strength, shoulder_length, shoulder_strength, mid_push, mid_compensate, flare
 
 __DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, float p_R, float p_G, float p_B)
 {
@@ -163,9 +170,9 @@ __DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, float p
     float3 luma_out = reuleaux_to_rgb(make_float3(rl.x, rl.y, tone(rl.z, TONE_ARGS)));
 
     float3 curved = make_float3(
-        (1.0f - luma_blend) * rgb_out.x + luma_blend * luma_out.x,
-        (1.0f - luma_blend) * rgb_out.y + luma_blend * luma_out.y,
-        (1.0f - luma_blend) * rgb_out.z + luma_blend * luma_out.z);
+        (1.0f - preserve_color) * rgb_out.x + preserve_color * luma_out.x,
+        (1.0f - preserve_color) * rgb_out.y + preserve_color * luma_out.y,
+        (1.0f - preserve_color) * rgb_out.z + preserve_color * luma_out.z);
 
     // Exposure is a purely tonal (greyscale) move applied AFTER the curve,
     // mid-grey referenced: slide the Reuleaux value axis and preserve

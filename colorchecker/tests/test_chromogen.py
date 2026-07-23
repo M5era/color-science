@@ -286,23 +286,50 @@ def test_highlight_bleach_unganged_spares_a_sector():
 
 # -------------------------------------------------------- neutral tint
 
-def test_neutral_tint_signed_amount_picks_side_in_log():
-    """v3: sum-preserving RGB offset in log; + = highlights, - = shadows."""
+def test_neutral_tint_amount_slides_bell_and_preserves_log_exposure():
+    """v4: |Amount| = strength, its sign slides the gaussian bell
+    toward highlights (+) or shadows (-); offset stays sum-preserving."""
     stage = NeutralTintStage()
-    highs = np.array([[0.9, 0.9, 0.9]])
-    lows = np.array([[0.12, 0.12, 0.12]])
-    warm_high = _with(stage, Hue=40.0, Amount=0.3)
+    # Amount +-0.5 * SHIFT_SCALE 3 -> bell centre +-1.5 stops
+    highs = np.full((1, 3), MID_GREY + 1.5 * STOP)
+    lows = np.full((1, 3), MID_GREY - 1.5 * STOP)
+    warm_high = _with(stage, Hue=40.0, Amount=0.5, Falloff=1.0)
+    cold_low = _with(stage, Hue=220.0, Amount=-0.5, Falloff=1.0)
     for x in (highs, lows):
         out = stage.apply(x, warm_high)
         # channel mean (log exposure) untouched by construction
         np.testing.assert_allclose(out.mean(axis=1), x.mean(axis=1),
                                    atol=1e-12)
-    assert _sat_of(stage.apply(highs, warm_high))[0] > 0.015  # tinted
-    assert _sat_of(stage.apply(lows, warm_high))[0] < 1e-6    # spared
+    # each bell tints its own centre hard, barely reaches 3 sigma away
+    assert _sat_of(stage.apply(highs, warm_high))[0] > 0.03
+    assert _sat_of(stage.apply(lows, warm_high))[0] < 0.002
+    assert _sat_of(stage.apply(lows, cold_low))[0] > 0.03
+    assert _sat_of(stage.apply(highs, cold_low))[0] < 0.002
 
-    cold_low = _with(stage, Hue=220.0, Amount=-0.3)
-    assert _sat_of(stage.apply(lows, cold_low))[0] > 0.05
-    assert _sat_of(stage.apply(highs, cold_low))[0] < 1e-6
+
+def test_neutral_tint_bell_rolls_off_both_sides():
+    """THE v4 fix: a shadow tint no longer pins deep blacks at full
+    strength (v3's ramp saturated below its knee); the weight rolls
+    back off below the bell centre."""
+    stage = NeutralTintStage()
+    p = _with(stage, Hue=220.0, Amount=-0.5, Falloff=1.0)  # centre -1.5
+    centre = np.full((1, 3), MID_GREY - 1.5 * STOP)
+    deep = np.full((1, 3), MID_GREY - 4.5 * STOP)  # 3 sigma below centre
+    s_centre = _sat_of(stage.apply(centre, p))[0]
+    s_deep = _sat_of(stage.apply(deep, p))[0]
+    assert s_centre > 0.03
+    assert s_deep < s_centre / 10  # v3 held full strength down here
+
+
+def test_neutral_tint_pivot_reanchors_bell():
+    """Pivot composes with the Amount-shift: Amount full right + Pivot
+    pulled back = the bell (and full strength) lands ON mid-grey."""
+    stage = NeutralTintStage()
+    grey = np.full((1, 3), MID_GREY)
+    shifted = _with(stage, Hue=40.0, Amount=1.0, Falloff=1.0)  # centre +3
+    anchored = _with(stage, Hue=40.0, Amount=1.0, Pivot=-3.0, Falloff=1.0)
+    assert (_sat_of(stage.apply(grey, anchored))[0]
+            > 5.0 * _sat_of(stage.apply(grey, shifted))[0])
 
 
 def test_neutral_tint_offset_direction_matches_picked_hue():

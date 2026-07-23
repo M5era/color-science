@@ -173,7 +173,7 @@ def test_local_search_unfreezes_tone_and_prunes_on_tint():
     y = con.apply(x, _with(con, Contrast=1.6))
     # asymmetric per-channel shadow moves tint the neutral ramp
     y = tint.apply(y, _with(tint, **{"Black R": -0.4, "Black B": 0.3,
-                                     "Shadow R": 1.25, "Shadow B": 0.8}))
+                                     "Dark R": 1.25, "Dark B": 0.8}))
     target = drt(y)
 
     greedy = search_chain(x, target, max_nodes=4, min_gain=0.005,

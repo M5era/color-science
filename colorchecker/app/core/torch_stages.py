@@ -323,10 +323,11 @@ def _highlight_bleach_apply(stage, x, p):
 
 def _neutral_tint_apply(stage, x, p):
     hue, sat, val = _rgb_to_reuleaux(x)
-    r = _ramp(val, chromogen.MID_GREY + p[2] * chromogen.STOP, p[3] * chromogen.STOP)
-    side = torch.where(p[1] >= 0.0, r, 1.0 - r)
+    centre = p[2] + stage.SHIFT_SCALE * p[1]
+    z = ((val - chromogen.MID_GREY) / chromogen.STOP - centre) / p[3]
+    bell = torch.exp(-0.5 * z * z)
     zero = p[4] * 0.0
-    m = side * _modulation(val, sat, zero, zero, 1.0 - p[4])
+    m = bell * _modulation(val, sat, zero, zero, 1.0 - p[4])
 
     strength = torch.abs(p[1]) * stage.TINT_SCALE
     ang = (p[0] / 360.0) * (2.0 * torch.pi)

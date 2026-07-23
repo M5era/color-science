@@ -527,22 +527,27 @@ class HighlightBleachStage(Stage):
 
 
 class NeutralTintStage(Stage):
-    """Neutral Tint v3 — Baselight-style, applied in LOG RGB (Marc,
-    2026-07-21): a SUM-PRESERVING RGB offset toward the picked hue,
-    NOT a reuleaux chroma push. The offset direction is the picked
-    hue's chroma-plane direction mapped back to RGB (zero-sum, so the
-    channel mean — log exposure — is untouched; being a fixed log
-    offset it tints shadows harder than highlights, printer-light
-    style).
+    """Neutral Tint v4 — bell falloff (Marc's design, 2026-07-23): ONE
+    gaussian bell of weight laid over the log range replaces the v3
+    one-sided ramp. The ramp saturated at full strength below (or
+    above) its knee — deep blacks pinned at maximum tint, the "funky
+    in the bottom" behaviour; the bell rolls off on BOTH sides, so the
+    extremes fall back toward untinted on their own. Still the
+    SUM-PRESERVING RGB offset in LOG toward the picked hue (zero-sum
+    direction, channel mean = log exposure untouched).
 
-    Amount is SIGNED with 0 (identity) in the middle: right tints the
-    highlights, left the shadows. Pivot (stops from mid-grey, 0 = mid
-    grey) and Falloff (ramp width in stops) shape the luma mask — drop
-    the pivot with Amount right to tint mids + highs. Chroma is the
-    Baselight sat mask: 1 = everything (default), down to 0 = only
-    saturated colors, up to 2 = only neutrals. (NOTE: this differs
-    from the signed 0-centred Chroma of the other tools — copied from
-    Baselight's Neutral Tint panel deliberately.)"""
+    Amount is SIGNED with 0 = identity, and does the one-slider
+    gesture: |Amount| is the tint strength AND Amount slides the bell
+    centre (right = toward highlights, left = shadows; SHIFT_SCALE
+    stops at full throw). Pivot re-anchors the bell centre (stops from
+    mid-grey), which keeps every (position, strength) pair reachable —
+    strong tint AT mid-grey = Amount full throw + Pivot pulled the
+    other way. Falloff is the bell's sigma in STOPS: width and
+    smoothness in one knob (a gaussian's width IS its smoothness).
+    Chroma is the Baselight sat mask, unchanged: 1 = everything
+    (default), down to 0 = only saturated colors, up to 2 = only
+    neutrals. (NOTE: this differs from the signed 0-centred Chroma of
+    the other tools — copied from Baselight's panel deliberately.)"""
 
     name = "Neutral Tint"
     param_names = ["Hue", "Amount", "Pivot", "Falloff", "Chroma"]
@@ -551,20 +556,23 @@ class NeutralTintStage(Stage):
     # values): full throw on deep shadows separates channels by up to
     # ~1.6 stops — strong but usable; mid-slider is a subtle tint
     TINT_SCALE = 0.15
+    # stops the bell centre travels at full Amount throw — eyeball
+    # guess (full right = centred 3 stops up, well into highlights)
+    SHIFT_SCALE = 3.0
 
     def identity(self):
-        # Baselight defaults: Pivot at mid-grey, Falloff 1.0 (stop) — a
-        # near-clean shadows/highlights split at mid-grey that the
-        # falloff then widens/softens
-        return np.array([0.0, 0.0, 0.0, 1.0, 1.0])
+        # bell anchored on mid-grey, sigma 2 stops — a broad tonal
+        # band once Amount engages; Falloff narrows/widens from there
+        return np.array([0.0, 0.0, 0.0, 2.0, 1.0])
 
     def bounds(self):
-        # Falloff floor 1.0 stop and Pivot floor -4 (Marc, 2026-07-22:
-        # "limit where this can go" — falloff below ~1 stop turns the
-        # ramp into a visible step, and pivots below ~-4.2 stops sit in
-        # sub-black code values; both only ever produced artifacts)
-        lo = [0.0, -1.0, -4.0, 1.0, 0.0]
-        hi = [360.0, 1.0, 8.0, 16.0, 2.0]
+        # Falloff floor 0.5: the bell is smooth by construction at any
+        # width (v3's 1.0-stop floor guarded the ramp turning into a
+        # step), below ~0.5 sigma the band just gets surgical. Pivot
+        # floor -4 kept from v3 (below ~-4.2 stops is sub-black code);
+        # with Amount full left the centre still reaches -7.
+        lo = [0.0, -1.0, -4.0, 0.5, 0.0]
+        hi = [360.0, 1.0, 8.0, 8.0, 2.0]
         return np.asarray(lo), np.asarray(hi)
 
     @staticmethod
@@ -588,9 +596,10 @@ class NeutralTintStage(Stage):
         reuleaux = rgb_to_reuleaux(x)
         sat, val = reuleaux[..., 1], reuleaux[..., 2]
 
-        r = ramp_window(val, MID_GREY + pivot * STOP, falloff * STOP)
-        side = r if amount >= 0.0 else 1.0 - r
-        m = side * modulation(val, sat, 0.0, 0.0, 1.0 - chroma)
+        centre = pivot + self.SHIFT_SCALE * amount   # stops from mid-grey
+        z = ((val - MID_GREY) / STOP - centre) / falloff
+        bell = np.exp(-0.5 * z * z)
+        m = bell * modulation(val, sat, 0.0, 0.0, 1.0 - chroma)
 
         strength = abs(amount) * self.TINT_SCALE
         return x + (strength * m)[..., None] * self._tint_direction(hue_deg)
@@ -606,16 +615,20 @@ class NeutralTintStage(Stage):
             tone = "cool"
         else:
             tone = hue_word(h)
-        return f"{tone} {'highs' if amount >= 0 else 'lows'}"
+        centre = pivot + self.SHIFT_SCALE * amount
+        where = "highs" if centre >= 0.5 else "lows" if centre <= -0.5 else "mids"
+        return f"{tone} {where}"
 
     def describe(self, params):
         hue_deg, amount, pivot, falloff, chroma = params
-        where = "highlights" if amount >= 0 else "shadows"
+        centre = pivot + self.SHIFT_SCALE * amount
         return "\n".join([
             "Neutral Tint (paste into dctl/NeutralTint.dctl):",
-            f"  Hue {hue_deg:.1f}°  Amount {amount:+.3f} (tints {where})",
+            f"  Hue {hue_deg:.1f}°  Amount {amount:+.3f}",
             f"  Pivot {pivot:+.3f}  Falloff {falloff:.3f}  "
             f"Chroma {chroma:.3f} (1 = all, 0 = saturated, 2 = neutrals)",
+            f"  -> bell centre {centre:+.2f} stops from mid-grey, "
+            f"sigma {falloff:.2f} stops",
         ])
 
 

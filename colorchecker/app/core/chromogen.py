@@ -835,84 +835,110 @@ class SectorSquashStage(_SectorStage):
 
 
 class SplitToneStage(Stage):
-    """Split Tone v3 — a per-channel SINGLE cubic-Bezier tone shaper.
+    """Split Tone v5 — a per-channel SINGLE sextic-Bezier tone shaper.
 
     v1/v2 (ported from Bezier_Split_Tone_V2.dctl) used TWO Beziers per
     channel joined at a pivot crossover; the joint was only C0 — a
     derivative kink that showed as BANDING on footage (Marc,
-    2026-07-22: "each rgb channel needs to stay super smooth!!"). Each
-    channel is now ONE cubic Bezier over the whole 0..1 code range with
-    x-handles at exact thirds, so it reduces to a smooth cubic
-    polynomial y(v) — C-infinity, no pivot, no crossover sliders.
-    Outside [0,1] the curve continues LINEARLY with the endpoint slope
-    (C1), so super-whites/blacks never snap (v2 hard-passed them
-    through, itself a discontinuity whenever White != 1).
+    2026-07-22: "each rgb channel needs to stay super smooth!!"). v3
+    replaced that with ONE cubic Bezier per channel; v4 (2026-07-23)
+    added the Mid handle for independent mid-grey shaping. v5 (same
+    day, Marc reviewing the genesis fit: "there is one crossover in
+    the shoulder ... that we simply cannot replicate like this,
+    should be the same in the toe") adds DARK and SPECULAR handles — one
+    degree-6 Bezier with y-handles at exact sixth x-positions, so it
+    reduces to a smooth sextic polynomial y(v) — C-infinity, no
+    pivot, no joins. Two handles between Mid and each endpoint let a
+    channel-difference change SIGN in the toe/shoulder (genesis: the
+    R-G crossover at +6.2 stops was unreachable with one). Outside
+    [0,1] the curve continues LINEARLY with the endpoint slope (C1),
+    so super-whites/blacks never snap.
 
-    Per channel: Black (foot level, /3 scaled), Shadow (lower-third
-    handle), Highlight (upper-third handle), White (top level).
-    Defaults Black 0 / Shadow 1 / Highlight 1 / White 1 are an EXACT
-    identity (the Bezier of a straight line IS the straight line).
-    Moving one channel against another IS the split tone. Works on raw
-    code values — no transfer function involved anymore.
+    Per channel, low to high — NAMED BY ON-SCREEN IMPACT (each
+    handle's Bernstein basis peaks at code x; through plain openDRT
+    that lands at these display levels — Marc 2026-07-23, "relate the
+    X coordinate to the appearance on screen"):
+      Black  (x=0    -> display   0%)   Dark     (x=1/6 -> 10%)
+      Low Mid  (x=2/6 -> 29%)           High Mid (x=3/6 -> 59%)
+      Highlight (x=4/6 -> 86%)          Specular (x=5/6 -> 97%)
+      White  (x=1    -> 100%)
+    The old Shadow/Mid names sat one band too low (they straddle mid
+    grey). Defaults
+    Black 0 / everything else 1 are an EXACT identity (the Bezier of
+    a straight line IS the straight line). Moving one channel against
+    another IS the split tone. Works on raw code values — no transfer
+    function involved anymore.
+
+    NOTE v4 values do NOT transfer 1:1 (handles moved from quarters
+    to sixths); JSON presets by name still load — the new "Dark" and
+    "Specular" default to identity.
     """
 
     name = "Split Tone"
     param_names = [
         "Black R", "Black G", "Black B",
-        "Shadow R", "Shadow G", "Shadow B",
+        "Dark R", "Dark G", "Dark B",
+        "Low Mid R", "Low Mid G", "Low Mid B",
+        "High Mid R", "High Mid G", "High Mid B",
         "Highlight R", "Highlight G", "Highlight B",
+        "Specular R", "Specular G", "Specular B",
         "White R", "White G", "White B",
     ]
 
-    _THIRD = 1.0 / 3.0
+    _BIN6 = (1.0, 6.0, 15.0, 20.0, 15.0, 6.0, 1.0)
 
     def identity(self):
-        return np.array([0.0, 0.0, 0.0,   # Black RGB
-                         1.0, 1.0, 1.0,   # Shadow RGB
-                         1.0, 1.0, 1.0,   # Highlight RGB
-                         1.0, 1.0, 1.0])  # White RGB
+        return np.array([0.0] * 3 + [1.0] * 18)
 
     def bounds(self):
-        lo = [-1.0] * 3 + [0.0] * 3 + [0.0] * 3 + [0.0] * 3
-        hi = [1.0] * 3 + [2.0] * 3 + [2.0] * 3 + [2.0] * 3
+        # widened +-0.5 (Marc 2026-07-23: "a lot of the split tone
+        # sliders are maxed out") — fits kept pinning 0 / 2
+        lo = [-1.5] * 3 + [-0.5] * 18
+        hi = [1.5] * 3 + [2.5] * 18
         return np.asarray(lo), np.asarray(hi)
 
     def apply(self, x, params):
         x = np.asarray(x, dtype=np.float64)
         out = np.empty_like(x)
         for ci in range(3):
-            y0 = params[0 + ci] * self._THIRD
-            y1 = params[3 + ci] * self._THIRD
-            y2 = 1.0 - (2.0 - params[6 + ci]) * self._THIRD
-            y3 = params[9 + ci]
+            y = (params[0 + ci] / 6.0,               # Black  (0)
+                 params[3 + ci] / 6.0,               # Dark   (1/6)
+                 params[6 + ci] / 3.0,               # Low Mid (2/6)
+                 params[9 + ci] * 0.5,               # High Mid (3/6)
+                 1.0 - (2.0 - params[12 + ci]) / 3.0,  # Highlight (4/6)
+                 1.0 - (2.0 - params[15 + ci]) / 6.0,  # Specular (5/6)
+                 params[18 + ci])                    # White  (1)
             v = x[..., ci]
-            iv = 1.0 - v
-            bez = (y0 * iv ** 3 + 3.0 * y1 * iv ** 2 * v
-                   + 3.0 * y2 * iv * v * v + y3 * v ** 3)
-            lo_ext = y0 + 3.0 * (y1 - y0) * v            # C1 tails
-            hi_ext = y3 + 3.0 * (y3 - y2) * (v - 1.0)
+            vc = np.clip(v, 0.0, 1.0)
+            iv = 1.0 - vc
+            bez = sum(self._BIN6[k] * y[k] * iv ** (6 - k) * vc ** k
+                      for k in range(7))
+            lo_ext = y[0] + 6.0 * (y[1] - y[0]) * v      # C1 tails
+            hi_ext = y[6] + 6.0 * (y[6] - y[5]) * (v - 1.0)
             out[..., ci] = np.where(v < 0.0, lo_ext,
                                     np.where(v > 1.0, hi_ext, bez))
         return out
 
     def label(self, params):
-        blk = params[0:3]
-        wht = np.asarray(params[9:12]) - 1.0
-        if np.max(np.abs(blk)) < 0.03 and np.max(np.abs(wht)) < 0.03 \
-                and np.max(np.abs(np.asarray(params[3:9]) - 1.0)) < 0.03:
+        p = np.asarray(params, dtype=float)
+        if np.max(np.abs(p[0:3])) < 0.03 \
+                and np.max(np.abs(p[3:21] - 1.0)) < 0.03:
             return "split (idle)"
         # crude warm/cool read from the R-vs-B shadow balance
-        lo = (params[0] - params[2]) + (params[3] - params[5])
+        lo = (p[0] - p[2]) + (p[3] - p[5])
         return "warm lows" if lo > 0 else "cool lows"
 
     def describe(self, params):
         p = np.round(np.asarray(params, dtype=float), 3)
         return "\n".join([
-            "Split Tone (paste into dctl/SplitTone.dctl):",
+            "Split Tone v5 (sextic; DCTL not updated yet):",
             f"  Black   R {p[0]}  G {p[1]}  B {p[2]}",
-            f"  Shadow  R {p[3]}  G {p[4]}  B {p[5]}",
-            f"  Highlight R {p[6]}  G {p[7]}  B {p[8]}",
-            f"  White   R {p[9]}  G {p[10]}  B {p[11]}",
+            f"  Dark    R {p[3]}  G {p[4]}  B {p[5]}",
+            f"  Low Mid R {p[6]}  G {p[7]}  B {p[8]}",
+            f"  High Mid R {p[9]}  G {p[10]}  B {p[11]}",
+            f"  Highlight R {p[12]}  G {p[13]}  B {p[14]}",
+            f"  Specular R {p[15]}  G {p[16]}  B {p[17]}",
+            f"  White   R {p[18]}  G {p[19]}  B {p[20]}",
         ])
 
 

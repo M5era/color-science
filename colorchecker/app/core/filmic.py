@@ -34,10 +34,9 @@ produce NaNs):
     sanitize floors the internal point at 0.69, which silently
     dead-zones the slider past ~0.775, so the floor is lowered to 0.4
     (raw 1.5 lands exactly on it). Mirrored in our DCTL copy.
-  * Exposure == 0 / Pop Mids == 0 / Flare == 0 skip their
-    LogC3<->linear round-trips (a *1.0 gain / +0.0 offset changes
-    nothing mathematically; skipping only avoids float round-trip
-    noise so identity is exact).
+  * Exposure == 0 skips its LogC3<->linear round-trip (a *1.0 gain
+    changes nothing mathematically; skipping only avoids float
+    round-trip noise so identity is exact).
   * shoulder/toe roll ratios are floored at 1e-3 before the fractional
     power (float32-safe at strength 10; same guard added to our DCTL):
     where the stock tool NaNs (roll pivot beyond the scaled point) the
@@ -52,10 +51,16 @@ produce NaNs):
     sliders. Full travel now sweeps the valid range linearly —
     Shoulder: just above the pivot -> just under the white ceiling;
     Toe: hugging the black floor -> up to mid-grey.
-  * Pop Mids is mid-grey COMPENSATED (not in the stock tool): a global
-    counter-gain re-anchors mid-grey exactly where the tone block put
-    it, decoupling Pop Mids from Exposure (Marc: "compensate exposure
-    to keep mid grey intact").
+  * SLIMMED 2026-07-23 (Marc, after fitting all nine test LUTs):
+    Linear Rolled, Pin Ends, Pop Mids, Flare and the second toe stage
+    removed — fits pinned Linear Rolled at 0 (pure linear contrast)
+    and never engaged the second toe; Pin/Pop/Flare never affected
+    tone matching. Preserve Color stays. 13 sliders total.
+  * Bend Point (the second roll's ceiling) reads in STOPS above mid
+    grey (0.5..8.5, >= 8.26 = exactly OFF) instead of the White-Point
+    code-linear sanitize — that mapping was dead until ~raw 0.5
+    because code is exponential in stops (Marc, 2026-07-23: "only
+    starts to kick in around 0.5"). See bend_ceiling().
 """
 
 from __future__ import annotations
@@ -107,92 +112,13 @@ def powerf(base, exp):
     return np.sign(base) * np.abs(base) ** exp
 
 
-def smootherstep(x):
-    x = np.clip(x, 0.0, 1.0)
-    return 3.0 * x ** 2 - 2.0 * x ** 3
-
-
-def smootherstep5(x):
-    x = np.clip(x, 0.0, 1.0)
-    return x * x * x * (x * (x * 6.0 - 15.0) + 10.0)
-
-
-def gentle_ramp(x):
-    """Mirror of gentleRamp: smootherstep then cube (soft onset)."""
-    return smootherstep(np.clip(x, 0.0, 1.0)) ** 3
-
-
-def soft_union(a, b):
-    a = np.clip(a, 0.0, 1.0)
-    b = np.clip(b, 0.0, 1.0)
-    return 1.0 - (1.0 - a) * (1.0 - b)
-
-
-def gauss_weight(x, mu, sigma):
-    s = max(abs(sigma), 1e-6)
-    d = (x - mu) / s
-    return float(np.exp(-0.5 * d * d))
-
-
-def remap_asym_signed(u, neg_min, pos_max):
-    """Mirror of remapAsymSigned (signed square easing)."""
-    u = float(np.clip(u, -1.0, 1.0))
-    s = u * abs(u)
-    return s * -neg_min if s < 0.0 else s * pos_max
-
-
-# ------------------------------------------------- contrast primitives
+# ------------------------------------------------- contrast primitive
+# (Linear Rolled removed 2026-07-23: the all-LUT fits pinned the blend
+# at pure LINEAR contrast, so the rolling / power-sigmoid families and
+# their gaussian blend are gone.)
 
 def apply_linear_contrast(x, contrast, pivot):
     return (x - pivot) * contrast + pivot
-
-
-def apply_rolling_contrast(x, contrast, pivot):
-    """Mirror of apply_rolling_contrast: the two power halves with a
-    C2 smootherstep5 blend window around the pivot."""
-    x = np.asarray(x, dtype=np.float64)
-    p = float(np.clip(pivot, 1e-6, 1.0 - 1e-6))
-    e = max(0.01 * min(p, 1.0 - p), 1e-4)
-    x0, x1 = p - e, p + e
-
-    f_left = powerf(x / p, contrast) * p
-    pm = 1.0 - p
-    f_right = 1.0 - powerf((1.0 - x) / pm, contrast) * pm
-
-    t = smootherstep5((x - x0) / max(x1 - x0, 1e-6))
-    blend = f_left * (1.0 - t) + f_right * t
-    return np.where(x <= x0, f_left, np.where(x >= x1, f_right, blend))
-
-
-def apply_power_sigmoid_contrast(x, contrast, pivot):
-    """Mirror of apply_power_sigmoid_contrast (PowerP piecewise
-    sigmoid; the s0 == 1 singular limit is identity)."""
-    x = np.asarray(x, dtype=np.float64)
-    t0 = float(np.clip(pivot, 1e-4, 1.0 - 1e-4))
-
-    s0 = float(np.clip(contrast, 0.5, 2.5))
-    if s0 > 1.0:
-        t = (s0 - 1.0) / (2.5 - 1.0)
-        s0 *= 1.0 + 0.12 * t
-
-    if s0 < 1.0:
-        x = np.clip(x, 0.0, 1.0)
-    if abs(s0 - 1.0) < 1e-5:
-        return x.copy()
-
-    eps = 1e-6
-    denom = s0 - 1.0
-    denom = np.sign(denom) * max(abs(denom), eps)
-    s1 = s0 * (1.0 - t0) / denom
-    s2 = s0 * (t0 - 0.0) / denom
-    s1 = np.sign(s1) * max(abs(s1), eps) if s1 != 0.0 else eps
-    s2 = np.sign(s2) * max(abs(s2), eps) if s2 != 0.0 else eps
-
-    d_hi = x - t0
-    hi = s0 * d_hi / (d_hi * s0 / s1 + 1.0) + t0
-    d_lo = t0 - x
-    lo = -s0 * d_lo / (d_lo * s0 / s2 + 1.0) + t0
-    return np.where(x >= t0, hi, lo)
 
 
 # ------------------------------------------- white / black point rolls
@@ -300,24 +226,76 @@ def _mix_sat(contrasted, toned, mix, contrast, pivot, contrast_fn):
     return contrasted * (1.0 - mix) + luma_only * mix
 
 
-# ---------------------------------------------------- hi/lo luma masks
+# ---------------------------------------- per-end sanitize helpers
+# (factored out so the SECOND toe/shoulder stage shares them exactly)
 
-def hi_lo_mask_value(metric_rgb, hi_threshold, hi_feather,
-                     lo_threshold, lo_feather):
-    """Mirror of HiLoMaskValue: 1 at the extreme ends (below the low
-    band / above the high band), 0 in the mids, smootherstep feathers
-    in log2 stops around mid-grey."""
-    m = np.max(np.asarray(metric_rgb, dtype=np.float64), axis=-1)
-    mlog = np.log2(np.maximum(m, 1e-10))
+def shoulder_strength(falloff: float) -> float:
+    """Shoulder Falloff slider -> internal knee strength. Positive is
+    the stock linear soft direction (strength 10 -> 0.3); NEGATIVE is
+    GEOMETRIC — the knee radius shrinks like 1/strength, so linear
+    growth felt dead below 0: strength doubles every 5 slider units
+    (10 -> 320 at -25), matching dctl/FilmicContrast.dctl."""
+    if falloff < 0.0:
+        return 10.0 * 2.0 ** (-falloff / 5.0)
+    return max(10.0 - falloff, 0.3)
 
-    lo_min = np.log2(MID_GREY * 2.0 ** (lo_threshold - 0.5 * lo_feather))
-    lo_max = np.log2(MID_GREY * 2.0 ** (lo_threshold + 0.5 * lo_feather))
-    hi_min = np.log2(MID_GREY * 2.0 ** (hi_threshold - 0.5 * hi_feather))
-    hi_max = np.log2(MID_GREY * 2.0 ** (hi_threshold + 0.5 * hi_feather))
 
-    shadow = 1.0 - smootherstep((mlog - lo_min) / max(lo_max - lo_min, 1e-6))
-    highlight = smootherstep((mlog - hi_min) / max(hi_max - hi_min, 1e-6))
-    return np.clip(shadow + highlight, 0.0, 1.0)
+def toe_strength(falloff: float) -> float:
+    """Toe Falloff slider -> internal strength: the widened
+    preserve-midgray remap (stock 1.48..2.95 -> 0.25..3.35, default 2
+    -> 2.65 unchanged); negative maps 1:1 (continuous at 0 -> 3.35) up
+    to near-rectangular (Marc: "almost rectangular... not all the
+    way")."""
+    if falloff < 0.0:
+        return 3.35 - falloff
+    return max(max(10.0 - falloff, 0.17) * 0.35 - 0.15, 0.25)
+
+
+def sanitize_white_point(white_point_raw: float, pivot: float) -> float:
+    """Raw White Point slider -> internal ceiling. Extended-down: the
+    stock 0.5/0.7 floors are removed (pivot*1.1 + the 1e-3 roll-ratio
+    floor keep it safe)."""
+    return max(white_point_raw * 0.5 + 0.49, pivot * 1.1)
+
+
+def bend_ceiling(bend_point_stops: float, pivot: float) -> float:
+    """Bend Point slider (in STOPS above mid grey) -> internal ceiling
+    code. Replaces the White-Point-style code-linear sanitize for the
+    Bend section (Marc 2026-07-23: that mapping was dead until ~0.5 —
+    half the travel only shaved invisible speculars, because the
+    ceiling moved linearly in CODE which is exponential in stops).
+    Uniform slider steps now move the ceiling by uniform exposure.
+    >= 8.26 stops puts the ceiling at/above code 1.0 = exactly OFF."""
+    ceiling = float(lin_to_logc3(0.18 * 2.0 ** bend_point_stops))
+    return max(ceiling, pivot * 1.1)
+
+
+def sanitize_black_point(black_point_raw: float) -> float:
+    """Raw Black Point slider -> internal floor (on the flipped image).
+    Stock sanitize floor 0.69 lowered to 0.4 for the extended 1.5
+    range."""
+    return max(1.0 - black_point_raw * 0.4, 0.4) * 0.45 + 0.55
+
+
+def shoulder_roll_pivot(shoulder_raw: float, pivot: float,
+                        white_point: float) -> float:
+    """LIVE Shoulder position mapping (toolkit rewrite): full slider
+    travel sweeps just above the pivot .. just under the white
+    ceiling."""
+    t = min(max((shoulder_raw - 0.2) / (0.997 - 0.2), 0.0), 1.0)
+    lo = pivot * 1.015
+    hi = max(white_point - 0.01, lo + 1e-4)
+    return lo + (hi - lo) * t
+
+
+def toe_roll_pivot(toe_raw: float, pivot: float,
+                   black_point: float) -> float:
+    """LIVE Toe position mapping: full travel sweeps hugging the black
+    floor (raw 0) .. up to mid-grey (raw 0.8)."""
+    t = min(max(toe_raw / 0.8, 0.0), 1.0)
+    lo = 1.0 - pivot
+    hi = max(black_point - 0.05, lo + 1e-4)
+    return lo + (hi - lo) * (1.0 - t)
 
 
 # -------------------------------------------------------- the pipeline
@@ -326,150 +304,57 @@ def filmic_contrast(x: np.ndarray,
                     exposure: float, contrast: float, pivot: float,
                     white_point: float, shoulder: float,
                     shoulder_falloff: float,
+                    bend_point: float, bend: float,
+                    bend_falloff: float,
                     black_point: float, toe: float, toe_falloff: float,
-                    mix_contrast: float, preserve_color: float,
-                    pin_ends: float, pop_mids: float,
-                    flare: float) -> np.ndarray:
-    """The full transform() pixel path (LogC3, Preserve Mid-gray ON,
-    linear end exposure). Parameter names follow the DCTL sliders in
-    order; `shoulder`/`toe` are the roll pivots, `*_falloff` the
-    fall-off sliders."""
+                    preserve_color: float) -> np.ndarray:
+    """The slimmed tone pipeline (LogC3, Preserve Mid-gray ON, linear
+    end exposure). Parameter names follow the DCTL sliders in order;
+    `shoulder`/`toe` are the roll pivots, `*_falloff` the fall-off
+    sliders; the `*2` trio is the SECOND shoulder stage.
+
+    2026-07-23 slimming (Marc, after the all-LUT fits): Linear Rolled,
+    Pin Ends, Pop Mids, Flare and the second TOE stage removed — the
+    fits pinned Linear Rolled at 0 (pure linear contrast) and never
+    engaged the second toe on any of the nine test LUTs; Pin/Pop/Flare
+    never affected tone matching. Preserve Color stays."""
     x = np.asarray(x, dtype=np.float64)
-    clean = x
 
     pivot = set_pivot(pivot)
 
-    # --- adaptive shadow/highlight feathering (drives the pin mask)
-    pin_n = float(gentle_ramp(pin_ends))
-    cdelta = contrast - 1.0
-    c_n = float(gentle_ramp(cdelta / 1.0 if cdelta >= 0.0
-                            else -cdelta / 0.5))
-    feather_drive = float(soft_union(pin_n, c_n))
-    hi_drive = feather_drive * feather_drive
-    hi_feather = float(np.clip(2.5 + 1.5 * hi_drive, 2.5, 2.5 + 1.5))
-    lo_feather = float(np.clip(7.5 + 4.0 * feather_drive, 7.5, 7.5 + 4.0))
-    hi_threshold, lo_threshold = 0.8, -3.0
-
-    # --- sanitize black and white points
-    shoulder_str = max(10.0 - shoulder_falloff, 0.3)
-    toe_str = max(10.0 - toe_falloff, 0.17)
-
-    black_point = 1.0 - black_point * 0.4
-    # extended-down White Point: the stock 0.5 floor is removed (the
-    # pivot*1.1 limit below + the 1e-3 roll-ratio floor keep it safe)
-    white_point = white_point * 0.5 + 0.49
-    # stock floor is 0.69 (dead-zones the slider past ~0.775); lowered
-    # to 0.4 for the extended 1.5 range (see module docstring)
-    black_point = max(black_point, 0.4)
-
     # --- Preserve Mid-gray (toggle ON, the default)
     pivot = min(0.90, max(0.05, pivot))
-    # extended-down White Point: stock hard 0.7 floor removed
-    white_point = max(white_point, pivot * 1.1)
 
-    # --- LIVE Toe/Shoulder position mappings (toolkit rewrite, Marc:
-    # "the actual toe and shoulder sliders dont do anything"). The stock
-    # clamp chains dead-zoned ~80% of both sliders (Toe was pinned
-    # between min(0.6,..) and max(..,pivot); Shoulder was capped by the
-    # RAW White Point slider). Full travel now sweeps the valid range
-    # linearly: Shoulder 0.2..0.997 = roll starts just above the pivot
-    # .. just under the white ceiling; Toe 0..0.8 = roll hugs the black
-    # floor .. reaches up to mid-grey (the preserve-midgray edge).
-    black_point = black_point * 0.45 + 0.55
+    # --- sanitize both shoulder stages + the toe (shared helpers)
+    shoulder_str = shoulder_strength(shoulder_falloff)
+    shoulder_str2 = shoulder_strength(bend_falloff)
+    toe_str = toe_strength(toe_falloff)
 
-    t_s = min(max((shoulder - 0.2) / (0.997 - 0.2), 0.0), 1.0)
-    lo_s = pivot * 1.015
-    hi_s = max(white_point - 0.01, lo_s + 1e-4)
-    w_p_pivot = lo_s + (hi_s - lo_s) * t_s
+    white_point = sanitize_white_point(white_point, pivot)
+    bend_ceiling_code = bend_ceiling(bend_point, pivot)
+    black_point = sanitize_black_point(black_point)
 
-    t_t = min(max(toe / 0.8, 0.0), 1.0)
-    lo_t = 1.0 - pivot                       # toe up to mid-grey (raw 0.8)
-    hi_t = max(black_point - 0.05, lo_t + 1e-4)  # floor-hugging (raw 0)
-    b_p_pivot = lo_t + (hi_t - lo_t) * (1.0 - t_t)
-    # widened toe-shape range (stock 1.48..2.95 -> 0.25..3.35; the
-    # default falloff 2 still maps to 2.65 exactly). Negative falloff
-    # maps 1:1 (continuous at 0 -> 3.35) so the toe reaches the same
-    # near-rectangular strengths as the shoulder (Marc: "almost
-    # rectangular... not all the way")
-    toe_str = max(toe_str * 0.35 - 0.15, 0.25)
-    if toe_falloff < 0.0:
-        toe_str = 3.35 - toe_falloff
+    w_p_pivot = shoulder_roll_pivot(shoulder, pivot, white_point)
+    w_p_pivot2 = shoulder_roll_pivot(bend, pivot, bend_ceiling_code)
+    b_p_pivot = toe_roll_pivot(toe, pivot, black_point)
 
     # --- flip Preserve Color for negative contrast (DCTL intuition fix)
     if contrast < 1.0:
         preserve_color = 1.0 - preserve_color
 
-    mix_n = float(np.clip(mix_contrast, 0.0, 1.0))
-    w_lin = gauss_weight(mix_n, 0.00, 0.07)
-    w_roll = gauss_weight(mix_n, 0.33, 0.18)
-    w_pow = gauss_weight(mix_n, 1.00, 0.32)
-    w_sum = max(w_lin + w_roll + w_pow, 1e-8)
+    # --- white/black rolls + linear contrast (+ Preserve Color mix)
+    toned = apply_white_point(x, white_point, w_p_pivot, shoulder_str)
+    toned = apply_white_point(toned, bend_ceiling_code, w_p_pivot2,
+                              shoulder_str2)
+    toned = apply_black_point(toned, black_point, b_p_pivot, toe_str)
+    out = apply_linear_contrast(toned, contrast, pivot)
+    out = _mix_sat(out, toned, preserve_color, contrast, pivot,
+                   apply_linear_contrast)
 
-    def _tone_block(v):
-        """White/black rolls + the 3-way contrast blend (shared by the
-        image and the mid-grey reference pixel for the Pop Mids anchor)."""
-        toned = apply_white_point(v, white_point, w_p_pivot, shoulder_str)
-        toned = apply_black_point(toned, black_point, b_p_pivot, toe_str)
-        lin = apply_linear_contrast(toned, contrast, pivot)
-        lin = _mix_sat(lin, toned, preserve_color, contrast, pivot,
-                       apply_linear_contrast)
-        roll = apply_rolling_contrast(toned, contrast, pivot)
-        roll = _mix_sat(roll, toned, preserve_color, contrast, pivot,
-                        apply_rolling_contrast)
-        powsig = apply_power_sigmoid_contrast(toned, contrast, pivot)
-        powsig = _mix_sat(powsig, toned, preserve_color, contrast, pivot,
-                          apply_power_sigmoid_contrast)
-        return (lin * (w_lin / w_sum) + roll * (w_roll / w_sum)
-                + powsig * (w_pow / w_sum))
-
-    # --- white / black point compression + contrast
-    out = _tone_block(x)
-
-    # --- pop mids: exposure bite in the band between two hi/lo masks,
-    # measured on the CLEAN input
-    if pop_mids != 0.0:
-        big = hi_lo_mask_value(clean, 1.04, 1.85,
-                               lo_threshold + 1.61, lo_feather - 4.4)
-        small = hi_lo_mask_value(clean, 1.02, 1.51, -2.9, 4.5)
-        band = np.clip(big - small, 0.0, 1.0)[..., None]
-        pop = lin_to_logc3(logc3_to_lin(out) * 2.0 ** -pop_mids)
-        out = out * (1.0 - band) + pop * band
-
-        # mid-grey compensation (Marc, 2026-07-22, NOT in the stock
-        # tool): the band feather overlaps mid-grey slightly, so Pop
-        # Mids alone drifts it. A global counter-gain re-anchors a
-        # mid-grey pixel EXACTLY where the tone block put it, so Pop
-        # Mids and Exposure are fully decoupled — in the fit and on
-        # the desk. Mirrored in our DCTL copy.
-        midpix = np.full((1, 3), MID_GREY)
-        m0 = float(_tone_block(midpix)[0, 0])
-        b_mid = float(np.clip(
-            hi_lo_mask_value(midpix, 1.04, 1.85,
-                             lo_threshold + 1.61, lo_feather - 4.4)
-            - hi_lo_mask_value(midpix, 1.02, 1.51, -2.9, 4.5),
-            0.0, 1.0)[0])
-        m0_lin = float(logc3_to_lin(m0))
-        pop_mid = float(lin_to_logc3(m0_lin * 2.0 ** -pop_mids))
-        v_mid = m0 * (1.0 - b_mid) + pop_mid * b_mid
-        comp = m0_lin / float(logc3_to_lin(v_mid))
-        out = lin_to_logc3(logc3_to_lin(out) * comp)
-
-    # --- exposure: linear gain at the end (exp_toggle == 0, default) —
-    # achromatic in linear, moves mid-grey by exactly `exposure` stops
+    # --- exposure: linear gain at the end — achromatic in linear,
+    # moves mid-grey by exactly `exposure` stops
     if exposure != 0.0:
         out = lin_to_logc3(logc3_to_lin(out) * 2.0 ** exposure)
-
-    # --- pin hi/lo ends back to the clean input
-    if pin_ends != 0.0:
-        mask = hi_lo_mask_value(clean, hi_threshold, hi_feather,
-                                lo_threshold, lo_feather)[..., None]
-        pinends = out * (1.0 - mask) + clean * mask
-        out = out * (1.0 - pin_ends) + pinends * pin_ends
-
-    # --- flare: signed linear offset
-    if flare != 0.0:
-        offset = remap_asym_signed(flare, -0.01, 0.01)
-        out = lin_to_logc3(logc3_to_lin(out) + offset)
 
     return out
 
@@ -481,9 +366,14 @@ from app.core.stage_base import Stage  # noqa: E402  (kept by the module tail)
 
 class FilmicContrastStage(Stage):
     """ME_Filmic Contrast as a fittable stage — Marc's tone node of
-    choice for the chain ("this really works"). 14 float sliders, in
-    the DCTL's sliderFloatParam0..13 order, values paste 1:1 into the
-    (themed) FilmicContrast.dctl:
+    choice for the chain ("this really works"). 13 float sliders, in
+    the DCTL's sliderFloatParam0..12 order, values paste 1:1 into the
+    (themed) FilmicContrast.dctl.
+
+    SLIMMED 2026-07-23 (Marc, after fitting all nine test LUTs):
+    Linear Rolled (fits pinned it at 0 — pure linear contrast),
+    Pin Ends, Pop Mids, Flare and the second toe stage removed;
+    Preserve Color stays.
 
       Exposure          stops, linear gain applied at the END (mid-grey
                         referenced, achromatic in linear light)
@@ -500,65 +390,73 @@ class FilmicContrastStage(Stage):
                         NOTE it only shapes anything when White Point
                         is engaged (< 1) — at WP ~1 the roll is
                         invisible no matter where it starts
-      Shoulder Falloff  roll softness -100..9.7: higher = softer
-                        knee, deep NEGATIVE = near-rectangular
-                        shoulder (strength to ~110; stock stopped
-                        at 9)
+      Shoulder Falloff  roll softness -25..9.7: higher = softer knee;
+                        NEGATIVE is GEOMETRIC (strength doubles every
+                        5 units, 10 -> 320 at -25) so every step
+                        visibly tightens toward rectangular — the old
+                        linear negative side dead-zoned the bulk of
+                        the slider (synced with the DCTL)
+      Bend Point /      a SECOND, independent shoulder roll chained
+      Bend /            after the first — same math, own landing
+      Bend Falloff      point, position and falloff (renamed from
+                        "White Point 2 / Shoulder 2" 2026-07-23,
+                        Marc: the old names made no sense; "Bend" is
+                        his word for the smooth bend of the contrast
+                        line it creates). Parked (Bend Point = 1.02 =
+                        OFF) by default. Two knees let the shoulder
+                        take shapes one roll can't (e.g. a soft early
+                        rolloff plus a hard clamp at the top)
       Black Point       shadow lift depth; 0 = OFF, extended range to
                         1.5 (stock 0.5; sanitize floor lowered, see
                         module docstring)
       Toe               where the shadow roll starts
-      Toe Falloff       toe softness; extended to -20..10 — negative
-                        values give a MUCH sharper toe (internal
-                        strength up to ~103 (negative side maps 1:1) — the roll math is overflow-free so the knee is effectively unbounded (stock capped at 3.35);
-                        Marc kept hitting the stock cap), positive is
-                        the stock soft direction, default unchanged
-      Linear Rolled     blends Linear -> Rolled -> PowerP contrast
+      Toe Falloff       toe softness; extended to -100..10 — negative
+                        maps 1:1 to a MUCH sharper toe (strength to
+                        ~103, near-rectangular; stock capped at
+                        3.35), positive is the stock soft direction,
+                        default unchanged
       Preserve Color    0 = per-RGB (contrast moves saturation),
                         1 = luma-only via the CHEN model
-      Pin Ends          pins extreme shadows/highlights back to the
-                        untouched input (adaptive feather)
-      Pop Mids          darkens the off-mid band -> mids pop; mid-grey
-                        compensated (toolkit addition), so it never
-                        moves mid-grey and is decoupled from Exposure
-      Flare             signed milky-shadow linear offset
     """
 
     name = "Filmic Contrast"
     param_names = [
         "Exposure", "Contrast", "Pivot",
         "White Point", "Shoulder", "Shoulder Falloff",
+        "Bend Point", "Bend", "Bend Falloff",
         "Black Point", "Toe", "Toe Falloff",
-        "Linear Rolled", "Preserve Color", "Pin Ends", "Pop Mids",
-        "Flare",
+        "Preserve Color",
     ]
 
     def identity(self) -> np.ndarray:
         return np.array([0.0, 1.0, 0.0,
                          1.02, 0.6, 6.0,
+                         8.5, 0.8, 6.0,
                          0.0, 0.5, 2.0,
-                         0.0, 0.5, 0.0, 0.0,
-                         0.0])
+                         0.5])
 
     def init(self) -> np.ndarray:
-        """Start with the white/black points ENGAGED (the DCTL's own
-        defaults): at identity both sections sit in their passthrough
-        branch — a dead-gradient region the solver could never leave."""
+        """Start with the FIRST white/black points ENGAGED (the DCTL's
+        own defaults): at identity both sections sit in their
+        passthrough branch — a dead-gradient region the solver could
+        never leave. The second shoulder stays parked: it is a manual
+        shaping tool, and engaging both at init would give the solver
+        two collinear knees."""
         p = self.identity()
         p[3] = 1.015   # White Point: the stock default, gentle shoulder
-        p[6] = 0.05    # Black Point: just engaged, toe has gradient
+        p[9] = 0.05    # Black Point: just engaged, toe has gradient
         return p
 
     def bounds(self) -> tuple[np.ndarray, np.ndarray]:
         lo = np.array([-4.0, 0.5, -1.0,
-                       -0.15, 0.2, -100.0,
+                       -0.15, 0.2, -25.0,
+                       0.5, 0.2, -25.0,
                        0.0, 0.0, -100.0,
-                       0.0, 0.0, 0.0, -1.0,
-                       -1.0])
+                       0.0])
         hi = np.array([4.0, 5.0, 1.0,
                        1.02, 0.997, 9.7,
+                       8.5, 0.997, 9.7,
                        1.5, 0.8, 10.0,
-                       1.0, 1.0, 1.0, 3.5,
                        1.0])
         return lo, hi
 
@@ -567,8 +465,11 @@ class FilmicContrastStage(Stage):
 
     def label(self, params: np.ndarray) -> str:
         (exposure, contrast, _pivot, white_point, _sh, _shf,
-         black_point, _toe, _toef, _mix, preserve, pin, pop,
-         flare) = [float(v) for v in params]
+         bend_point, _bend, _bendf,
+         black_point, _toe, _toef,
+         preserve) = [float(v) for v in params]
+        if bend_point < 8.26:            # bend engaged (stops units)
+            white_point = min(white_point, 0.99)
         parts = []
         if contrast > 1.02:
             parts.append("punch contrast")
@@ -578,16 +479,8 @@ class FilmicContrastStage(Stage):
             parts.append("roll highs")
         if black_point > 0.02:
             parts.append("lift blacks")
-        if flare > 0.05:
-            parts.append("flare")
-        elif flare < -0.05:
-            parts.append("de-flare")
         if abs(exposure) > 0.05:
             parts.append(f"{exposure:+.1f} stop")
-        if pop > 0.1:
-            parts.append("pop mids")
-        if pin > 0.3:
-            parts.append("pin ends")
         if not parts:
             return "(idle)"
         note = ", ".join(parts)

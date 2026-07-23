@@ -1,0 +1,62 @@
+{
+ "version": 1,
+ "comment": "Display-domain RGB fit v8 (Bend Point in stops). RMS 0.10%, mid grey [R+0.03 G+0.03 B-0.01]%, max in +-1 stop 0.23%. Preserve Color left 0.",
+ "chain": [
+  {
+   "stage": "Split Tone",
+   "bypass": false,
+   "params": {
+    "Black R": 1.0909,
+    "Black G": 1.2332,
+    "Black B": 1.5,
+    "Dark R": 2.5,
+    "Dark G": 1.1488,
+    "Dark B": -0.4759,
+    "Low Mid R": -0.3243,
+    "Low Mid G": 0.6826,
+    "Low Mid B": 1.9764,
+    "High Mid R": 2.1185,
+    "High Mid G": 1.654,
+    "High Mid B": 0.7343,
+    "Highlight R": -0.482,
+    "Highlight G": -0.5,
+    "Highlight B": 0.3946,
+    "Specular R": -0.5,
+    "Specular G": 0.0963,
+    "Specular B": 0.2682,
+    "White R": 1.929,
+    "White G": 1.6288,
+    "White B": 0.7346
+   }
+  },
+  {
+   "stage": "Filmic Contrast",
+   "bypass": false,
+   "params": {
+    "Exposure": -0.171,
+    "Contrast": 2.3003,
+    "Pivot": 0.0216,
+    "White Point": 0.5026,
+    "Shoulder": 0.2,
+    "Shoulder Falloff": 9.0867,
+    "Bend Point": 3.0504,
+    "Bend": 0.4498,
+    "Bend Falloff": 8.5438,
+    "Black Point": 1.5,
+    "Toe": 0.304,
+    "Toe Falloff": 2.823,
+    "Preserve Color": 0.0
+   }
+  }
+ ],
+ "drt": true,
+ "lut": "test_luts/Kodak250D_2383Print_Sat.cube",
+ "hd": {
+  "on": true,
+  "mode": 0,
+  "y": 0,
+  "eotf": 0,
+  "shape": 0,
+  "clamp": false
+ }
+}

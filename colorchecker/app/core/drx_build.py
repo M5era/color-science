@@ -44,7 +44,8 @@ _UUID_RE = re.compile(rb"([0-9a-f]{12})_(\d+)")   # ...edbd_<id>
 SYNTH_SPECS = {
     "FilmicContrast": {
         "path": "______DCTL______/0_MS/FilmicContrast.dctl",
-        "sliders": [0.0, 1.0, 0.0, 1.015, 0.6, 6.0, 0.0001, 0.5, 2.0,
+        "sliders": [0.0, 1.0, 0.0, 1.015, 0.6, 6.0, 1.02, 0.8, 6.0,
+                    0.0001, 0.5, 2.0, 0.0, 0.25, 2.0,
                     0.0, 0.5, 0.0, 0.0, 0.0],
         # bypass, show curve, show ramp, wide overlays, tone-mapped exp,
         # PRESERVE MID-GRAY (on), show pin range

@@ -231,7 +231,7 @@ def test_split_tone_is_smooth_everywhere():
     stage = SplitToneStage()
     p = stage.identity().copy()
     p[stage.param_names.index("Black R")] = -0.8
-    p[stage.param_names.index("Shadow R")] = 1.6
+    p[stage.param_names.index("Low Mid R")] = 1.6
     p[stage.param_names.index("White R")] = 0.9
     ramp = np.linspace(-0.2, 1.3, 20001)[:, None].repeat(3, axis=1)
     y = stage.apply(ramp, p)[:, 0]
@@ -546,3 +546,38 @@ def test_stage_bake_rejects_unknown_slider(tmp_path, monkeypatch):
     ])
     with pytest.raises(SystemExit, match="no slider"):
         stage_bake.main()
+
+
+def test_split_tone_mid_handle_shapes_midtones_only():
+    """v4+ (Marc, 2026-07-23): the Mid handle bends the curve middle
+    while endpoints stay pinned — the mid-grey shaping the cubic
+    could not do independently."""
+    stage = SplitToneStage()
+    p = stage.identity().copy()
+    p[stage.param_names.index("High Mid G")] = 1.3
+    ends = stage.apply(np.array([[0.0] * 3, [1.0] * 3]), p)
+    np.testing.assert_allclose(ends[0], [0.0] * 3, atol=1e-12)
+    np.testing.assert_allclose(ends[1], [1.0] * 3, atol=1e-12)
+    mid = stage.apply(np.array([[0.5] * 3]), p)[0]
+    assert mid[1] > 0.53                  # green mid lifted
+    np.testing.assert_allclose(mid[[0, 2]], 0.5, atol=1e-12)
+
+
+def test_split_tone_v5_dark_specular_shape_the_ends():
+    """v5 (Marc: the genesis shoulder/toe channel CROSSOVER was
+    unreachable): Dark and Specular handles bend the deep toe / near-white
+    regions while the endpoints stay pinned — a channel difference can
+    now change sign out there."""
+    stage = SplitToneStage()
+    p = stage.identity().copy()
+    p[stage.param_names.index("Specular R")] = 0.6
+    p[stage.param_names.index("Dark B")] = 1.6
+    ends = stage.apply(np.array([[0.0] * 3, [1.0] * 3]), p)
+    np.testing.assert_allclose(ends[0], [0.0] * 3, atol=1e-12)
+    np.testing.assert_allclose(ends[1], [1.0] * 3, atol=1e-12)
+    hi = stage.apply(np.array([[0.85] * 3]), p)[0]
+    lo = stage.apply(np.array([[0.15] * 3]), p)[0]
+    assert hi[0] < 0.85 - 5e-3            # red pulled down near white
+    assert lo[2] > 0.15 + 5e-3            # blue lifted in the deep toe
+    np.testing.assert_allclose(hi[1], 0.85, atol=1e-12)
+    np.testing.assert_allclose(lo[1], 0.15, atol=1e-12)

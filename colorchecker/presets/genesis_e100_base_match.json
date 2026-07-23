@@ -1,0 +1,62 @@
+{
+ "version": 1,
+ "comment": "Display-domain RGB fit v8 (Bend Point in stops). RMS 0.12%, mid grey [R-0.07 G-0.12 B-0.09]%, max in +-1 stop 0.28%. Preserve Color left 0.",
+ "chain": [
+  {
+   "stage": "Split Tone",
+   "bypass": false,
+   "params": {
+    "Black R": -0.6503,
+    "Black G": 1.4839,
+    "Black B": 1.5,
+    "Dark R": 2.5,
+    "Dark G": -0.1611,
+    "Dark B": -0.4998,
+    "Low Mid R": -0.5,
+    "Low Mid G": 1.0967,
+    "Low Mid B": 1.227,
+    "High Mid R": 1.9383,
+    "High Mid G": 0.9149,
+    "High Mid B": 0.9376,
+    "Highlight R": -0.233,
+    "Highlight G": 0.5999,
+    "Highlight B": 0.5417,
+    "Specular R": -0.4994,
+    "Specular G": 0.2164,
+    "Specular B": -0.5,
+    "White R": 1.2205,
+    "White G": 0.7566,
+    "White B": 0.5846
+   }
+  },
+  {
+   "stage": "Filmic Contrast",
+   "bypass": false,
+   "params": {
+    "Exposure": 0.1352,
+    "Contrast": 2.3846,
+    "Pivot": -0.062,
+    "White Point": 0.7856,
+    "Shoulder": 0.209,
+    "Shoulder Falloff": 9.6876,
+    "Bend Point": 2.8104,
+    "Bend": 0.7382,
+    "Bend Falloff": 8.6808,
+    "Black Point": 1.2565,
+    "Toe": 0.5473,
+    "Toe Falloff": -0.5154,
+    "Preserve Color": 0.0
+   }
+  }
+ ],
+ "drt": true,
+ "lut": "test_luts/genesis_e100_base.cube",
+ "hd": {
+  "on": true,
+  "mode": 0,
+  "y": 0,
+  "eotf": 0,
+  "shape": 0,
+  "clamp": false
+ }
+}

@@ -1,0 +1,62 @@
+{
+ "version": 1,
+ "comment": "Display-domain RGB fit v8 (Bend Point in stops). RMS 0.14%, mid grey [R-0.18 G-0.17 B-0.14]%, max in +-1 stop 0.18%. Preserve Color left 0.",
+ "chain": [
+  {
+   "stage": "Split Tone",
+   "bypass": false,
+   "params": {
+    "Black R": -0.0234,
+    "Black G": 1.2024,
+    "Black B": 1.354,
+    "Dark R": 2.5,
+    "Dark G": 1.2272,
+    "Dark B": 0.3979,
+    "Low Mid R": 0.6702,
+    "Low Mid G": 1.2785,
+    "Low Mid B": 1.9832,
+    "High Mid R": 1.8798,
+    "High Mid G": 1.6761,
+    "High Mid B": 1.0616,
+    "Highlight R": -0.0666,
+    "Highlight G": -0.5,
+    "Highlight B": 0.5155,
+    "Specular R": -0.2181,
+    "Specular G": 2.5,
+    "Specular B": 0.8745,
+    "White R": 1.9464,
+    "White G": 1.2814,
+    "White B": 0.8198
+   }
+  },
+  {
+   "stage": "Filmic Contrast",
+   "bypass": false,
+   "params": {
+    "Exposure": -1.5,
+    "Contrast": 2.1609,
+    "Pivot": 0.064,
+    "White Point": 0.431,
+    "Shoulder": 0.5207,
+    "Shoulder Falloff": 8.8088,
+    "Bend Point": 5.959,
+    "Bend": 0.2,
+    "Bend Falloff": -18.1511,
+    "Black Point": 1.5,
+    "Toe": 0.8,
+    "Toe Falloff": 0.3146,
+    "Preserve Color": 0.0
+   }
+  }
+ ],
+ "drt": true,
+ "lut": "test_luts/genesis250D_2383.cube",
+ "hd": {
+  "on": true,
+  "mode": 0,
+  "y": 0,
+  "eotf": 0,
+  "shape": 0,
+  "clamp": false
+ }
+}

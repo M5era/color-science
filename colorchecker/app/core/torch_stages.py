@@ -486,64 +486,12 @@ def _f_logc3_decode(x):
                        (x - F._F) / F._E)
 
 
-def _f_smootherstep(x):
-    x = torch.clamp(x, 0.0, 1.0)
-    return 3.0 * x ** 2 - 2.0 * x ** 3
-
-
-def _f_smootherstep5(x):
-    x = torch.clamp(x, 0.0, 1.0)
-    return x * x * x * (x * (x * 6.0 - 15.0) + 10.0)
-
-
-def _f_gentle_ramp(x):
-    return _f_smootherstep(torch.clamp(x, 0.0, 1.0)) ** 3
-
-
 def _f_powerf(base, exp):
     return torch.sign(base) * torch.abs(base).clamp(min=1e-12) ** exp
 
 
 def _f_linear_contrast(x, contrast, pivot):
     return (x - pivot) * contrast + pivot
-
-
-def _f_rolling_contrast(x, contrast, pivot):
-    p = torch.clamp(pivot, 1e-6, 1.0 - 1e-6)
-    e = torch.clamp(0.01 * torch.minimum(p, 1.0 - p), min=1e-4)
-    x0, x1 = p - e, p + e
-    f_left = _f_powerf(x / p, contrast) * p
-    pm = 1.0 - p
-    f_right = 1.0 - _f_powerf((1.0 - x) / pm, contrast) * pm
-    t = _f_smootherstep5((x - x0) / torch.clamp(x1 - x0, min=1e-6))
-    blend = f_left * (1.0 - t) + f_right * t
-    return torch.where(x <= x0, f_left,
-                       torch.where(x >= x1, f_right, blend))
-
-
-def _f_power_sigmoid_contrast(x, contrast, pivot):
-    t0 = torch.clamp(pivot, 1e-4, 1.0 - 1e-4)
-    s0 = torch.clamp(contrast, 0.5, 2.5)
-    s0v = float(s0.detach()) if torch.is_tensor(s0) else float(s0)
-    if s0v > 1.0:
-        s0 = s0 * (1.0 + 0.12 * (s0 - 1.0) / 1.5)
-        s0v = float(s0.detach())
-    if s0v < 1.0:
-        x = torch.clamp(x, 0.0, 1.0)
-    if abs(s0v - 1.0) < 1e-5:
-        return x
-    eps = 1e-6
-    denom = s0 - 1.0
-    denom = torch.sign(denom) * torch.clamp(torch.abs(denom), min=eps)
-    s1 = s0 * (1.0 - t0) / denom
-    s2 = s0 * (t0 - 0.0) / denom
-    s1 = torch.sign(s1) * torch.clamp(torch.abs(s1), min=eps)
-    s2 = torch.sign(s2) * torch.clamp(torch.abs(s2), min=eps)
-    d_hi = x - t0
-    hi = s0 * d_hi / (d_hi * s0 / s1 + 1.0) + t0
-    d_lo = t0 - x
-    lo = -s0 * d_lo / (d_lo * s0 / s2 + 1.0) + t0
-    return torch.where(x >= t0, hi, lo)
 
 
 def _f_end_roll(v, point, pivot, strength):
@@ -604,141 +552,88 @@ def _f_mix_sat(contrasted, toned, mix, contrast, pivot, contrast_fn):
     return contrasted * (1.0 - mix) + luma_only * mix
 
 
-def _f_hi_lo_mask(metric_rgb, hi_t, hi_f, lo_t, lo_f, mid_grey_log2):
-    m = torch.max(metric_rgb, dim=-1).values
-    hi_t, hi_f, lo_t, lo_f = (torch.as_tensor(v, dtype=m.dtype)
-                              for v in (hi_t, hi_f, lo_t, lo_f))
-    mlog = torch.log2(torch.clamp(m, min=1e-10))
-    lo_min = mid_grey_log2 + (lo_t - 0.5 * lo_f)
-    lo_max = mid_grey_log2 + (lo_t + 0.5 * lo_f)
-    hi_min = mid_grey_log2 + (hi_t - 0.5 * hi_f)
-    hi_max = mid_grey_log2 + (hi_t + 0.5 * hi_f)
-    shadow = 1.0 - _f_smootherstep(
-        (mlog - lo_min) / torch.clamp(lo_max - lo_min, min=1e-6))
-    highlight = _f_smootherstep(
-        (mlog - hi_min) / torch.clamp(hi_max - hi_min, min=1e-6))
-    return torch.clamp(shadow + highlight, 0.0, 1.0)
-
-
 def _filmic_contrast_apply(stage, x, p):
-    """Differentiable mirror of app/core/filmic.filmic_contrast. Python
-    branches follow the numpy port's guards exactly (they branch on the
-    concrete param values; gradients flow through the taken branch)."""
+    """Differentiable mirror of app/core/filmic.filmic_contrast (the
+    SLIMMED 13-param pipeline, 2026-07-23). Python branches follow the
+    numpy port's guards exactly (they branch on the concrete param
+    values; gradients flow through the taken branch)."""
     from app.core import filmic as F
 
     (exposure, contrast, pivot_rel, white_point, shoulder,
-     shoulder_falloff, black_point, toe, toe_falloff, mix_contrast,
-     preserve_color, pin_ends, pop_mids, flare) = [p[i] for i in range(14)]
+     shoulder_falloff, white_point2, shoulder2, shoulder2_falloff,
+     black_point, toe, toe_falloff,
+     preserve_color) = [p[i] for i in range(13)]
 
     def _v(t):          # concrete value for CONTROL FLOW only
         return float(t.detach()) if torch.is_tensor(t) else float(t)
 
-    clean = x
-
     pivot = torch.clamp(pivot_rel + F.MID_GREY, 0.02, 1.0)
-
-    pin_n = _f_gentle_ramp(pin_ends)
-    cdelta = contrast - 1.0
-    c_n = _f_gentle_ramp(cdelta / 1.0 if _v(cdelta) >= 0.0
-                         else -cdelta / 0.5)
-    feather_drive = 1.0 - (1.0 - torch.clamp(pin_n, 0.0, 1.0)) * (
-        1.0 - torch.clamp(c_n, 0.0, 1.0))
-    hi_drive = feather_drive * feather_drive
-    hi_feather = torch.clamp(2.5 + 1.5 * hi_drive, 2.5, 4.0)
-    lo_feather = torch.clamp(7.5 + 4.0 * feather_drive, 7.5, 11.5)
-
-    shoulder_str = torch.clamp(10.0 - shoulder_falloff, min=0.3)
-    toe_str = torch.clamp(10.0 - toe_falloff, min=0.17)
-
-    black_point = 1.0 - black_point * 0.4
-    white_point = white_point * 0.5 + 0.49   # extended-down, no 0.5 floor
-    black_point = torch.clamp(black_point, min=0.4)   # extended range floor
-
     pivot = torch.clamp(pivot, 0.05, 0.90)
-    white_point = torch.maximum(white_point, pivot * 1.1)  # no 0.7 floor
-    black_point = black_point * 0.45 + 0.55
+
+    # per-end sanitize (mirrors app/core/filmic.py's shared helpers)
+    def _shoulder_strength(falloff):
+        if _v(falloff) < 0.0:      # geometric negative side (DCTL sync)
+            return 10.0 * torch.exp2(-falloff / 5.0)
+        return torch.clamp(10.0 - falloff, min=0.3)
+
+    def _toe_strength(falloff):
+        if _v(falloff) < 0.0:      # 1:1 negative side, cont. at 0
+            return 3.35 - falloff
+        s = torch.clamp(10.0 - falloff, min=0.17)
+        return torch.clamp(s * 0.35 - 0.15, min=0.25)   # widened range
+
+    def _sanitize_white(wp_raw):
+        wp = wp_raw * 0.5 + 0.49   # extended-down, no 0.5 floor
+        return torch.maximum(wp, pivot * 1.1)           # no 0.7 floor
+
+    def _sanitize_black(bp_raw):
+        bp = 1.0 - bp_raw * 0.4
+        bp = torch.clamp(bp, min=0.4)   # extended range floor
+        return bp * 0.45 + 0.55
 
     # LIVE toe/shoulder position mappings (mirrors app/core/filmic.py)
-    t_s = torch.clamp((shoulder - 0.2) / (0.997 - 0.2), 0.0, 1.0)
-    lo_s = pivot * 1.015
-    hi_s = torch.maximum(white_point - 0.01, lo_s + 1e-4)
-    w_p_pivot = lo_s + (hi_s - lo_s) * t_s
+    def _shoulder_pivot(sh_raw, wp):
+        t = torch.clamp((sh_raw - 0.2) / (0.997 - 0.2), 0.0, 1.0)
+        lo = pivot * 1.015
+        hi = torch.maximum(wp - 0.01, lo + 1e-4)
+        return lo + (hi - lo) * t
 
-    t_t = torch.clamp(toe / 0.8, 0.0, 1.0)
-    lo_t = 1.0 - pivot
-    hi_t = torch.maximum(black_point - 0.05, lo_t + 1e-4)
-    b_p_pivot = lo_t + (hi_t - lo_t) * (1.0 - t_t)
-    toe_str = torch.clamp(toe_str * 0.35 - 0.15, min=0.25)  # widened range
-    if _v(toe_falloff) < 0.0:
-        toe_str = 3.35 - toe_falloff       # 1:1 negative side, cont. at 0
+    def _toe_pivot(toe_raw, bp):
+        t = torch.clamp(toe_raw / 0.8, 0.0, 1.0)
+        lo = 1.0 - pivot
+        hi = torch.maximum(bp - 0.05, lo + 1e-4)
+        return lo + (hi - lo) * (1.0 - t)
+
+    shoulder_str = _shoulder_strength(shoulder_falloff)
+    shoulder_str2 = _shoulder_strength(shoulder2_falloff)
+    toe_str = _toe_strength(toe_falloff)
+    white_point = _sanitize_white(white_point)
+    white_point2 = _sanitize_white(white_point2)
+    black_point = _sanitize_black(black_point)
+    w_p_pivot = _shoulder_pivot(shoulder, white_point)
+    w_p_pivot2 = _shoulder_pivot(shoulder2, white_point2)
+    b_p_pivot = _toe_pivot(toe, black_point)
 
     if _v(contrast) < 1.0:
         preserve_color = 1.0 - preserve_color
 
-    mix_n = torch.clamp(mix_contrast, 0.0, 1.0)
-    w_lin = torch.exp(-0.5 * ((mix_n - 0.00) / 0.07) ** 2)
-    w_roll = torch.exp(-0.5 * ((mix_n - 0.33) / 0.18) ** 2)
-    w_pow = torch.exp(-0.5 * ((mix_n - 1.00) / 0.32) ** 2)
-    w_sum = torch.clamp(w_lin + w_roll + w_pow, min=1e-8)
-
-    def _tone_block(v):
-        if _v(white_point) >= 1.0:
-            toned = v
-        else:
-            toned = _f_end_roll(v, white_point, w_p_pivot, shoulder_str)
-        if _v(black_point) < 1.0:
-            toned = 1.0 - _f_end_roll(1.0 - toned, black_point, b_p_pivot,
-                                      toe_str)
-        lin = _f_linear_contrast(toned, contrast, pivot)
-        lin = _f_mix_sat(lin, toned, preserve_color, contrast, pivot,
-                         _f_linear_contrast)
-        roll = _f_rolling_contrast(toned, contrast, pivot)
-        roll = _f_mix_sat(roll, toned, preserve_color, contrast, pivot,
-                          _f_rolling_contrast)
-        powsig = _f_power_sigmoid_contrast(toned, contrast, pivot)
-        powsig = _f_mix_sat(powsig, toned, preserve_color, contrast, pivot,
-                            _f_power_sigmoid_contrast)
-        return (lin * (w_lin / w_sum) + roll * (w_roll / w_sum)
-                + powsig * (w_pow / w_sum))
-
-    out = _tone_block(x)
-
-    mid_log2 = float(np.log2(F.MID_GREY))
-    if _v(pop_mids) != 0.0:
-        big = _f_hi_lo_mask(clean, 1.04, 1.85,
-                            -3.0 + 1.61, lo_feather - 4.4, mid_log2)
-        small = _f_hi_lo_mask(clean, 1.02, 1.51, -2.9, 4.5, mid_log2)
-        band = torch.clamp(big - small, 0.0, 1.0)[..., None]
-        pop = _f_logc3_encode(_f_logc3_decode(out) * 2.0 ** -pop_mids)
-        out = out * (1.0 - band) + pop * band
-
-        # mid-grey compensation (mirrors app/core/filmic.py)
-        midpix = torch.full((1, 3), F.MID_GREY, dtype=x.dtype)
-        m0 = _tone_block(midpix)[0, 0]
-        b_mid = torch.clamp(
-            _f_hi_lo_mask(midpix, 1.04, 1.85,
-                          -3.0 + 1.61, lo_feather - 4.4, mid_log2)
-            - _f_hi_lo_mask(midpix, 1.02, 1.51, -2.9, 4.5, mid_log2),
-            0.0, 1.0)[0]
-        m0_lin = _f_logc3_decode(m0)
-        pop_mid = _f_logc3_encode(m0_lin * 2.0 ** -pop_mids)
-        v_mid = m0 * (1.0 - b_mid) + pop_mid * b_mid
-        comp = m0_lin / _f_logc3_decode(v_mid)
-        out = _f_logc3_encode(_f_logc3_decode(out) * comp)
+    # white/black rolls + linear contrast (+ Preserve Color mix)
+    if _v(white_point) >= 1.0:
+        toned = x
+    else:
+        toned = _f_end_roll(x, white_point, w_p_pivot, shoulder_str)
+    if _v(white_point2) < 1.0:      # second shoulder stage
+        toned = _f_end_roll(toned, white_point2, w_p_pivot2,
+                            shoulder_str2)
+    if _v(black_point) < 1.0:
+        toned = 1.0 - _f_end_roll(1.0 - toned, black_point, b_p_pivot,
+                                  toe_str)
+    out = _f_linear_contrast(toned, contrast, pivot)
+    out = _f_mix_sat(out, toned, preserve_color, contrast, pivot,
+                     _f_linear_contrast)
 
     if _v(exposure) != 0.0:
         out = _f_logc3_encode(_f_logc3_decode(out) * 2.0 ** exposure)
-
-    if _v(pin_ends) != 0.0:
-        mask = _f_hi_lo_mask(clean, 0.8, hi_feather,
-                             -3.0, lo_feather, mid_log2)[..., None]
-        pinends = out * (1.0 - mask) + clean * mask
-        out = out * (1.0 - pin_ends) + pinends * pin_ends
-
-    if _v(flare) != 0.0:
-        u = torch.clamp(flare, -1.0, 1.0)
-        offset = u * torch.abs(u) * 0.01
-        out = _f_logc3_encode(_f_logc3_decode(out) + offset)
 
     return out
 

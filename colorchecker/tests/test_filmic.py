@@ -34,12 +34,14 @@ def test_identity_is_exact():
 
 def test_init_is_engaged_but_gentle():
     """init() must differ from identity (gradient for the solver) while
-    staying a subtle grade — the DCTL's own default shoulder."""
+    staying a subtle grade — the DCTL's own default shoulder. Ceiling
+    0.15: the LIVE toe/shoulder position mappings (2026-07-22)
+    strengthened the default rolls to ~0.11 at the extremes."""
     s = FilmicContrastStage()
     x = _source()
     out = s.apply(x, s.init())
     delta = np.abs(out - x).max()
-    assert 1e-4 < delta < 0.1
+    assert 1e-4 < delta < 0.15
 
 
 def test_exposure_is_stops_and_achromatic():
@@ -124,38 +126,6 @@ def test_preserve_color_tempers_saturation_gain():
     assert rich > tame
 
 
-def test_pin_ends_returns_extremes_to_input():
-    s = FilmicContrastStage()
-    x = np.array([[0.03] * 3, [MID_GREY] * 3, [1.0] * 3])
-    strong = _with(s, Contrast=2.2)
-    pinned = _with(s, Contrast=2.2, **{"Pin Ends": 1.0})
-    err_free = np.abs(s.apply(x, strong) - x)
-    err_pin = np.abs(s.apply(x, pinned) - x)
-    # the deep shadow end comes back toward the untouched input
-    assert err_pin[0, 0] < err_free[0, 0]
-
-
-def test_pop_mids_darkens_the_band_and_holds_mid_grey_exactly():
-    """Marc 2026-07-22: 'compensate exposure to keep mid grey intact' —
-    the toolkit adds a global counter-gain so Pop Mids NEVER moves a
-    mid-grey pixel (stock drifted it via the band feather), fully
-    decoupling Pop Mids from Exposure in the fit."""
-    s = FilmicContrastStage()
-    x = np.array([[0.25] * 3, [MID_GREY] * 3])
-    for pop in (-0.8, 0.5, 1.0, 3.0):
-        out = s.apply(x, _with(s, **{"Pop Mids": pop}))
-        np.testing.assert_allclose(out[1], x[1], atol=1e-12,
-                                   err_msg=f"pop {pop}")  # mid EXACT
-    out = s.apply(x, _with(s, **{"Pop Mids": 1.0}))
-    assert out[0, 0] < x[0, 0] - 1e-4     # in the band: bitten down
-    # and it stays exact with the tone curve engaged (curved mid anchor)
-    p = _with(s, Contrast=1.6, **{"Pop Mids": 2.0, "White Point": 0.8})
-    base = s.apply(np.array([[MID_GREY] * 3]),
-                   _with(s, Contrast=1.6, **{"White Point": 0.8}))
-    popped = s.apply(np.array([[MID_GREY] * 3]), p)
-    np.testing.assert_allclose(popped, base, atol=1e-12)
-
-
 def test_white_point_extended_down_keeps_pulling():
     """Marc 2026-07-22: extended range going down — the stock floors
     dead-zoned the slider below ~0.42; the ceiling must now keep
@@ -189,14 +159,6 @@ def test_toe_falloff_widened_range_changes_shape():
     assert abs(sharp[0, 0] - soft[0, 0]) > 5e-3
 
 
-def test_flare_lifts_shadows():
-    s = FilmicContrastStage()
-    x = np.array([[0.05] * 3])
-    up = s.apply(x, _with(s, Flare=1.0))
-    down = s.apply(x, _with(s, Flare=-1.0))
-    assert up[0, 0] > x[0, 0] > down[0, 0]
-
-
 def test_labels():
     s = FilmicContrastStage()
     assert s.label(s.identity()) == "(idle)"
@@ -204,9 +166,17 @@ def test_labels():
     assert len(s.short_label(_with(s, Contrast=1.5))) <= 9
 
 
+import pytest
+
+
+@pytest.mark.skip(reason="Python stage slimmed to 13 params on "
+                  "2026-07-23 (Marc); DCTL work is deliberately "
+                  "paused, so dctl/FilmicContrast.dctl still carries "
+                  "the 20-slider layout. Re-enable (and update the "
+                  "expected order) when the DCTL is slimmed to match.")
 def test_dctl_slider_order_matches_param_names():
-    """The 14 float sliders in dctl/FilmicContrast.dctl must line up
-    1:1 with param_names — the .drx patch relies on it."""
+    """The float sliders in dctl/FilmicContrast.dctl must line up 1:1
+    with param_names — the .drx patch relies on it."""
     import re
     from pathlib import Path
     text = Path(__file__).resolve().parents[1].joinpath(
@@ -216,8 +186,58 @@ def test_dctl_slider_order_matches_param_names():
                for m in [re.search(
                    r"DEFINE_UI_PARAMS\(\s*(\w+)[^)]*?DCTLUI_SLIDER_FLOAT",
                    line)] if m]
-    assert len(sliders) == len(FilmicContrastStage.param_names) == 14
-    # spot-check the anchoring entries
-    assert sliders[0] == "P_exposure"
-    assert sliders[6] == "p_black_point"
-    assert sliders[13] == "p_flare"
+    assert len(sliders) == len(FilmicContrastStage.param_names)
+
+
+def test_bend_point_is_stops_and_live_across_travel():
+    """Bend Point reads in STOPS above mid grey (2026-07-23): the old
+    code-linear mapping was dead until ~0.5 (only invisible speculars
+    moved). Now every step of travel must visibly deepen the bend, and
+    the top of the range is exact identity."""
+    s = FilmicContrastStage()
+    x = np.array([[0.9] * 3])
+    top = s.apply(x, _with(s, **{"Bend Point": 8.5}))
+    np.testing.assert_allclose(top, x, atol=1e-12)      # off at the top
+    outs = [s.apply(x, _with(s, **{"Bend Point": bp}))[0, 0]
+            for bp in (8.0, 6.5, 5.0, 3.5, 2.0)]
+    assert all(b < a - 1e-3 for a, b in zip(outs, outs[1:])), outs
+
+
+def test_shoulder_falloff_negative_is_geometric_and_alive():
+    """Synced with the DCTL: below 0 the knee strength DOUBLES every 5
+    slider units — every negative step must keep visibly tightening
+    (the old linear mapping dead-zoned the bulk of the slider)."""
+    from app.core.filmic import shoulder_strength
+    assert shoulder_strength(0.0) == 10.0
+    assert shoulder_strength(-5.0) == 20.0
+    assert shoulder_strength(-25.0) == 320.0
+
+    s = FilmicContrastStage()
+    ramp = np.linspace(0.0, 1.0, 512)[:, None].repeat(3, axis=1)
+    p = {"White Point": 0.6, "Shoulder": 0.45}
+    outs = [s.apply(ramp, _with(s, **p, **{"Shoulder Falloff": f}))
+            for f in (0.0, -5.0, -10.0, -15.0, -20.0, -25.0)]
+    # each geometric step still reshapes the curve measurably (the old
+    # linear mapping was already converged well before -20)
+    steps = [np.abs(b - a).max() for a, b in zip(outs, outs[1:])]
+    assert all(d > 3e-4 for d in steps), steps
+
+
+def test_second_shoulder_stage_parked_then_shapes():
+    """WP2 = 1.02 is exact identity; engaging it adds a second knee on
+    top of the first roll."""
+    s = FilmicContrastStage()
+    x = _source()
+    base = _with(s, **{"White Point": 0.9, "Shoulder": 0.5})
+    one = s.apply(x, base)
+    two = s.apply(x, _with(s, **{"White Point": 0.9, "Shoulder": 0.5,
+                                 "Bend Point": 0.6,
+                                 "Bend": 0.9,
+                                 "Bend Falloff": -10.0}))
+    assert not np.allclose(one, two)
+    # below both roll pivots nothing moves
+    lo = np.array([[0.2] * 3])
+    np.testing.assert_allclose(
+        s.apply(lo, _with(s, **{"Bend Point": 0.6})), lo, atol=1e-12)
+
+

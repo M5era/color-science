@@ -1,0 +1,62 @@
+{
+ "version": 1,
+ "comment": "Display-domain RGB fit v8 (Bend Point in stops). RMS 0.19%, mid grey [R+0.16 G-0.09 B-0.05]%, max in +-1 stop 0.26%. Preserve Color left 0. Name suggests S-Log3 input; fitted as LogC3.",
+ "chain": [
+  {
+   "stage": "Split Tone",
+   "bypass": false,
+   "params": {
+    "Black R": 1.321,
+    "Black G": 1.5,
+    "Black B": -0.9697,
+    "Dark R": 0.0945,
+    "Dark G": -0.4407,
+    "Dark B": 2.5,
+    "Low Mid R": 1.2161,
+    "Low Mid G": 1.6374,
+    "Low Mid B": 0.1365,
+    "High Mid R": 0.8975,
+    "High Mid G": 0.5459,
+    "High Mid B": 1.275,
+    "Highlight R": 0.3282,
+    "Highlight G": 0.7774,
+    "Highlight B": 0.4744,
+    "Specular R": -0.5,
+    "Specular G": 0.0898,
+    "Specular B": -0.2736,
+    "White R": 1.1781,
+    "White G": 0.6921,
+    "White B": 0.6379
+   }
+  },
+  {
+   "stage": "Filmic Contrast",
+   "bypass": false,
+   "params": {
+    "Exposure": -1.0111,
+    "Contrast": 2.0213,
+    "Pivot": -0.15,
+    "White Point": 0.1167,
+    "Shoulder": 0.6582,
+    "Shoulder Falloff": 8.1826,
+    "Bend Point": 6.9519,
+    "Bend": 0.3243,
+    "Bend Falloff": 9.7,
+    "Black Point": 0.9082,
+    "Toe": 0.3453,
+    "Toe Falloff": 3.9505,
+    "Preserve Color": 0.0
+   }
+  }
+ ],
+ "drt": true,
+ "lut": "test_luts/KodakEktachromeSlog3.cube",
+ "hd": {
+  "on": true,
+  "mode": 0,
+  "y": 0,
+  "eotf": 0,
+  "shape": 0,
+  "clamp": false
+ }
+}

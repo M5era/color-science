@@ -1,0 +1,62 @@
+{
+ "version": 1,
+ "comment": "Display-domain RGB fit v8 (Bend Point in stops). RMS 0.26%, mid grey [R+0.21 G+0.06 B+0.10]%, max in +-1 stop 0.32%. Preserve Color left 0. Low-contrast COLOURMATCH intermediate.",
+ "chain": [
+  {
+   "stage": "Split Tone",
+   "bypass": false,
+   "params": {
+    "Black R": -0.3526,
+    "Black G": -0.7419,
+    "Black B": -0.7722,
+    "Dark R": 1.4248,
+    "Dark G": 2.2913,
+    "Dark B": 2.5,
+    "Low Mid R": 0.611,
+    "Low Mid G": -0.5,
+    "Low Mid B": -0.4995,
+    "High Mid R": 1.2958,
+    "High Mid G": 2.2244,
+    "High Mid B": 2.3426,
+    "Highlight R": 0.6231,
+    "Highlight G": -0.2875,
+    "Highlight B": -0.5,
+    "Specular R": 1.2439,
+    "Specular G": 1.3032,
+    "Specular B": 0.6591,
+    "White R": 1.0069,
+    "White G": 1.8866,
+    "White B": 1.8635
+   }
+  },
+  {
+   "stage": "Filmic Contrast",
+   "bypass": false,
+   "params": {
+    "Exposure": 1.379,
+    "Contrast": 0.7585,
+    "Pivot": -0.15,
+    "White Point": 0.4628,
+    "Shoulder": 0.2,
+    "Shoulder Falloff": 9.7,
+    "Bend Point": 6.2435,
+    "Bend": 0.7851,
+    "Bend Falloff": 9.6279,
+    "Black Point": 0.5439,
+    "Toe": 0.2271,
+    "Toe Falloff": 6.5666,
+    "Preserve Color": 0.0
+   }
+  }
+ ],
+ "drt": true,
+ "lut": "test_luts/Kodak 500T.cube",
+ "hd": {
+  "on": true,
+  "mode": 0,
+  "y": 0,
+  "eotf": 0,
+  "shape": 0,
+  "clamp": false
+ }
+}

@@ -1,0 +1,62 @@
+{
+ "version": 1,
+ "comment": "Display-domain RGB fit v8 (Bend Point in stops). RMS 0.17%, mid grey [R+0.16 G-0.06 B-0.04]%, max in +-1 stop 0.26%. Preserve Color left 0.",
+ "chain": [
+  {
+   "stage": "Split Tone",
+   "bypass": false,
+   "params": {
+    "Black R": -0.3266,
+    "Black G": 1.2246,
+    "Black B": 1.478,
+    "Dark R": 2.5,
+    "Dark G": 1.2384,
+    "Dark B": 1.4086,
+    "Low Mid R": 0.8384,
+    "Low Mid G": 1.3067,
+    "Low Mid B": 1.1842,
+    "High Mid R": 0.4039,
+    "High Mid G": 0.4369,
+    "High Mid B": 0.5189,
+    "Highlight R": 1.5846,
+    "Highlight G": 1.1163,
+    "Highlight B": 1.1244,
+    "Specular R": 0.4451,
+    "Specular G": 0.6277,
+    "Specular B": -0.4689,
+    "White R": 0.9865,
+    "White G": 0.9047,
+    "White B": 0.7973
+   }
+  },
+  {
+   "stage": "Filmic Contrast",
+   "bypass": false,
+   "params": {
+    "Exposure": -1.5,
+    "Contrast": 2.5766,
+    "Pivot": -0.0465,
+    "White Point": 0.1927,
+    "Shoulder": 0.2852,
+    "Shoulder Falloff": 9.2338,
+    "Bend Point": 6.0044,
+    "Bend": 0.5807,
+    "Bend Falloff": 9.7,
+    "Black Point": 1.4607,
+    "Toe": 0.8,
+    "Toe Falloff": -2.3377,
+    "Preserve Color": 0.0
+   }
+  }
+ ],
+ "drt": true,
+ "lut": "test_luts/Kodak 2383.cube",
+ "hd": {
+  "on": true,
+  "mode": 0,
+  "y": 0,
+  "eotf": 0,
+  "shape": 0,
+  "clamp": false
+ }
+}

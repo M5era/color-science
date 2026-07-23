@@ -1,0 +1,62 @@
+{
+ "version": 1,
+ "comment": "Display-domain RGB fit v8 (Bend Point in stops). RMS 0.13%, mid grey [R-0.10 G-0.19 B-0.03]%, max in +-1 stop 0.53%. Preserve Color left 0.",
+ "chain": [
+  {
+   "stage": "Split Tone",
+   "bypass": false,
+   "params": {
+    "Black R": 0.162,
+    "Black G": 1.5,
+    "Black B": 1.0358,
+    "Dark R": 2.5,
+    "Dark G": 0.8529,
+    "Dark B": 1.5939,
+    "Low Mid R": -0.2181,
+    "Low Mid G": 0.8483,
+    "Low Mid B": 0.3808,
+    "High Mid R": 2.1669,
+    "High Mid G": 1.4341,
+    "High Mid B": 1.6834,
+    "Highlight R": -0.5,
+    "Highlight G": -0.0124,
+    "Highlight B": 0.1482,
+    "Specular R": -0.5,
+    "Specular G": 1.8305,
+    "Specular B": -0.2607,
+    "White R": 2.5,
+    "White G": 0.9731,
+    "White B": 0.6046
+   }
+  },
+  {
+   "stage": "Filmic Contrast",
+   "bypass": false,
+   "params": {
+    "Exposure": -1.5,
+    "Contrast": 2.7669,
+    "Pivot": -0.0344,
+    "White Point": 0.4927,
+    "Shoulder": 0.6646,
+    "Shoulder Falloff": 9.6122,
+    "Bend Point": 2.7785,
+    "Bend": 0.4852,
+    "Bend Falloff": 7.9433,
+    "Black Point": 1.3859,
+    "Toe": 0.056,
+    "Toe Falloff": 4.127,
+    "Preserve Color": 0.0
+   }
+  }
+ ],
+ "drt": true,
+ "lut": "test_luts/K64.cube",
+ "hd": {
+  "on": true,
+  "mode": 0,
+  "y": 0,
+  "eotf": 0,
+  "shape": 0,
+  "clamp": false
+ }
+}

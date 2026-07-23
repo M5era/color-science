@@ -174,6 +174,42 @@ settles.
 
 **Open / next (in priority order):**
 
+0. **NEXT (Marc, 2026-07-23): change the torch/ML chain-search node
+   ORDER.** Strong preference for a FIXED TAIL order — deviate only if
+   deviating brings a big win. The chain must END with:
+       last-2: Highlight Bleach
+       last-1: Split Tone
+       last:   Filmic Contrast
+   Procedure: fit those three tail nodes FIRST, then add further nodes
+   BEFORE them (search prepends, never appends past the tail). Note
+   torch work was explicitly banned in the 2026-07-23 session — this
+   is queued for a future session. Context: the same-day viewer fits
+   (presets/, Split Tone upstream of Filmic under openDRT) validated
+   split->contrast as the tail on all nine test LUTs; ALSO NOTE the
+   Python FilmicContrastStage was slimmed that day to 13 params
+   (Linear Rolled / Pin Ends / Pop Mids / Flare / second toe removed)
+   — the torch mirror is synced, but dctl/FilmicContrast.dctl still
+   carries the 20-slider layout (DCTL work also banned that session;
+   the slider-order test is skipped until the DCTL is slimmed to
+   match, and drx SYNTH_SPECS["FilmicContrast"] still lists 20
+   sliders). ALSO: Split Tone went to v4 then V5 the same day (v5 =
+   ONE sextic Bezier per channel, handles at sixths — Marc: midtone
+   shaping + the genesis toe/shoulder channel CROSSOVER that fewer
+   handles could not express). Final handle names are BY ON-SCREEN
+   IMPACT (basis peak through plain openDRT): Black (0%), Dark (10%),
+   Low Mid (29%), High Mid (59%), Highlight (86%), Specular (97%),
+   White (100%) x RGB = 21 params; handle ranges widened +-0.5
+   (Black +-1.5, others -0.5..2.5 — fits kept pinning the old
+   bounds). Filmic's second roll trio was renamed White Point 2/
+   Shoulder 2/Sh2 Falloff -> Bend Point/Bend/Bend Falloff (Marc);
+   Bend Point now reads in STOPS above mid grey (0.5..8.5, >=8.26 =
+   off) — the old code-linear mapping was dead over half its travel.
+   TORCH MIRRORS FROZEN: Split Tone (mirror v3 vs numpy v5) AND
+   Filmic Contrast (mirror has the old code-linear Bend Point) —
+   test_backprop skips both (_TORCH_FROZEN) until synced; dctl/SplitTone.dctl
+   is also still v3, and drx SYNTH_SPECS["SplitTone"] still lists 16
+   sliders.
+
 1. **Marc verifies in Resolve**: (a) install the committed
    dctl/FilmicContrast.dctl (extended BP range); (b) import one
    search-delivered .drx containing synthesized FilmicContrast +

@@ -1,0 +1,3 @@
+# Footage stays local — never in git (repo-wide; colorchecker/ has its own)
+*.tif
+*.tiff
